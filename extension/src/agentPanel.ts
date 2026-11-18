@@ -24,7 +24,7 @@ export class AgentViewState {
         break;
       case 'tool_result': {
         const item = this.tools.find(tool => tool.id === e.callId);
-        if (item) item.detail = (e.ok ? 'Done ? ' : 'Failed ? ') + e.summary;
+        if (item) item.detail = (e.ok ? 'Done: ' : 'Failed: ') + e.summary;
         break;
       }
       case 'context_report': this.context = e.report; break;
@@ -32,11 +32,11 @@ export class AgentViewState {
       case 'command_request': this.status = 'Waiting for command approval'; break;
       case 'edit_applied':
         this.reviewing = false;
-        this.edits.push(e.result.path + ' ? ' + e.result.status);
+        this.edits.push(e.result.path + ' | ' + e.result.status);
         if (e.result.status === 'save_failed') this.banner = 'Applied to the buffer. Save failed. Inspect the document before retrying Save.';
         break;
-      case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' ? switched to ' + e.toModel; break;
-      case 'error': this.banner = e.error.message + ' ? workspace effect: ' + e.error.workspaceEffect; break;
+      case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; break;
+      case 'error': this.banner = e.error.message + '; workspace effect: ' + e.error.workspaceEffect; break;
       case 'done': this.status = e.summary || e.status; this.busy = this.reviewing = false; break;
     }
   }

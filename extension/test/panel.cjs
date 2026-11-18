@@ -17,6 +17,7 @@ exports.run = async () => {
   const skipped = {path:'other/a',reason:'over budget',estimatedTokens:11};
   const report = {budgetTokens:10,estimatedTokens:6,selections:[selected],skipped:[skipped]};
   const version = '0.4.0';
+  let releaseCommand; const commandAnswered=new Promise(resolve=>releaseCommand=resolve);
   let command, submitted = false, marked = false;
   const harness = {
     start:async port => {assert.equal(typeof port.applyText,'function')},
@@ -34,9 +35,9 @@ exports.run = async () => {
         {t:'command_request',callId:'shell',command:'python --version',cwd:'.'},
         {t:'error',error:{message:'Simulated model failure',workspaceEffect:'unchanged'}},
         {t:'done',status:'error'}])
-        yield {ok:true,body:{...header,...e,sequence:++sequence}};
+        { yield {ok:true,body:{...header,...e,sequence:++sequence}}; if(e.t==='command_request') await commandAnswered; }
     },
-    submitReview:async({body})=>{command=body;return {ok:true,body:null}},
+    submitReview:async({body})=>{command=body;releaseCommand();return {ok:true,body:null}},
     dispose:async()=>{marked=true}
   };
   const wb = new Workbench(folder,()=>({version,harness}));
@@ -48,7 +49,7 @@ exports.run = async () => {
   try {
     await until(()=>seen.some(e=>e.t==='command_request'));
     assert.equal(state.text,'hello world');
-    assert.deepEqual(state.tools,[{id:'ctx',label:'gather_context',detail:'Done ? one selected'}]);
+    assert.deepEqual(state.tools,[{id:'ctx',label:'gather_context',detail:'Done: one selected'}]);
     assert.deepEqual(state.context,report);
     assert.match(state.banner,/unreachable.*backup/);
     await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');

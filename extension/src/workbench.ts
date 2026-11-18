@@ -6,12 +6,13 @@ import { InlineReview } from './inlineReview';
 import { EditReview } from './review';
 import { TurnController } from './turn';
 
+type Connection = { harness: ForgeHarness; version: Version };
 export class Workbench implements vscode.Disposable {
   readonly edits: EditReview;
   private readonly review: InlineReview;
   private readonly logger = createStatusLogger();
   private readonly port: EditorPort;
-  private running = false;
+  private pendingRun?: AbortController;
   private readonly panel = new AgentPanel({
     send: text => this.run('agent', text, this.activeContext()),
     stop: () => this.stop(), review: () => this.choose()
@@ -23,7 +24,7 @@ export class Workbench implements vscode.Disposable {
   private commandPicker?: vscode.QuickPick<vscode.QuickPickItem>;
 
   constructor(readonly folder: vscode.WorkspaceFolder,
-    private readonly factory?: () => { harness: ForgeHarness; version: Version }) {
+    private readonly factory?: () => Connection | Promise<Connection>) {
     this.edits = new EditReview(folder);
     this.review = new InlineReview(this.edits);
     this.port = { readText: this.edits.readText, listFiles: createFileLister(folder),
@@ -43,7 +44,11 @@ export class Workbench implements vscode.Disposable {
     const id = this.edits.latestUndoId();
     if (id) await this.edits.undo(id); else this.notice('No reviewed edit to undo.');
   }
-  async stop() { await this.controller?.stop(); }
+  async stop() {
+    this.pendingRun?.abort();
+    this.panel.notice('Stopping...');
+    await this.controller?.stop();
+  }
   private async command(command: string, cwd: string) {
     const picker = vscode.window.createQuickPick();
     this.commandPicker = picker;
@@ -60,7 +65,7 @@ export class Workbench implements vscode.Disposable {
 
   private async connect() {
     if (!this.factory) throw new Error('TrueForge integration is awaiting the verified harness handoff.');
-    const {harness, version} = this.factory();
+    const {harness, version} = await this.factory();
     this.harness = harness;
     try {
       await harness.start(this.port);
@@ -74,15 +79,16 @@ export class Workbench implements vscode.Disposable {
 
   async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext) {
     if (!vscode.workspace.isTrusted || this.closed) throw new Error('A trusted workspace is required');
-    if (this.running) throw new Error('A turn is already in progress');
-    this.running = true; this.panel.start();
+    if (this.pendingRun) throw new Error('A turn is already in progress');
+    const run = this.pendingRun = new AbortController(); this.panel.start();
     try {
       const controller = this.controller ?? await (this.starting ??= this.connect().finally(() => { this.starting = undefined; }));
+      if (run.signal.aborted) { this.panel.notice('Stopped before submitting'); return; }
       await controller.run(mode, instruction, context);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Turn failed';
       this.panel.error(message); this.panel.notice('Failed'); throw error;
-    } finally { this.running = false; this.panel.finish(); }
+    } finally { this.pendingRun = undefined; this.panel.finish(); }
   }
   async inline() {
     const editor = vscode.window.activeTextEditor;
@@ -98,7 +104,7 @@ export class Workbench implements vscode.Disposable {
   }
 
   dispose() {
-    this.closed = true; this.panel.dispose(); this.commandPicker?.hide(); this.review.dispose(); this.edits.dispose(); this.logger.dispose();
+    this.pendingRun?.abort(); this.closed = true; this.panel.dispose(); this.commandPicker?.hide(); this.review.dispose(); this.edits.dispose(); this.logger.dispose();
   }
   async shutdown() { this.dispose(); await this.harness?.dispose(); }
 }

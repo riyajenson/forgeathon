@@ -1,7 +1,9 @@
-// MCP tool handlers. Transport-free so they can be tested directly and reused by the adapter.
-import { applyAccepted, canonicalArgsKey, computeProposal, type ProposalHunk, type ReviewRegistry, type SearchReplaceEdit } from '../review';
+// MCP tool handlers. Transport-free so they can be tested directly and reused by the turn controller.
+import type { ApplyTextResult } from '../contract-types';
+import { applyAccepted, canonicalArgsKey, computeProposal, sha256Hex, type ProposalHunk, type SearchReplaceEdit } from '../review';
 import { normalizeWorkspacePath } from './paths';
-import type { EditorPort } from './port';
+import { listOptions, type EditorPort } from './port';
+import type { SessionScope } from './scope';
 
 export type ToolErrorCode =
   | 'INVALID_ARGS'
@@ -15,48 +17,46 @@ export type ToolErrorCode =
   | 'OVERLAPPING_EDITS'
   | 'INVALID_EDIT'
   | 'ALL_HUNKS_REJECTED'
-  | 'WRITE_FAILED';
+  | 'WRITE_FAILED'
+  | 'WRITE_OUTCOME_UNKNOWN';
 
 export type ToolOutcome = { ok: true; text: string } | { ok: false; code: ToolErrorCode; message: string };
 
-/** A user's review of one propose_edit call, recorded by the adapter before it allows the call. */
-export interface EditApproval {
-  proposalId: string;
-  /** sha256 of the text the user reviewed; null when the file is new. */
-  baseSha256: string | null;
-  /** Hunk indices (file order) the user accepted. */
-  accepted: number[];
-  rejectReason?: string;
-}
-
-export interface AppliedEdit {
-  proposalId: string;
-  path: string;
-  isNewFile: boolean;
-  preSha256: string | null;
-  postSha256: string;
-  /** Text before the write, so the editor can offer "Revert this turn". */
-  preText: string | null;
-  applied: number[];
-  rejected: number[];
-}
-
 export interface ToolContext {
   port: EditorPort;
-  reviews: ReviewRegistry<EditApproval>;
-  /** True once the current turn is being cancelled; no write may start after that. */
-  isCancelled(): boolean;
-  onApplied?(edit: AppliedEdit): void;
+  /** Scope of the TrueForge session that made the call; undefined when the call carries no known session. */
+  scope: SessionScope | undefined;
 }
 
 export interface ProposeEditArgs {
   path: string;
   base_sha256: string;
   edits: SearchReplaceEdit[];
-  summary?: string;
+  summary?: string | undefined;
 }
 
 const fail = (code: ToolErrorCode, message: string): ToolOutcome => ({ ok: false, code, message });
+
+export const hunkId = (proposalId: string, index: number): string => `${proposalId}#${index}`;
+
+/**
+ * Key that binds a user's approval to the tool call that executes it. Only the tool's declared fields are
+ * hashed, because the MCP server strips undeclared keys before the handler sees the arguments, while the
+ * turn controller sees the model's raw arguments.
+ */
+export function approvalKey(tool: 'propose_edit' | 'run_command', args: unknown): string {
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+  if (tool === 'propose_edit') {
+    const edits = Array.isArray(a['edits'])
+      ? a['edits'].map((e) => {
+        const x = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>;
+        return { old_text: x['old_text'], new_text: x['new_text'] };
+      })
+      : a['edits'];
+    return canonicalArgsKey({ path: a['path'], base_sha256: a['base_sha256'], edits, summary: a['summary'] });
+  }
+  return canonicalArgsKey({ command: a['command'], cwd: a['cwd'], timeout_sec: a['timeout_sec'] });
+}
 
 // ---------------------------------------------------------------- read_file
 
@@ -64,8 +64,8 @@ export const READ_FILE_MAX_LINES = 600;
 
 export interface ReadFileArgs {
   path: string;
-  start_line?: number;
-  end_line?: number;
+  start_line?: number | undefined;
+  end_line?: number | undefined;
 }
 
 export async function readFileTool(ctx: ToolContext, args: ReadFileArgs): Promise<ToolOutcome> {
@@ -97,10 +97,10 @@ export const SEARCH_MAX_FILE_CHARS = 1_000_000;
 
 export interface SearchArgs {
   query: string;
-  regex?: boolean;
-  case_sensitive?: boolean;
-  path_prefix?: string;
-  max_results?: number;
+  regex?: boolean | undefined;
+  case_sensitive?: boolean | undefined;
+  path_prefix?: string | undefined;
+  max_results?: number | undefined;
 }
 
 export async function searchWorkspaceTool(ctx: ToolContext, args: SearchArgs): Promise<ToolOutcome> {
@@ -120,7 +120,7 @@ export async function searchWorkspaceTool(ctx: ToolContext, args: SearchArgs): P
     return fail('INVALID_ARGS', `invalid regex: ${(e as Error).message}`);
   }
 
-  const files = await ctx.port.listFiles(prefix ? { prefix } : undefined);
+  const files = await ctx.port.listFiles(listOptions(prefix));
   const hits: string[] = [];
   let filesWithHits = 0;
   let truncated = false;
@@ -154,17 +154,19 @@ export interface BuiltProposal {
   summary: string;
 }
 
+export type BuildResult = { ok: true; proposal: BuiltProposal } | { ok: false; code: ToolErrorCode; message: string };
+
 /**
  * Validates propose_edit arguments against the current editor text and computes the hunks.
- * Used by the adapter to build the review and by the tool to re-derive the same hunks at apply time.
+ * Used by the turn controller to build the review and by the tool to re-derive the same hunks at apply time.
  */
-export async function buildProposal(port: EditorPort, args: ProposeEditArgs): Promise<{ ok: true; proposal: BuiltProposal } | { ok: false; code: ToolErrorCode; message: string }> {
+export async function buildProposal(port: EditorPort, args: ProposeEditArgs): Promise<BuildResult> {
   const path = normalizeWorkspacePath(args?.path);
   if (!path) return { ok: false, code: 'OUTSIDE_WORKSPACE', message: `path must be workspace-relative: ${String(args?.path)}` };
   if (typeof args.base_sha256 !== 'string') return { ok: false, code: 'INVALID_ARGS', message: 'base_sha256 must be a string ("" for a new file)' };
   const snap = await port.readText(path);
   if (snap && snap.sha256 !== args.base_sha256) {
-    return { ok: false, code: 'STALE_BASE', message: `${path} changed since it was read (sha256 is ${snap.sha256}); read it again` };
+    return { ok: false, code: 'STALE_BASE', message: `${path} changed since it was read (sha256 is now ${snap.sha256}); read it again` };
   }
   if (!snap && args.base_sha256 !== '') {
     return { ok: false, code: 'FILE_NOT_FOUND', message: `${path} does not exist; use base_sha256 "" to create it` };
@@ -185,51 +187,81 @@ export async function buildProposal(port: EditorPort, args: ProposeEditArgs): Pr
   };
 }
 
+/** Outcomes after which the workspace may have changed. */
+export function isWriteOutcome(result: ApplyTextResult): boolean {
+  return result.status === 'buffer_applied' || result.status === 'save_failed' || result.status === 'saved';
+}
+
 /**
- * Applies the accepted hunks of a reviewed proposal. Never writes without a matching review decision,
- * never writes after cancellation, and never writes over a changed file.
+ * Applies the accepted hunks of a reviewed proposal. Never writes without a matching review decision in
+ * the caller's session scope, never after cancellation, and never over a changed file.
  */
 export async function proposeEditTool(ctx: ToolContext, args: ProposeEditArgs): Promise<ToolOutcome> {
-  if (ctx.isCancelled()) return fail('CANCELLED', 'the turn was cancelled; nothing was written');
-  const approval = ctx.reviews.take(canonicalArgsKey(args));
+  const scope = ctx.scope;
+  if (!scope) return fail('NO_REVIEW_DECISION', 'this call is not bound to an active turn; nothing was written');
+  if (scope.cancelled) return fail('CANCELLED', 'the turn was cancelled; nothing was written');
+  const approval = scope.reviews.take(approvalKey('propose_edit', args));
   if (!approval) return fail('NO_REVIEW_DECISION', 'no recorded review decision for these exact arguments; nothing was written');
 
   const built = await buildProposal(ctx.port, args);
   if (!built.ok) return fail(built.code, built.message);
   const p = built.proposal;
-  if (p.baseSha256 !== approval.baseSha256) {
-    return fail('STALE_BASE', `${p.path} changed after it was reviewed; nothing was written`);
-  }
-  if (approval.accepted.length === 0) {
+  if (p.baseSha256 !== approval.baseSha256) return fail('STALE_BASE', `${p.path} changed after it was reviewed; nothing was written`);
+  const [firstId, ...restIds] = approval.acceptedHunkIds;
+  if (approval.acceptedIndices.length === 0 || firstId === undefined) {
     return fail('ALL_HUNKS_REJECTED', `the user rejected every hunk${approval.rejectReason ? `: ${approval.rejectReason}` : ''}`);
   }
 
   let outcome;
   try {
-    outcome = applyAccepted(p.originalText, p.hunks, approval.accepted);
+    outcome = applyAccepted(p.originalText, p.hunks, approval.acceptedIndices);
   } catch (e) {
     return fail('STALE_BASE', (e as Error).message);
   }
-  if (ctx.isCancelled()) return fail('CANCELLED', 'the turn was cancelled; nothing was written');
+  if (scope.cancelled) return fail('CANCELLED', 'the turn was cancelled; nothing was written');
 
-  const write = await ctx.port.applyText({ path: p.path, expectedSha256: p.baseSha256, newText: outcome.text });
-  if (!write.ok) return fail(write.code, write.message);
+  let result: ApplyTextResult;
+  try {
+    result = await ctx.port.applyText({
+      ...approval.callRef,
+      kind: 'apply_approved',
+      proposalId: approval.proposalId,
+      acceptedHunkIds: [firstId, ...restIds],
+      path: p.path,
+      expectedSha256: p.baseSha256,
+      text: outcome.text,
+      textSha256: sha256Hex(outcome.text),
+    });
+  } catch (e) {
+    scope.writes++;
+    return fail('WRITE_OUTCOME_UNKNOWN', `the editor did not report an outcome for ${p.path} (${(e as Error).message}); re-read the file before continuing`);
+  }
+  if (isWriteOutcome(result)) scope.writes++;
+  if (result.status === 'buffer_applied' || result.status === 'save_failed') scope.unsavedPaths.add(p.path);
+  if (result.status === 'saved') scope.unsavedPaths.delete(p.path);
+  scope.onApplied?.(result);
 
-  ctx.onApplied?.({
-    proposalId: approval.proposalId,
-    path: p.path,
-    isNewFile: p.isNewFile,
-    preSha256: write.preSha256,
-    postSha256: write.postSha256,
-    preText: p.isNewFile ? null : p.originalText,
-    applied: outcome.applied,
-    rejected: outcome.rejected,
-  });
-  const rejectedNote = outcome.rejected.length
+  const rejected = outcome.rejected.length
     ? ` Rejected hunks ${JSON.stringify(outcome.rejected)} were NOT applied${approval.rejectReason ? ` (user said: ${approval.rejectReason})` : ''}.`
     : '';
-  return {
-    ok: true,
-    text: `Applied hunks ${JSON.stringify(outcome.applied)} of ${p.hunks.length} to ${p.path}.${rejectedNote} New sha256: ${write.postSha256}`,
-  };
+  const applied = `Applied hunks ${JSON.stringify(outcome.applied)} of ${p.hunks.length} to ${p.path}.${rejected}`;
+  switch (result.status) {
+    case 'stale':
+      return fail('STALE_BASE', `${p.path} changed before it could be written; nothing was written. Read it again.`);
+    case 'approval_missing':
+      return fail('NO_REVIEW_DECISION', `the editor has no matching approval for ${p.path}; nothing was written`);
+    case 'failed_before_apply':
+      return fail('WRITE_FAILED', `${p.path} was not changed: ${result.message}`);
+    case 'buffer_applied':
+      return { ok: true, text: `${applied} The change is in the editor but NOT saved (${result.reason}); commands and tests will not see it. New sha256: ${result.undo.expectedPostSha256}` };
+    case 'save_failed':
+      return { ok: true, text: `${applied} The change is in the editor but saving failed (${result.message}); commands and tests will not see it. New sha256: ${result.currentBufferSha256}` };
+    case 'saved': {
+      const reformatted = result.savedTextSha256 !== sha256Hex(outcome.text);
+      return {
+        ok: true,
+        text: `${applied} Saved. New sha256: ${result.savedTextSha256}${reformatted ? ' (the editor reformatted the file on save; read it again before editing it further)' : ''}`,
+      };
+    }
+  }
 }

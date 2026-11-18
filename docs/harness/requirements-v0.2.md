@@ -1,10 +1,10 @@
 # Harness reference requirements (contract v0.2 text as received)
 
-Status: reference requirements for the harness, not the shared contract. The shared contracts are
-authored by the editor team in `contracts/` and reviewed in `docs/harness/contract-review.md`.
+**SUPERSEDED** by the shared contracts in `contracts/` (PROTOCOL_VERSION 0.3.0, with the accepted
+amendments R1–R5). Kept only as a historical record; do not implement against this text.
 
-Note: the text below is reproduced exactly as received on 2026-11-18. It was truncated in transit
-partway through section 3 ("A FIFO queue per key"); nothing after that point was received.
+The text below is reproduced exactly as received on 2026-11-18. It was truncated in transit partway
+through section 3 ("A FIFO queue per key"); the remainder was not needed once `contracts/` replaced it.
 
 ---
 

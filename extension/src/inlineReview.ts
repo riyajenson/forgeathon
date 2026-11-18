@@ -28,11 +28,32 @@ export class InlineReview implements vscode.Disposable {
       await vscode.commands.executeCommand('vscode.diff', left, right, p.path + ' - proposed changes');
       if (!this.edits.isActive(p)) return undefined;
       this.status.show();
-      return await new Promise(resolve => { this.pending = {proposal: p, resolve}; });
+      return await new Promise(resolve => { this.pending = {proposal: p, resolve}; void this.prompt(p); });
     } finally {
       this.status.hide();
       this.texts.delete(left.toString()); this.texts.delete(right.toString());
     }
+  }
+
+  // Non-modal prompt next to the diff; dismissing it keeps the review open (status bar item or commands).
+  private async prompt(p: EditProposal) {
+    const n = p.hunks.length;
+    const pick = await vscode.window.showInformationMessage(
+      `Review ${n} hunk${n === 1 ? '' : 's'} in ${p.path}`, 'Accept All', 'Reject All', 'Choose Hunks...');
+    if (this.pending?.proposal !== p) return;
+    if (pick === 'Choose Hunks...') this.choose();
+    else if (pick === 'Accept All') this.decideAll('accept');
+    else if (pick === 'Reject All') this.decideAll('reject');
+  }
+
+  decideAll(choice: 'accept' | 'reject') {
+    const pending = this.pending;
+    if (!pending || !this.edits.isActive(pending.proposal)) return;
+    const p = pending.proposal;
+    const decision = this.edits.decide(p, Object.fromEntries(p.hunks.map(h => [h.hunkId, choice])));
+    this.pending = undefined;
+    this.picker?.hide();
+    pending.resolve(decision);
   }
 
   choose() {
@@ -47,6 +68,7 @@ export class InlineReview implements vscode.Disposable {
       label: 'Hunk ' + (i + 1) + ' - line ' + p.originalText.slice(0, h.startOffset).split('\n').length,
       detail: h.oldText.slice(0, 80) + ' | ' + h.newText.slice(0, 80), hunkId: h.hunkId
     }));
+    picker.selectedItems = picker.items; // start from "accept all"; uncheck hunks to reject them
     picker.onDidAccept(() => {
       const selected = new Set(picker.selectedItems.map(i => i.hunkId));
       if (this.pending === pending && this.edits.isActive(p)) {

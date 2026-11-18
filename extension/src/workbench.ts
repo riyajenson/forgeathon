@@ -40,6 +40,7 @@ export class Workbench implements vscode.Disposable {
   notice(text: string) { this.panel.notice(text); }
   showPanel() { this.panel.open(); }
   choose() { this.review.choose(); }
+  decideAll(choice: 'accept' | 'reject') { this.review.decideAll(choice); }
   async undo() {
     const id = this.edits.latestUndoId();
     if (id) await this.edits.undo(id); else this.notice('No reviewed edit to undo.');

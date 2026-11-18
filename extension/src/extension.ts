@@ -20,6 +20,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     register('inlineEdit', ui => ui.inline()), register('openAgentPanel', ui => ui.showPanel()),
     register('reviewHunks', ui => ui.choose()), register('undo', ui => ui.undo()),
+    register('acceptAllHunks', ui => ui.decideAll('accept')), register('rejectAllHunks', ui => ui.decideAll('reject')),
     register('stop', ui => ui.stop())
   );
 }

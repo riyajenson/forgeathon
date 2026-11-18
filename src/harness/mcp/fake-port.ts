@@ -17,6 +17,9 @@ export class FakePort implements EditorBridge {
   mode: FakeApplyMode = 'save';
   /** Simulates a save participant (e.g. a formatter) transforming the text on save. */
   formatOnSave: ((text: string) => string) | undefined;
+  /** Delays applyText (after it starts) to simulate a slow editor; onApplyStart fires when it begins. */
+  applyDelayMs = 0;
+  onApplyStart: (() => void) | undefined;
   private undoSeq = 0;
 
   constructor(readonly root: string) {}
@@ -60,6 +63,8 @@ export class FakePort implements EditorBridge {
   }
 
   async applyText(req: ApplyTextRequest): Promise<ApplyTextResult> {
+    this.onApplyStart?.();
+    if (this.applyDelayMs) await new Promise((r) => setTimeout(r, this.applyDelayMs));
     if (this.mode === 'throw') throw new Error('simulated editor failure');
     const base = { sessionId: req.sessionId, turnId: req.turnId, callId: req.callId, proposalId: req.proposalId, path: req.path };
     const file = this.abs(req.path);

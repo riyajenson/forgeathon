@@ -44,7 +44,32 @@
         "mac": "cmd+alt+i",
         "when": "editorTextFocus && editorHasSelection && !editorReadonly && isWorkspaceTrusted"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Forge",
+      "properties": {
+        "forge.trueforgeUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8790",
+          "scope": "machine",
+          "description": "Local TrueForge server in the extension host environment."
+        },
+        "forge.mcpPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 47615,
+          "scope": "machine",
+          "description": "Loopback port used by the editor MCP server."
+        },
+        "forge.context.budgetTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 8000,
+          "description": "Agent-mode context budget in tokens."
+        }
+      }
+    }
   },
   "capabilities": {
     "untrustedWorkspaces": {

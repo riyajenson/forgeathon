@@ -25,7 +25,7 @@ export class InlineReview implements vscode.Disposable {
     this.texts.set(left.toString(), p.originalText);
     this.texts.set(right.toString(), p.proposedText);
     try {
-      await vscode.commands.executeCommand('vscode.diff', left, right, p.path + ' ? proposed changes');
+      await vscode.commands.executeCommand('vscode.diff', left, right, p.path + ' - proposed changes');
       if (!this.edits.isActive(p)) return undefined;
       this.status.show();
       return await new Promise(resolve => { this.pending = {proposal: p, resolve}; });
@@ -41,11 +41,11 @@ export class InlineReview implements vscode.Disposable {
     const p = pending.proposal;
     const picker = vscode.window.createQuickPick<vscode.QuickPickItem & {hunkId: string}>();
     this.picker = picker;
-    picker.title = 'Select hunks to accept ? Enter submits; unchecked hunks are rejected';
+    picker.title = 'Select hunks to accept. Enter submits; unchecked hunks are rejected';
     picker.canSelectMany = true;
     picker.items = p.hunks.map((h, i) => ({
-      label: 'Hunk ' + (i + 1) + ' ? line ' + p.originalText.slice(0, h.startOffset).split('\n').length,
-      detail: h.oldText.slice(0, 80) + ' ? ' + h.newText.slice(0, 80), hunkId: h.hunkId
+      label: 'Hunk ' + (i + 1) + ' - line ' + p.originalText.slice(0, h.startOffset).split('\n').length,
+      detail: h.oldText.slice(0, 80) + ' | ' + h.newText.slice(0, 80), hunkId: h.hunkId
     }));
     picker.onDidAccept(() => {
       const selected = new Set(picker.selectedItems.map(i => i.hunkId));

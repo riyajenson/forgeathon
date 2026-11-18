@@ -23,14 +23,14 @@
     el('trace').hidden = !s.trace;
     el('text').textContent = s.text;
     el('activity').hidden = !s.tools.length;
-    list('tools',s.tools.map(t => t.label + ' ? ' + t.detail));
+    list('tools',s.tools.map(t => t.label + ' | ' + t.detail));
     el('context').hidden = !s.context;
     if (s.context) {
       el('budget').textContent = s.context.estimatedTokens + ' / ' + s.context.budgetTokens + ' estimated tokens';
-      list('selected',s.context.selections.map(i => i.path + (i.symbol ? ' ? ' + i.symbol : '') +
-        ' ? ' + i.source + ' ? ' + i.rationale + ' ? ' + i.estimatedTokens + ' tokens' + (i.truncated ? ' (truncated)' : '')));
+      list('selected',s.context.selections.map(i => i.path + (i.symbol ? ' | ' + i.symbol : '') +
+        ' | ' + i.source + ' | ' + i.rationale + ' | ' + i.estimatedTokens + ' tokens' + (i.truncated ? ' (truncated)' : '')));
       el('skippedTitle').hidden = !s.context.skipped.length;
-      list('skipped',s.context.skipped.map(i => i.path + ' ? ' + i.reason + ' ? ' + i.estimatedTokens + ' tokens'));
+      list('skipped',s.context.skipped.map(i => i.path + ' | ' + i.reason + ' | ' + i.estimatedTokens + ' tokens'));
     }
     el('changes').hidden = !s.edits.length;
     list('edits',s.edits);

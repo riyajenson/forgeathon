@@ -37,7 +37,8 @@ exports.run=async()=>{
   assert.equal(await fs.readFile(file,'utf8'),'external');
   await fs.writeFile(file,original);
   edits.end();
-  let decision,result;
+  let decision,result,recordDecision;
+  const decisionReady = new Promise(resolve=>recordDecision=resolve);
   const version='0.4.0', events=[];
   const harness={
     createSession:async()=>({ok:true,body:{sessionId:'s'}}), submitTurn:async({body})=>({ok:true,body}),
@@ -45,12 +46,13 @@ exports.run=async()=>{
       const header={turnId:body.turnId,sessionId:body.sessionId,version};
       const proposal=make(header);
       yield {ok:true,body:{...header,sequence:1,t:'review_request',proposal}};
+      await decisionReady;
       assert.deepEqual(decision.hunks,{a:'accept',b:'reject'});
       result=await edits.applyText(request(proposal));
       yield {ok:true,body:{...header,sequence:2,t:'edit_applied',result}};
       yield {ok:true,body:{...header,sequence:3,t:'done',status:'done'}};
     },
-    submitReview:async({body})=>{decision=body;return {ok:true,body:null}},
+    submitReview:async({body})=>{decision=body;recordDecision();return {ok:true,body:null}},
     closeSession:async()=>({ok:true,body:{}}),cancel:async()=>({ok:true,body:'confirmed'})
   };
   const ui={event:e=>events.push(e.t),review:async proposal=>edits.decide(proposal,{a:'accept',b:'reject'}),

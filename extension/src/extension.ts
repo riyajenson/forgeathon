@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { configuredHarness } from './connect';
 import { Workbench } from './workbench';
 
 let workbench: Workbench | undefined;
@@ -11,7 +12,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (workbench && workbench.folder.uri.toString() !== folders[0].uri.toString()) {
           await workbench.shutdown(); workbench = undefined;
         }
-        await run(workbench ??= new Workbench(folders[0]));
+        await run(workbench ??= new Workbench(folders[0], configuredHarness));
       } catch (error) {
         void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Editor operation failed');
       }

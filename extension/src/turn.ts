@@ -36,6 +36,25 @@ export class TurnController {
       if (!turn.ok) throw new Error(turn.error.message);
       a.submitted = true;
       if (a.stopped) await this.stop();
+      let promptOpen = false;
+      let reviewError: Error | undefined;
+      const answer = async (e: Extract<HarnessEvent, {t:'review_request' | 'command_request'}>) => {
+        if (promptOpen) throw new Error('Overlapping approval requests');
+        promptOpen = true;
+        let decision: ReviewDecision | undefined;
+        try {
+          if (e.t === 'review_request') {
+            if (e.proposal.turnId !== ref.turnId || e.proposal.sessionId !== ref.sessionId)
+              throw new Error('Invalid review identity');
+            decision = await this.view.review(e.proposal);
+          } else {
+            decision = {...ref, kind:'command', callId:e.callId, allow:await this.view.command(e)};
+          }
+        } finally { promptOpen = false; }
+        if (!decision || a.stopped || this.active !== a || !this.edits.isActive(ref)) return;
+        const reply = await this.harness.submitReview(this.envelope(decision));
+        if (!reply.ok) throw new Error(reply.error.message);
+      };
       for await (const packet of this.harness.stream(this.envelope({...ref, afterSequence: 0}))) {
         if (!packet.ok) throw new Error(packet.error.message);
         const e = packet.body;
@@ -43,19 +62,17 @@ export class TurnController {
           throw new Error('Unexpected turn or protocol version');
         if (e.sequence <= a.last) continue;
         if (e.sequence !== ++a.last) throw new Error('Missing turn events');
-        if (e.t === 'done') { this.view.event(e); return; }
+        if (e.t === 'done') { this.view.event(e); if (reviewError) throw reviewError; return; }
         if (a.stopped && e.t !== 'edit_applied' && e.t !== 'error') continue;
         this.view.event(e);
-        let decision: ReviewDecision | undefined;
-        if (e.t === 'review_request') {
-          if (e.proposal.turnId !== ref.turnId || e.proposal.sessionId !== ref.sessionId) throw new Error('Invalid review identity');
-          decision = await this.view.review(e.proposal);
-        } else if (e.t === 'command_request') {
-          decision = {...ref, kind:'command', callId:e.callId, allow:await this.view.command(e)};
-        }
-        if (decision && !a.stopped) {
-          const reply = await this.harness.submitReview(this.envelope(decision));
-          if (!reply.ok) throw new Error(reply.error.message);
+        if (e.t === 'review_request' || e.t === 'command_request') {
+          // Keep consuming the stream while the user reviews. A terminal event can revoke this prompt.
+          void answer(e).catch(async error => {
+            if (this.active !== a || a.stopped) return;
+            reviewError = error instanceof Error ? error : new Error('Approval failed');
+            this.view.notice(reviewError.message);
+            try { await this.stop(); } catch { this.view.notice('Stop confirmation unavailable'); }
+          });
         }
       }
       throw new Error('Stream closed before the terminal event');
@@ -74,7 +91,7 @@ export class TurnController {
     a.stopped = true;
     this.edits.end();
     this.view.cancelReview();
-    this.view.notice('Stopping?');
+    this.view.notice('Stopping...');
     if (a.ref && a.submitted) {
       const reply = await this.harness.cancel(this.envelope(a.ref));
       if (!reply.ok || reply.body === 'unconfirmed') this.view.notice('Stop requested; confirmation pending');

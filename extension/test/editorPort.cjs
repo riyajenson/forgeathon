@@ -7,6 +7,9 @@ const { createHash } = require('node:crypto');
 const vscode = require('vscode');
 const port = require('../out/editorPort');
 exports.run = async () => {
+  const logger = port.createStatusLogger();
+  logger.log('info', 'running');
+  logger.log('warn', 'TEST_REDACTION_MARKER');
   const folder = vscode.workspace.workspaceFolders[0];
   const dir = await fs.mkdtemp(path.join(folder.uri.fsPath, 'port-'));
   const rel = path.basename(dir);
@@ -37,9 +40,6 @@ exports.run = async () => {
   assert.equal((await list({limit: 1})).length, 1);
   assert.deepEqual(await list({limit: 0}), []);
   await assert.rejects(list({prefix: '../outside'}));
-  const logger = port.createStatusLogger();
-  logger.log('info', 'running');
-  logger.log('warn', 'TEST_REDACTION_MARKER');
   logger.dispose();
   console.log('PASS listing prefix/limit/exclusion and output channel lifecycle');
   console.log('PASS readText clean/dirty CRLF, disk unchanged, missing, unsafe paths and link escape');

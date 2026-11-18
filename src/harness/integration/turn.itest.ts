@@ -3,6 +3,7 @@
 // Run with: npm run test:integration
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
@@ -47,6 +48,12 @@ function script(req: MockRequest): MockReply {
     case 'dup':
       if (toolResult !== undefined) return { text: 'dup finished' };
       return { toolCalls: [0, 1].map(() => ({ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } })) };
+    case 'noisy':
+      if (toolResult !== undefined) return { text: `noisy finished: ${toolResult.slice(0, 200)}` };
+      return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [{ ...edit1, why: 'extra' }], explanation: 'models add keys' } }] };
+    case 'cmd':
+      if (toolResult !== undefined) return { text: `cmd finished: ${toolResult.slice(0, 300)}` };
+      return { toolCalls: [{ name: 'run_command', args: { command: 'echo made > made.txt && echo ran' } }] };
     case 'edit-then-500':
       if (toolResult !== undefined) return { status: 500, message: 'mock upstream exploded' };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
@@ -70,6 +77,7 @@ before(async () => {
   await mock.start(MOCK_PORT);
   mock.handler = script;
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-it-'));
+  execFileSync('git', ['init', '-q'], { cwd: root });
   port = new FakePort(root);
   const { client } = await createClient(TF_URL);
   const base = `http://127.0.0.1:${MOCK_PORT}/v1`;
@@ -90,7 +98,7 @@ before(async () => {
     const manifest = {
       model: { name: model, params: { parallelToolCalls: false } },
       instructions: 'Integration test agent.',
-      mcpServers: [{ name: CONNECTOR, enableTools: ['@all'], preloadTools: ['read_file', 'search_workspace', 'propose_edit'], requireApprovalForTools: ['propose_edit', 'run_command'] }],
+      mcpServers: [{ name: CONNECTOR, enableTools: ['@all'], preloadTools: ['read_file', 'search_workspace', 'propose_edit', 'run_command'], requireApprovalForTools: ['propose_edit', 'run_command'] }],
       config: {
         sandbox: { enabled: false }, dynamicSubAgents: { enabled: false }, generativeUi: { enabled: false }, askUserQuestions: { enabled: false },
         contextManagement: { compaction: { enabled: true, trigger: { type: 'input_tokens' as const, value: 60000 } }, largeToolResponse: { enabled: false } },
@@ -354,4 +362,34 @@ test('watchdog: a stalled model is stopped, retried once, then replaced by the f
     assert.equal(ofType(events, 'fallback').length, 1);
     assert.ok(ofType(events, 'text').some((t) => t.delta.includes('fallback')));
   }, 1000);
+});
+
+test('extra keys from the model do not break the approval binding', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    const events = await runTurn(h, sid, 'SCENARIO:noisy', async (e) => {
+      if (e.t === 'review_request') await review(h, e, () => 'accept');
+    });
+    assert.equal(doneOf(events).status, 'done');
+    assert.equal(ofType(events, 'edit_applied').length, 1);
+    assert.equal(await disk(), ORIGINAL.replace('return 1', 'return 10'));
+  });
+});
+
+test('run_command: approval prompt, execution, changed-file report', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    let prompt: Extract<HarnessEvent, { t: 'command_request' }> | undefined;
+    const events = await runTurn(h, sid, 'SCENARIO:cmd', async (e, ctl) => {
+      if (e.t === 'command_request') {
+        prompt = e;
+        const r = await h.submitReview({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: ctl.sessionId, turnId: ctl.turnId, callId: e.callId, kind: 'command', allow: true } });
+        assert.ok(r.ok, JSON.stringify(r));
+      }
+    });
+    assert.equal(doneOf(events).status, 'done');
+    assert.equal(prompt?.command, 'echo made > made.txt && echo ran');
+    assert.equal(prompt?.cwd, '.');
+    assert.equal(await fs.readFile(path.join(root, 'made.txt'), 'utf8'), 'made\n');
+    assert.ok(ofType(events, 'status').some((s) => /command exited 0; changed files: made\.txt/.test(s.detail ?? '')));
+    assert.ok(mock.requests.some((r) => /Files changed by the command: made\.txt/.test(lastToolMessage(r) ?? '')));
+  });
 });

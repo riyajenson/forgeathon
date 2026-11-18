@@ -8,7 +8,7 @@ const refKey = (r: TurnRef) => JSON.stringify([r.sessionId, r.turnId]);
 const key = (r: TurnRef & { callId: string; proposalId: string }) =>
   JSON.stringify([r.sessionId, r.turnId, r.callId, r.proposalId]);
 type Choice = 'accept' | 'reject';
-type Receipt = { doc: vscode.TextDocument; before: string; after: string; saveOnUndo: boolean };
+type Receipt = { doc: vscode.TextDocument; before: string; after: string; saveOnUndo: boolean; created?: boolean };
 type Approval = { path: string; base: string | null; digest: string; ids: readonly string[] };
 
 // Compose the preview while the user is reviewing. applyText uses the adapter's exact text.
@@ -78,7 +78,7 @@ export class EditReview implements vscode.Disposable {
       const snapshot = await this.readText(r.path);
       const observed = snapshot?.sha256 ?? null;
       if (observed !== a.base) return { ...base, status: 'stale', expectedSha256: a.base, observedSha256: observed };
-      if (!snapshot) return { ...base, status: 'failed_before_apply', message: 'Safe creation of new files is unavailable' };
+      if (!snapshot) return await this.create(r, a, id, fp, base, digest, () => { submitted = true; });
       const doc = await vscode.workspace.openTextDocument(uri);
       const before = doc.getText(), current = hash(before), dirty = doc.isDirty;
       if (current !== a.base) return { ...base, status: 'stale', expectedSha256: a.base, observedSha256: current };
@@ -115,6 +115,44 @@ export class EditReview implements vscode.Disposable {
     } finally { this.busy.delete(lock); }
   }
 
+  // New file: created only if still absent (no overwrite), then opened and saved. Undo deletes it.
+  private async create(r: ApplyTextRequest, a: Approval, id: string, fp: string,
+    base: { sessionId: string; turnId: string; callId: string; proposalId: string; path: string },
+    digest: string, markSubmitted: () => void): Promise<ApplyTextResult> {
+    const denied = { ...base, status: 'approval_missing' } as const;
+    if (a.base !== null || r.expectedSha256 !== null) return denied;
+    if (a !== this.approvals.get(id) || !this.isActive(r) || !vscode.workspace.isTrusted) return denied;
+    const uri = vscode.Uri.joinPath(this.folder.uri, r.path);
+    this.approvals.delete(id);
+    const edit = new vscode.WorkspaceEdit();
+    edit.createFile(uri, { overwrite: false, ignoreIfExists: false, contents: Buffer.from(r.text, 'utf8') });
+    markSubmitted();
+    if (!await vscode.workspace.applyEdit(edit)) {
+      return { ...base, status: 'failed_before_apply', message: 'VS Code declined to create the file (it may exist now)' };
+    }
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const undoId = randomUUID();
+    const after = hash(doc.getText());
+    const receipt: Receipt = { doc, before: '', after, saveOnUndo: false, created: true };
+    this.receipts.set(undoId, receipt);
+    const details = { ...base, appliedHunkIds: [...a.ids], undo: { undoId, path: r.path, expectedPostSha256: after } };
+    let result: ApplyTextResult;
+    if (after !== digest) {
+      result = { ...details, status: 'buffer_applied', save: 'deferred', reason: 'Created file differs from the reviewed text' };
+    } else if (doc.isDirty) {
+      let saved = false;
+      try { saved = await this.save(doc); } catch { /* keep the created file and receipt */ }
+      result = saved && !doc.isDirty
+        ? { ...details, status: 'saved', savedTextSha256: (receipt.after = hash(doc.getText())) }
+        : { ...details, status: 'save_failed', message: 'Inspect the new file and retry Save', currentBufferSha256: hash(doc.getText()),
+            disk: 'unknown', recovery: 'inspect_buffer_then_retry_save' };
+    } else {
+      result = { ...details, status: 'saved', savedTextSha256: after };
+    }
+    this.results.set(id, { fingerprint: fp, result });
+    return result;
+  }
+
   latestUndoId() { return Array.from(this.receipts.keys()).pop(); }
   async undo(id: string) {
     const r = this.receipts.get(id);
@@ -124,6 +162,13 @@ export class EditReview implements vscode.Disposable {
     if (this.busy.has(lock) || hash(doc.getText()) !== r.after) throw new Error('Document changed; inspect before undo');
     this.busy.add(lock);
     try {
+      if (r.created) {
+        const removal = new vscode.WorkspaceEdit();
+        removal.deleteFile(doc.uri, { ignoreIfNotExists: false });
+        if (!await vscode.workspace.applyEdit(removal)) throw new Error('VS Code declined to delete the created file');
+        this.receipts.delete(id);
+        return;
+      }
       const edit = new vscode.WorkspaceEdit();
       edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), r.before);
       if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code declined undo');

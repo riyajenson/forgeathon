@@ -24,6 +24,8 @@ export interface HarnessOptions {
   watchdogMs?: number;
   /** Delay before the single retry of an unavailable model. Default 2000 ms. */
   retryDelayMs?: number;
+  /** Token budget for automatically assembled context in agent mode (setting forge.context.budgetTokens). Default 8000. */
+  contextBudgetTokens?: number;
   /** Name of the MCP connector registered in TrueForge. Default "vscode". */
   connectorName?: string;
 }
@@ -157,6 +159,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       agentModel: (agent) => this.modelOf(agent),
       cancelTimeoutMs: this.options.cancelTimeoutMs ?? 5000,
       watchdogMs: this.options.watchdogMs ?? 45000,
+      contextBudgetTokens: this.options.contextBudgetTokens ?? 8000,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: 10000,
     });

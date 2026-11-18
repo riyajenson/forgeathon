@@ -134,10 +134,11 @@ test('approvalKey ignores keys the MCP server would strip', () => {
   assert.equal(approvalKey('run_command', { command: 'ls', note: 1 }), approvalKey('run_command', { command: 'ls' }));
 });
 
-test('tools/list exposes the four tools with read-only annotations on the readers', async () => {
+test('tools/list exposes the five tools with read-only annotations on the readers', async () => {
   const { tools } = await client.listTools();
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  assert.deepEqual(Object.keys(byName).sort(), ['propose_edit', 'read_file', 'run_command', 'search_workspace']);
+  assert.deepEqual(Object.keys(byName).sort(), ['gather_context', 'propose_edit', 'read_file', 'run_command', 'search_workspace']);
+  assert.equal(byName['gather_context']!.annotations?.readOnlyHint, true);
   assert.equal(byName['run_command']!.annotations?.destructiveHint, true);
   assert.equal(byName['read_file']!.annotations?.readOnlyHint, true);
   assert.equal(byName['search_workspace']!.annotations?.readOnlyHint, true);

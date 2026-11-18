@@ -181,7 +181,7 @@ async function review(h: ForgeHarness, e: Extract<HarnessEvent, { t: 'review_req
 
 test('allow: review, accept all, edit saved, turn done', async () => {
   await withHarness('it-coder', async (h, sid) => {
-    const events = await runTurn(h, sid, 'SCENARIO:edit2 bump both', async (e) => {
+    const events = await runTurn(h, sid, 'SCENARIO:edit2 bump the return values of alpha and beta', async (e) => {
       if (e.t === 'review_request') await review(h, e, () => 'accept');
     });
     assertSequence(events);
@@ -197,6 +197,10 @@ test('allow: review, accept all, edit saved, turn done', async () => {
     assert.match(session.traceUrl, /sessionId=/);
     assert.equal(session.model, 'itgood/primary');
     assert.ok(ofType(events, 'tool_call').some((t) => t.tool === 'propose_edit' && t.requiresApproval));
+    const ctx = ofType(events, 'context_report');
+    assert.equal(ctx.length, 1, 'context is assembled once before the turn');
+    assert.ok(ctx[0]!.report.selections.some((s) => s.path === FILE && s.source === 'automatic'));
+    assert.ok(events.indexOf(ctx[0]!) < events.findIndex((e) => e.t === 'session'), 'context report precedes the TrueForge session');
     assert.ok(ofType(events, 'tool_result').some((t) => t.ok));
   });
 });

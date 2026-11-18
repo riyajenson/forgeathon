@@ -15,13 +15,15 @@ export class Workbench implements vscode.Disposable {
   private pendingRun?: AbortController;
   private readonly panel = new AgentPanel({
     send: text => this.run('agent', text, this.activeContext()),
-    stop: () => this.stop(), review: () => this.choose()
+    stop: () => this.stop(), review: () => this.choose(),
+    command: allow => this.commandAnswer?.(allow)
   });
   private controller?: TurnController;
   private harness?: ForgeHarness;
   private starting?: Promise<TurnController>;
   private closed = false;
   private commandPicker?: vscode.QuickPick<vscode.QuickPickItem>;
+  private commandAnswer?: (allow: boolean) => void;
 
   constructor(readonly folder: vscode.WorkspaceFolder,
     private readonly factory?: () => Connection | Promise<Connection>) {
@@ -58,8 +60,10 @@ export class Workbench implements vscode.Disposable {
     picker.items = [{label:'Deny'}, {label:'Allow once', detail:command}];
     return new Promise<boolean>(resolve => {
       let allow = false;
+      // The panel's Allow/Deny buttons and this quick pick answer the same single decision.
+      this.commandAnswer = answer => { allow = answer; picker.hide(); };
       picker.onDidAccept(() => { allow = picker.selectedItems[0]?.label === 'Allow once'; picker.hide(); });
-      picker.onDidHide(() => { this.commandPicker = undefined; picker.dispose(); resolve(allow); });
+      picker.onDidHide(() => { this.commandPicker = undefined; this.commandAnswer = undefined; picker.dispose(); resolve(allow); });
       picker.show();
     });
   }

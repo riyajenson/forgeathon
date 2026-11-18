@@ -1,7 +1,7 @@
 (() => {
   const vscode = acquireVsCodeApi();
   const el = id => document.getElementById(id);
-  for (const id of ['stop','review','trace']) el(id).onclick = () => vscode.postMessage({action:id});
+  for (const id of ['stop','review','trace','allow','deny']) el(id).onclick = () => vscode.postMessage({action:id});
   el('send').onclick = () => {
     const text = el('task').value;
     if (text.trim()) vscode.postMessage({action:'send',text});
@@ -21,6 +21,8 @@
     el('banner').textContent = s.banner;
     el('banner').hidden = !s.banner;
     el('trace').hidden = !s.trace;
+    el('cmd').hidden = !s.command;
+    el('cmdText').textContent = s.command ? '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' : '';
     el('text').textContent = s.text;
     el('activity').hidden = !s.tools.length;
     list('tools',s.tools.map(t => t.label + ' | ' + t.detail));

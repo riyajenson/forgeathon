@@ -29,6 +29,14 @@
         "title": "Forge-a-thon: Review Hunks"
       },
       {
+        "command": "forgeathon.acceptAllHunks",
+        "title": "Forge-a-thon: Accept All Hunks"
+      },
+      {
+        "command": "forgeathon.rejectAllHunks",
+        "title": "Forge-a-thon: Reject All Hunks"
+      },
+      {
         "command": "forgeathon.undo",
         "title": "Forge-a-thon: Undo Last Reviewed Edit"
       },

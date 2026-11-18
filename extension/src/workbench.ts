@@ -15,13 +15,15 @@ export class Workbench implements vscode.Disposable {
   private pendingRun?: AbortController;
   private readonly panel = new AgentPanel({
     send: text => this.run('agent', text, this.activeContext()),
-    stop: () => this.stop(), review: () => this.choose()
+    stop: () => this.stop(), review: () => this.choose(),
+    command: allow => this.commandAnswer?.(allow)
   });
   private controller?: TurnController;
   private harness?: ForgeHarness;
   private starting?: Promise<TurnController>;
   private closed = false;
   private commandPicker?: vscode.QuickPick<vscode.QuickPickItem>;
+  private commandAnswer?: (allow: boolean) => void;
 
   constructor(readonly folder: vscode.WorkspaceFolder,
     private readonly factory?: () => Connection | Promise<Connection>) {
@@ -40,6 +42,7 @@ export class Workbench implements vscode.Disposable {
   notice(text: string) { this.panel.notice(text); }
   showPanel() { this.panel.open(); }
   choose() { this.review.choose(); }
+  decideAll(choice: 'accept' | 'reject') { this.review.decideAll(choice); }
   async undo() {
     const id = this.edits.latestUndoId();
     if (id) await this.edits.undo(id); else this.notice('No reviewed edit to undo.');
@@ -57,8 +60,10 @@ export class Workbench implements vscode.Disposable {
     picker.items = [{label:'Deny'}, {label:'Allow once', detail:command}];
     return new Promise<boolean>(resolve => {
       let allow = false;
+      // The panel's Allow/Deny buttons and this quick pick answer the same single decision.
+      this.commandAnswer = answer => { allow = answer; picker.hide(); };
       picker.onDidAccept(() => { allow = picker.selectedItems[0]?.label === 'Allow once'; picker.hide(); });
-      picker.onDidHide(() => { this.commandPicker = undefined; picker.dispose(); resolve(allow); });
+      picker.onDidHide(() => { this.commandPicker = undefined; this.commandAnswer = undefined; picker.dispose(); resolve(allow); });
       picker.show();
     });
   }
@@ -100,7 +105,14 @@ export class Workbench implements vscode.Disposable {
     const context = {activeFile, selection:{ path: activeFile, text: doc.getText(selection),
       startLine: selection.start.line + 1, endLine: selection.end.line + (selection.end.character === 0 ? 0 : 1) }};
     const instruction = await vscode.window.showInputBox({prompt:'How should the selection change?'});
-    if (instruction?.trim()) await this.run('inline', instruction, context);
+    if (!instruction?.trim()) return;
+    // Visible progress for inline turns (the panel may be closed); Cancel stops the turn.
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Forge inline edit', cancellable: true },
+      (progress, token) => {
+        token.onCancellationRequested(() => { void this.stop(); });
+        progress.report({ message: 'waiting for the model...' });
+        return this.run('inline', instruction, context);
+      });
   }
 
   dispose() {

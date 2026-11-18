@@ -12,6 +12,7 @@ export class AgentViewState {
   tools: {id: string; label: string; detail: string}[] = [];
   context?: ContextReport;
   edits: string[] = [];
+  command?: {command: string; cwd: string};
 
   update(e: HarnessEvent) {
     switch (e.t) {
@@ -29,7 +30,7 @@ export class AgentViewState {
       }
       case 'context_report': this.context = e.report; break;
       case 'review_request': this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path; break;
-      case 'command_request': this.status = 'Waiting for command approval'; break;
+      case 'command_request': this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd}; break;
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);
@@ -37,12 +38,12 @@ export class AgentViewState {
         break;
       case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; break;
       case 'error': this.banner = e.error.message + '; workspace effect: ' + e.error.workspaceEffect; break;
-      case 'done': this.status = e.summary || e.status; this.busy = this.reviewing = false; break;
+      case 'done': this.status = e.summary || e.status; this.busy = this.reviewing = false; this.command = undefined; break;
     }
   }
 }
 
-type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void };
+type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void };
 export class AgentPanel implements vscode.Disposable {
   state = new AgentViewState();
   private panel?: vscode.WebviewPanel;
@@ -71,6 +72,9 @@ export class AgentPanel implements vscode.Disposable {
             break;
           case 'stop': await this.actions.stop(); break;
           case 'review': this.actions.review(); break;
+          case 'allow': case 'deny':
+            if (this.state.command) { this.state.command = undefined; this.actions.command(m.action === 'allow'); this.refresh(); }
+            break;
           case 'trace': {
             const uri = vscode.Uri.parse(this.state.trace, true);
             if (uri.scheme === 'http' && /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(uri.authority))
@@ -90,6 +94,7 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
 <p id="status" role="status"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
 <section id="context" hidden><h2>Context</h2><p id="budget"></p><ul id="selected"></ul><h2 id="skippedTitle">Skipped</h2><ul id="skipped"></ul></section>
 <section id="changes" hidden><h2>Reviewed edits</h2><ul id="edits"></ul></section>

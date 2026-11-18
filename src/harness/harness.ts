@@ -145,6 +145,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       port: this.port,
       scopes: this.scopes,
       trueforgeUrl: this.url,
+      workspaceRoot: session.workspaceRoot,
       agentName,
       runtimeSession: async (agent, fresh) => {
         const existing = session.runtime.get(agent);

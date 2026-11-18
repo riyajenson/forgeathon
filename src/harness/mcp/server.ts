@@ -9,6 +9,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { EditorPort } from './port';
 import { SESSION_HEADER, type ScopeRegistry } from './scope';
+import { runCommandTool } from './command';
 import { proposeEditTool, readFileTool, searchWorkspaceTool, type ToolContext, type ToolOutcome } from './tools';
 
 export const MCP_PATH = '/mcp';
@@ -84,6 +85,18 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   }, (args) => run(ctx, () => proposeEditTool(ctx, args)));
+
+  server.registerTool('run_command', {
+    description:
+      'Run one shell command (bash) in the workspace after the user approves it, e.g. "python -m pytest tests/test_cli.py -q". ' +
+      'Returns exit code, capped stdout/stderr and the files the command changed. Do not use it to edit files: use propose_edit.',
+    inputSchema: {
+      command: z.string().min(1),
+      cwd: z.string().optional().describe('Workspace-relative working directory (default: workspace root)'),
+      timeout_sec: z.number().int().min(1).max(600).optional().describe('Default 120'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  }, (args) => run(ctx, () => runCommandTool(ctx, args)));
 
   return server;
 }

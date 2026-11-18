@@ -35,6 +35,12 @@ export class SessionScope {
   private cancelledFlag = false;
   /** Writes (or possible writes) performed through this scope: edits applied, commands run. */
   writes = 0;
+  /** Absolute workspace root of the application session (run_command cwd base). */
+  workspaceRoot: string | undefined;
+  /** Files changed in the editor this turn but not saved to disk (commands will not see them). */
+  readonly unsavedPaths = new Set<string>();
+  /** Running commands; aborted on cancel. */
+  readonly running = new Set<AbortController>();
   onApplied?: (result: ApplyTextResult) => void;
   onCommand?: (run: CommandRun) => void;
 
@@ -44,11 +50,12 @@ export class SessionScope {
     return this.cancelledFlag;
   }
 
-  /** Closes the approval gate: waiting decisions are dropped and no new write may start. */
+  /** Closes the approval gate: waiting decisions are dropped, no new write may start, commands are killed. */
   cancel(): void {
     this.cancelledFlag = true;
     this.reviews.clear();
     this.commands.clear();
+    for (const c of this.running) c.abort();
   }
 
   /** Re-opens the gate for the next turn on the same runtime session. */
@@ -57,6 +64,7 @@ export class SessionScope {
     this.reviews.clear();
     this.commands.clear();
     this.writes = 0;
+    this.unsavedPaths.clear();
   }
 
   track<T>(work: Promise<T>): Promise<T> {

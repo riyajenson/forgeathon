@@ -1,7 +1,7 @@
 // One application turn: runs TrueForge attempts, the review/command approval flow, retry and fallback,
 // and translates everything into the shared HarnessEvent stream.
 import type { CancelStatus, EditProposal, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
-import { buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
+import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
 import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
@@ -18,6 +18,8 @@ export interface TurnDeps {
   port: EditorPort;
   scopes: ScopeRegistry;
   trueforgeUrl: string;
+  /** Absolute workspace root of the application session. */
+  workspaceRoot: string;
   /** Primary agent for this turn's mode. Its fallback is `${agent}-fallback`. */
   agentName: string;
   /** Runtime session for an agent: reused across the app session's turns unless `fresh`. */
@@ -140,6 +142,11 @@ export class TurnRun {
       const scope = this.deps.scopes.open(runtimeSessionId);
       scope.resetForTurn();
       scope.onApplied = (result) => emit({ t: 'edit_applied', result });
+      scope.workspaceRoot = this.deps.workspaceRoot;
+      scope.onCommand = (r) => emit({
+        t: 'status', state: 'running',
+        detail: `command exited ${r.exitCode ?? 'without code'}; changed files: ${r.changedFiles.length ? r.changedFiles.join(', ') : 'none'}`.slice(0, 300),
+      });
       this.scope = scope;
       if (this.cancelRequested) scope.cancel();
 
@@ -259,7 +266,7 @@ export class TurnRun {
         if (d === 'cancelled' || d.kind !== 'edit') return 'cancelled';
         const acceptedIndices = p.hunks.filter((h) => d.hunks[hunkId(call.id, h.index)] === 'accept').map((h) => h.index);
         if (acceptedIndices.length === 0) { deny(d.reason ? `user rejected the change: ${d.reason}` : 'user rejected every hunk of this change'); continue; }
-        scope.reviews.record(canonicalArgsKey(call.toolArgs), {
+        scope.reviews.record(approvalKey('propose_edit', call.toolArgs), {
           callRef, proposalId: call.id, baseSha256: p.baseSha256, acceptedIndices,
           acceptedHunkIds: acceptedIndices.map((i) => hunkId(call.id, i)),
           ...(d.reason ? { rejectReason: d.reason } : {}),
@@ -278,7 +285,7 @@ export class TurnRun {
         const d = await this.waitFor(call.id, { kind: 'command', hunkIds: [] });
         if (d === 'cancelled' || d.kind !== 'command') return 'cancelled';
         if (!d.allow) { deny(d.reason ? `user refused to run the command: ${d.reason}` : 'user refused to run the command'); continue; }
-        scope.commands.record(canonicalArgsKey(call.toolArgs), { callRef: { sessionId: this.req.sessionId, turnId: this.req.turnId, callId: call.id }, command, cwd });
+        scope.commands.record(approvalKey('run_command', call.toolArgs), { callRef: { sessionId: this.req.sessionId, turnId: this.req.turnId, callId: call.id }, command, cwd });
         decisions.push({ id: call.id, threadId: call.threadId, allow: true });
         continue;
       }

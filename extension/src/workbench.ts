@@ -101,7 +101,14 @@ export class Workbench implements vscode.Disposable {
     const context = {activeFile, selection:{ path: activeFile, text: doc.getText(selection),
       startLine: selection.start.line + 1, endLine: selection.end.line + (selection.end.character === 0 ? 0 : 1) }};
     const instruction = await vscode.window.showInputBox({prompt:'How should the selection change?'});
-    if (instruction?.trim()) await this.run('inline', instruction, context);
+    if (!instruction?.trim()) return;
+    // Visible progress for inline turns (the panel may be closed); Cancel stops the turn.
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Forge inline edit', cancellable: true },
+      (progress, token) => {
+        token.onCancellationRequested(() => { void this.stop(); });
+        progress.report({ message: 'waiting for the model...' });
+        return this.run('inline', instruction, context);
+      });
   }
 
   dispose() {

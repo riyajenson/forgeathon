@@ -27,6 +27,7 @@ export interface TurnDeps {
   agentModel(agentName: string): Promise<string>;
   cancelTimeoutMs: number;
   watchdogMs: number;
+  contextBudgetTokens: number;
   retryDelayMs: number;
   settleMs: number;
 }
@@ -122,7 +123,8 @@ export class TurnRun {
     const emit = this.buffer.emit.bind(this.buffer);
     emit({ t: 'turn_started' });
     emit({ t: 'status', state: 'starting' });
-    const input = await buildTurnInput(this.req, this.deps.port);
+    const { input, context } = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens);
+    if (context) emit({ t: 'context_report', report: context.report });
 
     let agent = this.deps.agentName;
     let onFallback = false;
@@ -143,6 +145,7 @@ export class TurnRun {
       scope.resetForTurn();
       scope.onApplied = (result) => emit({ t: 'edit_applied', result });
       scope.workspaceRoot = this.deps.workspaceRoot;
+      scope.onContext = (report) => emit({ t: 'context_report', report });
       scope.onCommand = (r) => emit({
         t: 'status', state: 'running',
         detail: `command exited ${r.exitCode ?? 'without code'}; changed files: ${r.changedFiles.length ? r.changedFiles.join(', ') : 'none'}`.slice(0, 300),

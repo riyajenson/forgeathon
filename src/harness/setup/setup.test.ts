@@ -1,10 +1,11 @@
+import { repoRoot } from '../repo-root';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { buildAgents, planProvider, redact, runSetup, validateConfig, type AgentTemplate, type ModelsConfig } from './setup';
 
-const repo = path.resolve(__dirname, '..', '..', '..', '..');
+const repo = repoRoot();
 const templates: AgentTemplate[] = readdirSync(path.join(repo, 'agent')).filter((f) => f.endsWith('.json')).sort()
   .map((f) => JSON.parse(readFileSync(path.join(repo, 'agent', f), 'utf8')) as AgentTemplate);
 const example = JSON.parse(readFileSync(path.join(repo, 'config', 'models.example.json'), 'utf8')) as ModelsConfig;

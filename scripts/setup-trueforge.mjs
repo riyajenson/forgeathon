@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cli = path.join(repo, 'src', 'harness', 'dist', 'setup', 'cli.js');
+const cli = path.join(repo, 'src', 'harness', 'dist', 'src', 'harness', 'setup', 'cli.js');
 if (!existsSync(cli)) {
   console.error('src/harness is not built. Run: npm --prefix src/harness ci && npm --prefix src/harness run build');
   process.exit(1);

@@ -1,6 +1,6 @@
 // Per-TrueForge-session state shared by the turn controller and the MCP tools.
 // TrueForge sends `x-tfg-session-id` on every MCP request, so a tool call is bound to exactly one scope.
-import type { ApplyTextResult, CallRef } from '../contract-types';
+import type { ApplyTextResult, CallRef, ContextReport } from '../contract-types';
 import { ReviewRegistry } from '../review';
 
 export const SESSION_HEADER = 'x-tfg-session-id';
@@ -43,6 +43,7 @@ export class SessionScope {
   readonly running = new Set<AbortController>();
   onApplied?: (result: ApplyTextResult) => void;
   onCommand?: (run: CommandRun) => void;
+  onContext?: (report: ContextReport) => void;
 
   constructor(readonly runtimeSessionId: string) {}
 

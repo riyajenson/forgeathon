@@ -39,6 +39,25 @@ const fail = (code: ToolErrorCode, message: string): ToolOutcome => ({ ok: false
 
 export const hunkId = (proposalId: string, index: number): string => `${proposalId}#${index}`;
 
+/**
+ * Key that binds a user's approval to the tool call that executes it. Only the tool's declared fields are
+ * hashed, because the MCP server strips undeclared keys before the handler sees the arguments, while the
+ * turn controller sees the model's raw arguments.
+ */
+export function approvalKey(tool: 'propose_edit' | 'run_command', args: unknown): string {
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
+  if (tool === 'propose_edit') {
+    const edits = Array.isArray(a['edits'])
+      ? a['edits'].map((e) => {
+        const x = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>;
+        return { old_text: x['old_text'], new_text: x['new_text'] };
+      })
+      : a['edits'];
+    return canonicalArgsKey({ path: a['path'], base_sha256: a['base_sha256'], edits, summary: a['summary'] });
+  }
+  return canonicalArgsKey({ command: a['command'], cwd: a['cwd'], timeout_sec: a['timeout_sec'] });
+}
+
 // ---------------------------------------------------------------- read_file
 
 export const READ_FILE_MAX_LINES = 600;
@@ -181,7 +200,7 @@ export async function proposeEditTool(ctx: ToolContext, args: ProposeEditArgs): 
   const scope = ctx.scope;
   if (!scope) return fail('NO_REVIEW_DECISION', 'this call is not bound to an active turn; nothing was written');
   if (scope.cancelled) return fail('CANCELLED', 'the turn was cancelled; nothing was written');
-  const approval = scope.reviews.take(canonicalArgsKey(args));
+  const approval = scope.reviews.take(approvalKey('propose_edit', args));
   if (!approval) return fail('NO_REVIEW_DECISION', 'no recorded review decision for these exact arguments; nothing was written');
 
   const built = await buildProposal(ctx.port, args);
@@ -218,6 +237,8 @@ export async function proposeEditTool(ctx: ToolContext, args: ProposeEditArgs): 
     return fail('WRITE_OUTCOME_UNKNOWN', `the editor did not report an outcome for ${p.path} (${(e as Error).message}); re-read the file before continuing`);
   }
   if (isWriteOutcome(result)) scope.writes++;
+  if (result.status === 'buffer_applied' || result.status === 'save_failed') scope.unsavedPaths.add(p.path);
+  if (result.status === 'saved') scope.unsavedPaths.delete(p.path);
   scope.onApplied?.(result);
 
   const rejected = outcome.rejected.length

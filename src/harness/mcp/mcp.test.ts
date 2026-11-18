@@ -7,9 +7,9 @@ import { promises as fs } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { ApplyTextResult, CallRef } from '../contract-types';
-import { canonicalArgsKey, sha256Hex } from '../review';
+import { sha256Hex } from '../review';
 import {
-  buildProposal, FakePort, hunkId, normalizeWorkspacePath, ScopeRegistry, SESSION_HEADER, startMcpServer,
+  approvalKey, buildProposal, FakePort, hunkId, normalizeWorkspacePath, ScopeRegistry, SESSION_HEADER, startMcpServer,
   type EditApproval, type RunningMcpServer, type SessionScope,
 } from './index';
 
@@ -62,7 +62,7 @@ function approve(args: unknown, callId: string, accepted: number[], baseSha256: 
     acceptedIndices: accepted, acceptedHunkIds: accepted.map((i) => hunkId(callId, i)),
     ...(rejectReason ? { rejectReason } : {}),
   };
-  into.reviews.record(canonicalArgsKey(args), approval);
+  into.reviews.record(approvalKey('propose_edit', args), approval);
 }
 
 before(async () => {
@@ -126,10 +126,19 @@ test('server binds 127.0.0.1 and rejects missing/wrong token and foreign Host', 
   assert.equal(await rawRequest({ authorization: `Bearer ${server.token}`, host: `evil.example:${server.port}` }), 403);
 });
 
-test('tools/list exposes the three tools with read-only annotations on the readers', async () => {
+test('approvalKey ignores keys the MCP server would strip', () => {
+  const args = twoHunkArgs();
+  const noisy = { ...args, explanation: 'extra', edits: args.edits.map((e) => ({ ...e, why: 'x' })) };
+  assert.equal(approvalKey('propose_edit', noisy), approvalKey('propose_edit', args));
+  assert.notEqual(approvalKey('propose_edit', { ...args, path: 'other.py' }), approvalKey('propose_edit', args));
+  assert.equal(approvalKey('run_command', { command: 'ls', note: 1 }), approvalKey('run_command', { command: 'ls' }));
+});
+
+test('tools/list exposes the four tools with read-only annotations on the readers', async () => {
   const { tools } = await client.listTools();
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  assert.deepEqual(Object.keys(byName).sort(), ['propose_edit', 'read_file', 'search_workspace']);
+  assert.deepEqual(Object.keys(byName).sort(), ['propose_edit', 'read_file', 'run_command', 'search_workspace']);
+  assert.equal(byName['run_command']!.annotations?.destructiveHint, true);
   assert.equal(byName['read_file']!.annotations?.readOnlyHint, true);
   assert.equal(byName['search_workspace']!.annotations?.readOnlyHint, true);
   assert.equal(byName['propose_edit']!.annotations?.readOnlyHint, false);

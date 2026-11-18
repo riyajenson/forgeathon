@@ -4,16 +4,16 @@
   "private": true,
   "description": "TrueForge harness for the Forge-a-thon VS Code agent: MCP editor tools, review core, TrueForge adapter.",
   "type": "commonjs",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/src/harness/index.js",
+  "types": "./dist/src/harness/index.d.ts",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "test": "tsc -p . && node --test \"dist/**/*.test.js\"",
-    "test:integration": "tsc -p . && node --test --test-concurrency=1 \"dist/integration/*.itest.js\""
+    "test": "tsc -p . && node --test \"dist/src/harness/**/*.test.js\"",
+    "test:integration": "tsc -p . && node --test --test-concurrency=1 \"dist/src/harness/integration/*.itest.js\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

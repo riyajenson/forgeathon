@@ -1,0 +1,83 @@
+import { randomUUID } from 'node:crypto';
+import type { ForgeHarness, HarnessEvent, PromptContext, Request, ReviewDecision, TurnRef, Version } from 'forge-harness';
+import { EditReview } from './review';
+
+export type TurnView = {
+  event(e: HarnessEvent): void;
+  review(p: Extract<HarnessEvent, {t: 'review_request'}>['proposal']): Promise<ReviewDecision | undefined>;
+  command(e: Extract<HarnessEvent, {t: 'command_request'}>): Promise<boolean>;
+  cancelReview(): void;
+  notice(text: string): void;
+};
+type Active = { stopped: boolean; ref?: TurnRef; last: number; submitted: boolean };
+export class TurnController {
+  private active?: Active;
+  private conversation?: string;
+  constructor(private harness: ForgeHarness, private version: Version, private root: string,
+    private edits: EditReview, private view: TurnView) {}
+  private envelope<T>(body: T): Request<T> { return { version: this.version, requestId: randomUUID(), body }; }
+  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext) {
+    if (this.active) throw new Error('A turn is already in progress');
+    const a: Active = { stopped: false, last: 0, submitted: false };
+    this.active = a;
+    let sessionId = mode === 'agent' ? this.conversation : undefined;
+    try {
+      if (!sessionId) {
+        const session = await this.harness.createSession(this.envelope({workspaceRoot: this.root}));
+        if (!session.ok) throw new Error(session.error.message);
+        sessionId = session.body.sessionId;
+        if (mode === 'agent') this.conversation = sessionId;
+      }
+      if (a.stopped) return;
+      const ref = {sessionId, turnId: randomUUID()};
+      a.ref = ref;
+      this.edits.begin(ref);
+      const turn = await this.harness.submitTurn(this.envelope({...ref, ...context, mode, instruction}));
+      if (!turn.ok) throw new Error(turn.error.message);
+      a.submitted = true;
+      if (a.stopped) await this.stop();
+      for await (const packet of this.harness.stream(this.envelope({...ref, afterSequence: 0}))) {
+        if (!packet.ok) throw new Error(packet.error.message);
+        const e = packet.body;
+        if (e.version !== this.version || e.sessionId !== ref.sessionId || e.turnId !== ref.turnId)
+          throw new Error('Unexpected turn or protocol version');
+        if (e.sequence <= a.last) continue;
+        if (e.sequence !== ++a.last) throw new Error('Missing turn events');
+        if (e.t === 'done') { this.view.event(e); return; }
+        if (a.stopped && e.t !== 'edit_applied' && e.t !== 'error') continue;
+        this.view.event(e);
+        let decision: ReviewDecision | undefined;
+        if (e.t === 'review_request') {
+          if (e.proposal.turnId !== ref.turnId || e.proposal.sessionId !== ref.sessionId) throw new Error('Invalid review identity');
+          decision = await this.view.review(e.proposal);
+        } else if (e.t === 'command_request') {
+          decision = {...ref, kind:'command', callId:e.callId, allow:await this.view.command(e)};
+        }
+        if (decision && !a.stopped) {
+          const reply = await this.harness.submitReview(this.envelope(decision));
+          if (!reply.ok) throw new Error(reply.error.message);
+        }
+      }
+      throw new Error('Stream closed before the terminal event');
+    } catch (err) {
+      if (a.ref && a.submitted && !a.stopped) await this.stop();
+      throw err;
+    } finally {
+      this.edits.end(); this.view.cancelReview();
+      this.active = undefined;
+      if (sessionId && mode === 'inline') await this.harness.closeSession(this.envelope({sessionId}));
+    }
+  }
+  async stop() {
+    const a = this.active;
+    if (!a) return;
+    a.stopped = true;
+    this.edits.end();
+    this.view.cancelReview();
+    this.view.notice('Stopping?');
+    if (a.ref && a.submitted) {
+      const reply = await this.harness.cancel(this.envelope(a.ref));
+      if (!reply.ok || reply.body === 'unconfirmed') this.view.notice('Stop requested; confirmation pending');
+    }
+  }
+}

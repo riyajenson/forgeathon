@@ -23,3 +23,12 @@ const emptyApproval: ApprovedApplication['acceptedHunkIds'] = [];
 const terminalPolicy: Extract<ToolRequest, { tool: 'terminal' }>['approval'] = 'none';
 // @ts-expect-error Text deltas do not carry actionable proposals.
 type InvalidTextField = Extract<HarnessEvent, { t: 'text' }>['proposal'];
+
+type Assert<T extends true> = T;
+type Bridge = import('./edits').EditorBridge;
+type ResultStatus = Awaited<ReturnType<Bridge['applyText']>>['status'];
+type Expected = 'stale' | 'approval_missing' | 'failed_before_apply' | 'buffer_applied' | 'save_failed' | 'saved';
+type AllOutcomes = Assert<[Expected, ResultStatus] extends [ResultStatus, Expected] ? true : false>;
+type EventSaveState = Assert<Extract<HarnessEvent, { t: 'edit_applied' }>['result'] extends ApplyResult ? true : false>;
+type GatherAndList = Assert<'context' | 'list' extends import('./tools').ReadOnlyTool ? true : false>;
+type ApplyWire = Wire<Parameters<Bridge['applyText']>[0]>;

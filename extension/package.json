@@ -1,0 +1,50 @@
+{
+  "name": "forgeathon-editor",
+  "displayName": "Forge-a-thon Editor",
+  "description": "VS Code editor client for the Forge-a-thon TrueForge agent.",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ."
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "forgeathon.inlineEdit",
+        "title": "Forge-a-thon: Inline Edit"
+      },
+      {
+        "command": "forgeathon.openAgentPanel",
+        "title": "Forge-a-thon: Open Agent Panel"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "forgeathon.inlineEdit",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
+        "when": "editorTextFocus && editorHasSelection && !editorReadonly && isWorkspaceTrusted"
+      }
+    ]
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/vscode": "1.95.0",
+    "typescript": "~5.6.3"
+  }
+}

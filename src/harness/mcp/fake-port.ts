@@ -1,15 +1,23 @@
-// EditorPort backed by a plain directory. Used by tests and headless runs; not the extension's implementation.
+// EditorBridge backed by a plain directory. Used by tests and headless runs; not the extension's implementation.
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import type { ApplyTextRequest, ApplyTextResult, EditorBridge, ListFilesOptions } from '../contract-types';
 import { sha256Hex } from '../review';
 import { normalizeWorkspacePath } from './paths';
-import type { ApplyTextRequest, ApplyTextResult, EditorPort, ListFilesOptions, TextSnapshot } from './port';
+import type { TextSnapshot } from './port';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build']);
 
-export class FakePort implements EditorPort {
-  readonly writes: ApplyTextRequest[] = [];
+/** How the fake editor behaves on applyText; 'save' is the normal apply-then-save flow. */
+export type FakeApplyMode = 'save' | 'defer' | 'save_fail' | 'throw';
+
+export class FakePort implements EditorBridge {
+  readonly applies: ApplyTextRequest[] = [];
   readonly logs: string[] = [];
+  mode: FakeApplyMode = 'save';
+  /** Simulates a save participant (e.g. a formatter) transforming the text on save. */
+  formatOnSave: ((text: string) => string) | undefined;
+  private undoSeq = 0;
 
   constructor(readonly root: string) {}
 
@@ -25,12 +33,13 @@ export class FakePort implements EditorPort {
       const text = await fs.readFile(file, 'utf8');
       return { text, sha256: sha256Hex(text) };
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT' || (e as NodeJS.ErrnoException).code === 'EISDIR') return null;
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'EISDIR') return null;
       throw e;
     }
   }
 
-  async listFiles(options?: ListFilesOptions): Promise<string[]> {
+  async listFiles(options?: ListFilesOptions): Promise<readonly string[]> {
     const out: string[] = [];
     const limit = options?.limit ?? Infinity;
     const walk = async (dir: string, rel: string): Promise<void> => {
@@ -51,21 +60,27 @@ export class FakePort implements EditorPort {
   }
 
   async applyText(req: ApplyTextRequest): Promise<ApplyTextResult> {
+    if (this.mode === 'throw') throw new Error('simulated editor failure');
+    const base = { sessionId: req.sessionId, turnId: req.turnId, callId: req.callId, proposalId: req.proposalId, path: req.path };
     const file = this.abs(req.path);
-    if (!file) return { ok: false, code: 'OUTSIDE_WORKSPACE', message: `refusing to write ${req.path}` };
+    if (!file) return { ...base, status: 'failed_before_apply', message: 'path outside workspace' };
+    if (sha256Hex(req.text) !== req.textSha256) return { ...base, status: 'failed_before_apply', message: 'text does not match textSha256' };
     const current = await this.readText(req.path);
-    const currentSha = current ? current.sha256 : null;
-    if (currentSha !== req.expectedSha256) {
-      return { ok: false, code: 'STALE_BASE', message: `${req.path} changed (expected ${req.expectedSha256}, found ${currentSha})` };
+    const observed = current ? current.sha256 : null;
+    if (observed !== req.expectedSha256) return { ...base, status: 'stale', expectedSha256: req.expectedSha256, observedSha256: observed };
+
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, req.text, 'utf8');
+    this.applies.push(req);
+    const applied = { appliedHunkIds: [...req.acceptedHunkIds], undo: { undoId: `undo-${++this.undoSeq}`, path: req.path, expectedPostSha256: req.textSha256 } };
+    if (this.mode === 'defer') return { ...base, ...applied, status: 'buffer_applied', save: 'deferred', reason: 'document had unrelated unsaved changes' };
+    if (this.mode === 'save_fail') {
+      return { ...base, ...applied, status: 'save_failed', message: 'disk full', currentBufferSha256: req.textSha256, disk: 'unknown', recovery: 'inspect_buffer_then_retry_save' };
     }
-    try {
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, req.newText, 'utf8');
-    } catch (e) {
-      return { ok: false, code: 'WRITE_FAILED', message: (e as Error).message };
-    }
-    this.writes.push(req);
-    return { ok: true, preSha256: currentSha, postSha256: sha256Hex(req.newText) };
+    const saved = this.formatOnSave ? this.formatOnSave(req.text) : req.text;
+    if (saved !== req.text) await fs.writeFile(file, saved, 'utf8');
+    const savedSha = sha256Hex(saved);
+    return { ...base, ...applied, undo: { ...applied.undo, expectedPostSha256: savedSha }, status: 'saved', savedTextSha256: savedSha };
   }
 
   log(level: 'info' | 'warn' | 'error', message: string): void {

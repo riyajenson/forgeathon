@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { EditorPort } from './port';
 import { SESSION_HEADER, type ScopeRegistry } from './scope';
 import { runCommandTool } from './command';
+import { gatherContextTool } from './context-tool';
 import { proposeEditTool, readFileTool, searchWorkspaceTool, type ToolContext, type ToolOutcome } from './tools';
 
 export const MCP_PATH = '/mcp';
@@ -85,6 +86,18 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   }, (args) => run(ctx, () => proposeEditTool(ctx, args)));
+
+  server.registerTool('gather_context', {
+    description:
+      'Rank the workspace for a task and return the most relevant code within a token budget: outlines of the top files, ' +
+      'then whole functions and doc sections, each with the reason it was chosen. The turn already starts with context for ' +
+      'the user\'s request; call this for a different or narrower focus.',
+    inputSchema: {
+      task: z.string().min(1).describe('What you are looking for, in words and identifiers'),
+      budget_tokens: z.number().int().min(1000).max(12000).optional().describe('Default 6000'),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, (args) => run(ctx, () => gatherContextTool(ctx, args)));
 
   server.registerTool('run_command', {
     description:

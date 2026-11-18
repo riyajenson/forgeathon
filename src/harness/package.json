@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "test": "tsc -p . && node --test \"dist/**/*.test.js\""
+    "test": "tsc -p . && node --test \"dist/**/*.test.js\"",
+    "test:integration": "tsc -p . && node --test --test-concurrency=1 \"dist/integration/*.itest.js\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

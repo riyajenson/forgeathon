@@ -7,15 +7,18 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import type { EditorPort } from './port';
+import { SESSION_HEADER, type ScopeRegistry } from './scope';
 import { proposeEditTool, readFileTool, searchWorkspaceTool, type ToolContext, type ToolOutcome } from './tools';
 
 export const MCP_PATH = '/mcp';
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 export interface McpServerOptions {
-  context: ToolContext;
+  port: EditorPort;
+  scopes: ScopeRegistry;
   /** 0 picks a free port (tests). */
-  port: number;
+  listenPort: number;
   /** Generated when omitted. */
   token?: string;
 }
@@ -32,6 +35,12 @@ function toResult(outcome: ToolOutcome): CallToolResult {
   return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: { code: outcome.code, message: outcome.message } }) }] };
 }
 
+/** Runs a tool call, tracked as in-flight in the caller's session scope so cancellation can wait for it. */
+async function run(ctx: ToolContext, work: () => Promise<ToolOutcome>): Promise<CallToolResult> {
+  const p = work();
+  return toResult(await (ctx.scope ? ctx.scope.track(p) : p));
+}
+
 export function buildMcpServer(ctx: ToolContext): McpServer {
   const server = new McpServer({ name: 'vscode', version: '0.1.0' });
 
@@ -45,7 +54,7 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
       end_line: z.number().int().min(1).optional().describe('Last line to show (inclusive)'),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async (args) => toResult(await readFileTool(ctx, args)));
+  }, (args) => run(ctx, () => readFileTool(ctx, args)));
 
   server.registerTool('search_workspace', {
     description:
@@ -59,7 +68,7 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
       max_results: z.number().int().min(1).max(200).optional(),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async (args) => toResult(await searchWorkspaceTool(ctx, args)));
+  }, (args) => run(ctx, () => searchWorkspaceTool(ctx, args)));
 
   server.registerTool('propose_edit', {
     description:
@@ -74,7 +83,7 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
       summary: z.string().optional().describe('One line describing the change, shown to the reviewer'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  }, async (args) => toResult(await proposeEditTool(ctx, args)));
+  }, (args) => run(ctx, () => proposeEditTool(ctx, args)));
 
   return server;
 }
@@ -104,7 +113,7 @@ function readBody(req: http.IncomingMessage): Promise<unknown> {
 
 export async function startMcpServer(options: McpServerOptions): Promise<RunningMcpServer> {
   const token = options.token ?? randomBytes(32).toString('hex');
-  const { context } = options;
+  const { port: editor, scopes } = options;
   let allowedHosts: Set<string> = new Set();
 
   const httpServer = http.createServer(async (req, res) => {
@@ -121,24 +130,26 @@ export async function startMcpServer(options: McpServerOptions): Promise<Running
       if (req.method !== 'POST') { res.writeHead(405, { allow: 'POST' }).end(); return; }
 
       const body = await readBody(req);
-      const server = buildMcpServer(context);
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const header = req.headers[SESSION_HEADER];
+      const runtimeSessionId = Array.isArray(header) ? header[0] : header;
+      const server = buildMcpServer({ port: editor, scope: scopes.get(runtimeSessionId) });
+      const transport = new StreamableHTTPServerTransport({}) // no sessionIdGenerator: stateless mode;
       res.on('close', () => { void transport.close(); void server.close(); });
       await server.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch (e) {
-      context.port.log('error', `mcp request failed: ${(e as Error).message}`);
+      editor.log('error', `mcp request failed: ${(e as Error).message}`);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' }).end('{"error":"internal"}');
     }
   });
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
-    httpServer.listen(options.port, '127.0.0.1', () => { httpServer.off('error', reject); resolve(); });
+    httpServer.listen(options.listenPort, '127.0.0.1', () => { httpServer.off('error', reject); resolve(); });
   });
   const port = (httpServer.address() as AddressInfo).port;
   allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-  context.port.log('info', `MCP server listening on http://127.0.0.1:${port}${MCP_PATH}`);
+  editor.log('info', `MCP server listening on http://127.0.0.1:${port}${MCP_PATH}`);
 
   return {
     url: `http://127.0.0.1:${port}${MCP_PATH}`,

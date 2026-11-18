@@ -1,0 +1,14 @@
+{
+  "name": "forge-p0-spike",
+  "private": true,
+  "description": "P0 spike: verifies TrueForge 0.185.1 session, approval, MCP and error behaviour. Not shipped.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@truefoundry/trueforge-sdk": "0.185.0",
+    "zod": "4.6.7"
+  }
+}

@@ -1,0 +1,46 @@
+// Run in an Extension Development Host with an empty temporary workspace.
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const { createHash } = require('node:crypto');
+const vscode = require('vscode');
+const port = require('../out/editorPort');
+exports.run = async () => {
+  const folder = vscode.workspace.workspaceFolders[0];
+  const dir = await fs.mkdtemp(path.join(folder.uri.fsPath, 'port-'));
+  const rel = path.basename(dir);
+  const file = path.join(dir, 'sample.txt');
+  const read = port.createReader(folder);
+  const clean = 'first\r\nsecond\r\n';
+  const expected = text => ({text, sha256:createHash('sha256').update(text).digest('hex')});
+  await fs.writeFile(file, clean);
+  assert.deepEqual(await read(rel + '/sample.txt'), expected(clean));
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+  const edit = new vscode.WorkspaceEdit();
+  edit.insert(doc.uri, new vscode.Position(0, 0), 'dirty ');
+  assert.ok(await vscode.workspace.applyEdit(edit));
+  assert.ok(doc.isDirty);
+  assert.deepEqual(await read(rel + '/sample.txt'), expected('dirty ' + clean));
+  assert.equal(await fs.readFile(file, 'utf8'), clean);
+  assert.equal(await read(rel + '/missing'), null);
+  for (const bad of ['../outside', '/etc/hosts', 'C:/outside', rel + '/../sample.txt'])
+    await assert.rejects(read(bad));
+  await fs.symlink(os.tmpdir(), path.join(dir, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(read(rel + '/escape/file'));
+  await fs.mkdir(path.join(dir, '.git'));
+  await fs.writeFile(path.join(dir, '.git', 'private'), 'excluded');
+  await fs.writeFile(path.join(dir, 'second'), '');
+  const list = port.createFileLister(folder);
+  assert.deepEqual(await list({prefix: rel + '/'}), [rel + '/sample.txt', rel + '/second']);
+  assert.deepEqual(await list({prefix: rel + '/sam', limit: 1}), [rel + '/sample.txt']);
+  assert.equal((await list({limit: 1})).length, 1);
+  assert.deepEqual(await list({limit: 0}), []);
+  await assert.rejects(list({prefix: '../outside'}));
+  const logger = port.createStatusLogger();
+  logger.log('info', 'running');
+  logger.log('warn', 'TEST_REDACTION_MARKER');
+  logger.dispose();
+  console.log('PASS listing prefix/limit/exclusion and output channel lifecycle');
+  console.log('PASS readText clean/dirty CRLF, disk unchanged, missing, unsafe paths and link escape');
+};

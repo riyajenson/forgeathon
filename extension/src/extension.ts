@@ -1,16 +1,25 @@
 import * as vscode from 'vscode';
+import { Workbench } from './workbench';
 
-export function activate(context: vscode.ExtensionContext): void {
+let workbench: Workbench | undefined;
+export function activate(context: vscode.ExtensionContext) {
+  const register = (command: string, run: (ui: Workbench) => Promise<void> | void) =>
+    vscode.commands.registerCommand('forgeathon.' + command, async () => {
+      try {
+        const folders = vscode.workspace.workspaceFolders;
+        if (!vscode.workspace.isTrusted || folders?.length !== 1) throw new Error('Open one trusted workspace folder.');
+        if (workbench && workbench.folder.uri.toString() !== folders[0].uri.toString()) {
+          await workbench.shutdown(); workbench = undefined;
+        }
+        await run(workbench ??= new Workbench(folders[0]));
+      } catch (error) {
+        void vscode.window.showErrorMessage(error instanceof Error ? error.message : 'Editor operation failed');
+      }
+    });
   context.subscriptions.push(
-    vscode.commands.registerCommand('forgeathon.inlineEdit', async () => {
-      await vscode.window.showInformationMessage(
-        'Inline editing is not implemented yet. This scaffold does not send requests or change files.'
-      );
-    }),
-    vscode.commands.registerCommand('forgeathon.openAgentPanel', async () => {
-      await vscode.window.showInformationMessage(
-        'The agent panel is not implemented yet. TrueForge integration awaits an agreed adapter contract.'
-      );
-    })
+    register('inlineEdit', ui => ui.inline()), register('openAgentPanel', ui => ui.showPanel()),
+    register('reviewHunks', ui => ui.choose()), register('undo', ui => ui.undo()),
+    register('stop', ui => ui.stop())
   );
 }
+export async function deactivate() { await workbench?.shutdown(); workbench = undefined; }

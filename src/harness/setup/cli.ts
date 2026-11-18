@@ -1,4 +1,5 @@
-// Usage: node src/harness/dist/setup/cli.js [--config config/models.json] [--agents agent] [--url http://127.0.0.1:8790] [--dry-run]
+// Usage: node scripts/setup-trueforge.mjs [--config config/models.json] [--agents agent] [--url http://127.0.0.1:8790] [--dry-run]
+import { repoRoot } from '../repo-root';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createClient } from '../trueforge/sdk';
@@ -11,7 +12,7 @@ function arg(name: string, fallback: string): string {
 }
 
 async function main(): Promise<void> {
-  const repo = path.resolve(__dirname, '..', '..', '..', '..');
+  const repo = repoRoot();
   const configPath = path.resolve(arg('--config', path.join(repo, 'config', 'models.json')));
   const agentsDir = path.resolve(arg('--agents', path.join(repo, 'agent')));
   const url = arg('--url', process.env['TRUEFORGE_URL'] ?? 'http://127.0.0.1:8790');

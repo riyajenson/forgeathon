@@ -1,5 +1,6 @@
 // Runs the real setup (agent/*.json templates) against TrueForge with mock-backed custom providers,
 // then rehearses an inline edit (Task A shape) headlessly through forge-inline.
+import { repoRoot } from '../repo-root';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -14,7 +15,7 @@ import { createClient } from '../trueforge/sdk';
 import { MockModel, MOCK_KEY, textOf, type MockRequest } from '../testing/mock-model';
 
 const TF_URL = process.env['TF_URL'] ?? 'http://127.0.0.1:8790';
-const repo = path.resolve(__dirname, '..', '..', '..', '..');
+const repo = repoRoot();
 const templates: AgentTemplate[] = readdirSync(path.join(repo, 'agent')).filter((f) => f.endsWith('.json')).sort()
   .map((f) => JSON.parse(readFileSync(path.join(repo, 'agent', f), 'utf8')) as AgentTemplate);
 const mock = new MockModel();

@@ -27,6 +27,7 @@ export type ApprovedApplication = CallRef & {
   proposalId: ProposalId;
   acceptedHunkIds: readonly [string, ...string[]];
 };
+/** For saved edits, expectedPostSha256 reflects the post-save buffer, including save participants. */
 export type UndoReceipt = { undoId: string; path: string; expectedPostSha256: string };
 export type ApplyTextRequest = ApprovedApplication & {
   path: string; expectedSha256: string | null; text: string; textSha256: string;

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { EditorPort, ForgeHarness, HarnessEvent, PromptContext, Version } from 'forge-harness';
 import { createFileLister, createStatusLogger } from './editorPort';
+import { AgentPanel } from './agentPanel';
 import { InlineReview } from './inlineReview';
 import { EditReview } from './review';
 import { TurnController } from './turn';
@@ -10,6 +11,11 @@ export class Workbench implements vscode.Disposable {
   private readonly review: InlineReview;
   private readonly logger = createStatusLogger();
   private readonly port: EditorPort;
+  private running = false;
+  private readonly panel = new AgentPanel({
+    send: text => this.run('agent', text, this.activeContext()),
+    stop: () => this.stop(), review: () => this.choose()
+  });
   private controller?: TurnController;
   private harness?: ForgeHarness;
   private starting?: Promise<TurnController>;
@@ -24,9 +30,14 @@ export class Workbench implements vscode.Disposable {
       applyText: request => this.edits.applyText(request), log: (level,msg) => this.logger.log(level,msg) };
   }
 
-  events(_event: HarnessEvent) {}
-  notice(text: string) { void vscode.window.showInformationMessage(text); }
-  showPanel() { this.notice('The agent panel is unavailable in this build.'); }
+  private activeContext(): PromptContext {
+    const doc = vscode.window.activeTextEditor?.document;
+    return doc && vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === this.folder.uri.toString()
+      ? { activeFile: vscode.workspace.asRelativePath(doc.uri, false) } : {};
+  }
+  events(event: HarnessEvent) { this.panel.event(event); }
+  notice(text: string) { this.panel.notice(text); }
+  showPanel() { this.panel.open(); }
   choose() { this.review.choose(); }
   async undo() {
     const id = this.edits.latestUndoId();
@@ -63,8 +74,15 @@ export class Workbench implements vscode.Disposable {
 
   async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext) {
     if (!vscode.workspace.isTrusted || this.closed) throw new Error('A trusted workspace is required');
-    const controller = this.controller ?? await (this.starting ??= this.connect().finally(() => { this.starting = undefined; }));
-    return controller.run(mode, instruction, context);
+    if (this.running) throw new Error('A turn is already in progress');
+    this.running = true; this.panel.start();
+    try {
+      const controller = this.controller ?? await (this.starting ??= this.connect().finally(() => { this.starting = undefined; }));
+      await controller.run(mode, instruction, context);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Turn failed';
+      this.panel.error(message); this.panel.notice('Failed'); throw error;
+    } finally { this.running = false; this.panel.finish(); }
   }
   async inline() {
     const editor = vscode.window.activeTextEditor;
@@ -80,7 +98,7 @@ export class Workbench implements vscode.Disposable {
   }
 
   dispose() {
-    this.closed = true; this.commandPicker?.hide(); this.review.dispose(); this.edits.dispose(); this.logger.dispose();
+    this.closed = true; this.panel.dispose(); this.commandPicker?.hide(); this.review.dispose(); this.edits.dispose(); this.logger.dispose();
   }
   async shutdown() { this.dispose(); await this.harness?.dispose(); }
 }

@@ -1,61 +1,101 @@
-# Forge — a VS Code coding agent on TrueForge
+# Forge: a VS Code coding agent on TrueForge
 
-A VS Code extension whose entire agent loop runs on **[TrueForge](https://github.com/truefoundry/trueforge)
-0.185.1** in local mode. Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
+Forge is a VS Code-native coding agent whose entire agent loop (sessions, turns, model calls and tool
+approvals) runs on **[TrueForge](https://github.com/truefoundry/trueforge) 0.185.1** in local mode. The agent
+works through MCP editor tools. You review every change hunk by hunk. The context is assembled within a token
+budget and its rationale is shown. If the primary model fails, the turn falls back automatically to a model
+from another provider, and the harness enforces a per-turn command budget.
 
-- **Inline edit**: select code, press `Ctrl+Alt+I`, type an instruction, review the diff hunk by hunk, accept, undo.
-- **Agent mode**: one request in the panel. The agent finds the relevant files itself, proposes reviewed
-  diffs file by file, and runs the tests after asking you.
-- **Context assembly**: `@file:`/`@symbol:` mentions, the selection and the active file, plus automatic
-  retrieval (BM25 over code, symbol index, test/doc pairing) within a token budget. The panel shows the chosen
-  files, the reasons and what was skipped.
-- **Diff safety**: proposals never touch disk until you accept them. Per-hunk accept/reject, stale-file
-  refusal, and undo restores the exact original bytes, even with format-on-save.
-- **Guardrails enforced by the harness, not left to the model's instructions**:
-  - Every edit is reviewed by you.
-  - Every shell command needs your approval and is flagged if it is outside a short verification list.
-  - A per-turn **command budget** (3 for the agent, 1 for inline) refuses further commands without asking you.
-  - Shell commands are **not sandboxed**: see [Shell commands](#shell-commands-run_command).
-- **Streaming and cancellation**: text and tool calls stream into the panel. Stop cancels the TrueForge turn
-  and closes any open review without writing.
-- **Resilience**: transient errors are retried (rate limits honour `Retry-After`). On failure the turn falls
-  back automatically to a second model from a different provider, but never after the turn has changed the
-  workspace.
+Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 
-![Architecture](docs/writeup/architecture.svg)
+## Demo
 
-TrueForge owns the agent loop, sessions, turns, tool approvals and model calls. The extension reaches TrueForge
-only through the harness (the TrueForge SDK over HTTP). Editor operations are MCP tools that TrueForge calls.
-The models are set in TrueForge's configuration (`config/models.json`, loaded by the setup script); nothing in
-the extension depends on a particular provider.
+- **Video:** <VIDEO_URL>
+- **Screenshots:** pending; the shots needed are listed in [`docs/images/README.md`](docs/images/README.md).
+  <!-- ![Inline diff review](docs/images/inline-review.png) -->
+  <!-- ![Agent panel with the Context block](docs/images/agent-panel-context.png) -->
+  <!-- ![Fallback banner](docs/images/fallback-banner.png) -->
+  - `docs/images/inline-review.png`: inline diff review (Task A)
+  - `docs/images/agent-panel-context.png`: agent panel with the Context block (Task B)
+  - `docs/images/fallback-banner.png`: the fallback banner (Task C)
 
-## Contents
+## Eligibility at a glance
 
-1. [Prerequisites](#prerequisites)
-2. [Fresh clone to a working demo, without keys](#fresh-clone-to-a-working-demo-without-keys) (about 10 minutes)
-3. [Use real models (free tiers)](#use-real-models-free-tiers)
-4. [The three fixed tasks](#the-three-fixed-tasks)
-5. [Settings](#settings)
-6. [Shell commands (run_command)](#shell-commands-run_command)
-7. [Tests](#tests)
-8. [Repository layout](#repository-layout)
-9. [Starting point, licence and attribution](#starting-point-licence-and-attribution)
+| Requirement (problem statement) | How Forge meets it | Where |
+|---|---|---|
+| TrueForge owns the agent loop, sessions, turns and model calls | Every editor turn is a TrueForge session/turn (`createTurnStream`, `subscribeToTurn`, `createTurnEvents`, `sessions.cancel`); the harness never calls a model itself | `src/harness/turn/`, `src/harness/trueforge/` |
+| The extension talks to TrueForge through its HTTP API / TypeScript SDK, never to a model provider | Only `@truefoundry/trueforge-sdk` is used; there are no provider SDKs | `src/harness/trueforge/sdk.ts`, `src/harness/package.json` |
+| Editor operations are MCP tools chosen by the agent | `read_file`, `search_workspace`, `gather_context`, `propose_edit`, `run_command`, and the deferred `find_symbol` and `list_files`, served on 127.0.0.1 with a bearer token | `src/harness/mcp/` |
+| Model configuration lives in TrueForge and is not tied to one provider | Providers and models come from `config/models.json`, which the setup script loads into TrueForge. Switching models means editing the file and rerunning the setup | `config/models.example.json`, `scripts/setup-trueforge.mjs` |
+| TrueForge in local mode | `npx @truefoundry/trueforge@0.185.1` with SQLite | [Quickstart](#quickstart-with-real-models) |
+| Agent definition in the repository | `forge-coder` (agent mode) and `forge-inline` (inline edit), plus `-fallback` variants created by the setup | `agent/forge-coder.json`, `agent/forge-inline.json` |
+| Inline edit with in-editor diff, accept/reject, no copy-paste | Diff editor, per-hunk picker, Accept/Reject All, undo | `extension/src/review.ts`, Task A |
+| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; one reviewed proposal per file | `agent/forge-coder.json`, Task B |
+| Context: `@file`, `@symbol`, automatic retrieval, budget, visible rationale | Context engine and the panel's Context block | `src/harness/context/`, [How context is selected](#how-context-is-selected) |
+| Diff safety: preview, per-hunk accept/reject, no silent writes, undo | Review before write, stale-base refusal, guarded undo | [Safety model](#safety-model) |
+| Streaming and cancellation, workspace consistent | Streamed text and tool calls; Stop cancels the TrueForge turn and closes the review | `src/harness/turn/turn.ts`, `extension/src/agentPanel.ts` |
+| Fixed tasks A, B and C on Flask 3.1.3 | Exact steps and verification commands | [Running Tasks A, B and C](#running-tasks-a-b-and-c) |
+| Fork disclosure | Built from scratch, not a fork | [Starting point](#starting-point-versions-and-licence) |
 
-## Prerequisites
+## Architecture
+
+The extension runs inside VS Code's extension host. It holds the **harness** (`forge-harness`), which maps each
+editor turn to a TrueForge session/turn through the TrueForge SDK, and an **MCP server** on 127.0.0.1 that
+exposes the editor as tools. TrueForge runs the agent loop: it calls the configured model providers, and calls
+the editor's MCP tools when the model asks for them. Tools that change something (`propose_edit`,
+`run_command`) pause the TrueForge turn until you decide.
+
+```mermaid
+flowchart LR
+  subgraph host["VS Code extension host (WSL)"]
+    EXT["Extension<br/>inline review · agent panel · EditorPort"]
+    H["forge-harness<br/>turns · approvals · retry/fallback<br/>context engine · command budget"]
+    MCP["MCP server 127.0.0.1<br/>read · search · gather_context<br/>propose_edit · run_command"]
+    EXT <--> H
+    H <--> MCP
+  end
+  TF["TrueForge 0.185.1<br/>local mode · SQLite<br/>agent loop · sessions · approvals"]
+  NV["NVIDIA API Catalog<br/>primary"]
+  GQ["Groq<br/>fallback"]
+  H -- "TrueForge SDK over HTTP" --> TF
+  TF -- "MCP tool calls (bearer token, session id)" --> MCP
+  TF --> NV
+  TF --> GQ
+```
+
+How one turn runs:
+
+1. **Request.** The extension sends the instruction, the selection or `@` mentions, and your settings to the
+   harness. The harness assembles context within the budget, shows the Context block, and starts a TrueForge
+   turn on `forge-coder` (agent) or `forge-inline` (inline).
+2. **Agent loop.** TrueForge calls the model, which picks tools. Read-only tools run straight away against
+   the MCP server: `read_file`, `search_workspace`, `gather_context`, and `find_symbol` and `list_files`
+   through TrueForge's `call_tool`.
+3. **Approval pause.** `propose_edit` and `run_command` pause the turn (`tool.approval_required`). For an edit,
+   the harness computes the hunks and opens the review. For a command, it applies the command budget,
+   auto-approval and the ⚠ Unrestricted flag, then asks you if needed.
+4. **Decision.** Your decision goes back to TrueForge as allow or deny; a deny reason reaches the model. On
+   allow, TrueForge calls the MCP tool, which writes only the accepted hunks through the editor (hash-checked,
+   saved) or runs the approved command once.
+5. **Streaming.** Text, tool calls, results, reviews and command requests stream into the panel. Stop cancels
+   the TrueForge turn and closes the approval gate.
+6. **Recovery.** A model error before any write is retried once, and a 429 first waits for the provider's
+   `Retry-After`. Otherwise the turn falls back to the `-fallback` agent on a different provider. Nothing is
+   retried after the turn has changed the workspace.
+
+## Quickstart with real models
+
+All models below are **free tiers ($0)**. These are the models tested on Tasks A, B and C.
+
+### 1. Prerequisites
 
 - Windows 11 with **WSL 2 (Ubuntu)**, or any Linux. Every command below runs in WSL or Linux.
-- **VS Code** with the **WSL** extension on Windows, so the extension host runs in WSL.
+- **VS Code** with the **WSL** extension (Remote-WSL) on Windows.
 - **Node.js ≥ 22.14** (for example `nvm install 24`), npm, git.
-- **Python ≥ 3.10** with `venv`, for the Flask demo workspace.
-- Internet access for the first run: npm packages, TrueForge through `npx`, and Flask from GitHub.
+- **Python ≥ 3.10** with `venv`.
+- Internet access: npm, TrueForge through `npx`, the model providers, GitHub (for Flask).
 
-## Fresh clone to a working demo, without keys
-
-Demo mode replaces the LLM with a **scripted demo model** running on loopback. It calls the same tools a real
-model would, knows the three fixed tasks, needs no keys and costs nothing. Everything else is the real
-stack: TrueForge, the harness, the MCP tools and the extension.
-
-**1. Clone and build**
+### 2. Install and build
 
 ```bash
 git clone https://github.com/riyajenson/forgeathon.git && cd forgeathon
@@ -63,277 +103,400 @@ npm --prefix src/harness ci && npm --prefix src/harness run build
 (cd extension && npm ci && npm run compile)
 ```
 
-**2. Prepare the demo workspace**
+### 3. Get free API keys
 
-This is Flask 3.1.3, the fixed demo target:
+You need the primary (NVIDIA) and the fallback (Groq). OpenRouter is an optional spare.
 
-```bash
-git clone https://github.com/pallets/flask ~/flask-demo && git -C ~/flask-demo checkout -q 22d92470
-python3 -m venv ~/flask-demo/.venv && echo ".venv/" >> ~/flask-demo/.git/info/exclude
-~/flask-demo/.venv/bin/pip install -q -e ~/flask-demo "pytest==9.0.2"   # Flask's lockfile pins pytest 9.0.2
-```
+1. **NVIDIA API Catalog** (primary):
+   1. Open https://build.nvidia.com and sign in or create an NVIDIA account.
+   2. Verify your phone number when asked. The free tier needs it.
+   3. Open any model page, click **Get API Key** and copy the key. It starts with `nvapi-`.
+   4. The free tier allows about 40 requests per minute.
+2. **Groq** (fallback):
+   1. Open https://console.groq.com and sign in.
+   2. Go to **API Keys → Create API Key** and copy the key. It starts with `gsk_`.
+   3. The free tier allows 1000 requests per day and 8000 tokens per minute for this model.
+3. **OpenRouter** (optional spare):
+   1. Open https://openrouter.ai and sign in.
+   2. Go to **Keys → Create Key**. The key starts with `sk-or-`.
+   3. Free models (ids ending in `:free`) allow 50 requests per day.
 
-**3. Check the whole stack headlessly**
-
-About a minute:
-
-```bash
-scripts/e2e-mock.sh
-```
-
-This starts the demo model and a fresh TrueForge, loads the agents, and runs these tasks on a temporary copy of
-`~/flask-demo`, then stops everything:
-
-| Task | What runs |
-|---|---|
-| A | Inline edit |
-| B | Agent: three files edited, then the tests run |
-| G | Guardrails: the command budget, and the argument hint on repeated bad edits |
-| C | Fallback |
-
-It ends with `all 20 checks passed`. With `--auto-approve-safe-commands` it runs the same checks with
-auto-approval on.
-
-**4. Start the demo stack and open the extension**
+Store the keys in a file only you can read, and load it in each terminal you use:
 
 ```bash
-scripts/dev-mock.sh            # demo model + fresh TrueForge on :8790 + setup; Ctrl+C stops all
+cat > ~/.forge-keys.env <<'EOF'
+export NVIDIA_API_KEY='nvapi-...'
+export GROQ_API_KEY='gsk_...'
+export OPENROUTER_API_KEY='sk-or-...'     # optional
+EOF
+chmod 600 ~/.forge-keys.env
+source ~/.forge-keys.env
 ```
 
-1. In VS Code run **WSL: Connect to WSL**, open the `forgeathon/extension` folder and press **F5** (*Launch
-   Forge editor*).
-2. In the Extension Development Host window, open `~/flask-demo`.
-3. Run [the three fixed tasks](#the-three-fixed-tasks).
-4. The TrueForge UI at http://localhost:8790 → **Sessions** shows every turn and tool call.
+Never commit this file or paste keys into `config/models.json`. The config names only the environment variables.
 
-For Task C in demo mode, use `scripts/dev-mock.sh --break-primary` (in a second terminal) and then
-`scripts/dev-mock.sh --restore`.
-
-## Use real models (free tiers)
-
-**1. Choose the models**
-
-Pick a primary and a fallback model from **different providers**. The defaults in `config/models.example.json`
-are the setup tested on Tasks A, B and C (2026-11-19), on **free tiers only ($0)**:
-
-| Role | Provider (TrueForge name) | Model | Free tier |
-|---|---|---|---|
-| Primary | NVIDIA API Catalog (`nvidia`) | `nvidia/nemotron-3-ultra-550b-a55b` | ≈ 40 requests/min, monthly allowance |
-| Fallback | Groq (`groq`) | `qwen/qwen3.8-27b` | 1000 requests/day, 8000 tokens/min |
-| Spare (configured, unused) | OpenRouter (`openrouter`) | `nvidia/nemotron-3-ultra-550b-a55b:free` | 50 requests/day |
+### 4. Configure the models
 
 ```bash
 cp config/models.example.json config/models.json      # gitignored
-export NVIDIA_API_KEY=...  GROQ_API_KEY=...            # only the variables your providers use
 ```
 
-To change models, edit `agents.primaryModel` and `agents.fallbackModel`. Gemini, Anthropic, OpenAI and
-`groq/gpt-oss-120b` are listed as untested alternatives. Model ids change, so list what your key can use with
-`GET <baseUrl>/models`. A model must return proper `tool_calls` to drive the agent; check that before
-switching the primary.
+The defaults:
 
-**2. Start TrueForge 0.185.1 in local mode**
+| Role | TrueForge model | Provider model id | Free tier |
+|---|---|---|---|
+| Primary | `nvidia/nemotron-3-ultra` | `nvidia/nemotron-3-ultra-550b-a55b` (NVIDIA API Catalog) | ≈ 40 requests/min |
+| Fallback | `groq/qwen3-8-27b` | `qwen/qwen3.8-27b` (Groq) | 1000 requests/day, 8000 tokens/min |
+| Spare (configured, unused) | `openrouter/nemotron-3-ultra-free` | `nvidia/nemotron-3-ultra-550b-a55b:free` (OpenRouter) | 50 requests/day |
 
-Keep it running:
+Free model lists change. To pick another model:
+
+1. List what your key can use:
+   `curl -s -H "Authorization: Bearer $NVIDIA_API_KEY" https://integrate.api.nvidia.com/v1/models`.
+   The same works for Groq at `https://api.groq.com/openai/v1/models`.
+2. Choose a coding model that supports tool (function) calling. A model that does not return `tool_calls`
+   cannot drive the agent.
+3. Add it under its provider in `config/models.json`.
+4. Point `agents.primaryModel` or `agents.fallbackModel` at it. Keep the two on **different providers**.
+5. Rerun the setup (step 6).
+
+Gemini, Anthropic, OpenAI and `groq/gpt-oss-120b` are listed in the example as untested alternatives.
+
+### 5. Start TrueForge (keep this terminal open)
 
 ```bash
 OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=1 \
   SQLITE_PATH=$HOME/forge-data/trueforge.sqlite npx -y @truefoundry/trueforge@0.185.1
 ```
 
-TrueForge's SSRF guard blocks loopback addresses. `OUTBOUND_URL_ALLOWED_HOSTS` lets it reach the editor's MCP
-server on 127.0.0.1.
+`OUTBOUND_URL_ALLOWED_HOSTS` lets TrueForge reach the editor's MCP server on 127.0.0.1; its SSRF guard blocks
+loopback otherwise.
 
-**3. Load the providers, the editor connector and the agents**
+### 6. Load providers, connector and agents
 
-The setup is idempotent:
+In a second terminal:
 
 ```bash
-node scripts/setup-trueforge.mjs             # --dry-run prints the plan with keys redacted
+cd forgeathon && source ~/.forge-keys.env
+node scripts/setup-trueforge.mjs             # idempotent; --dry-run prints the plan with keys redacted
 ```
 
-It registers:
+The setup:
 
-- every provider whose key is set;
-- the `vscode` MCP connector;
-- four agents built from `agent/*.json`: `forge-coder` and `forge-inline` on the primary model, and
+- registers every provider whose key is set;
+- registers the `vscode` MCP connector;
+- creates four agents from `agent/*.json`: `forge-coder` and `forge-inline` on the primary model, and
   `forge-coder-fallback` and `forge-inline-fallback` on the fallback model.
 
-To switch models, edit `config/models.json` and rerun the setup.
+It ends with `models available: nvidia/nemotron-3-ultra (primary), groq/qwen3-8-27b (fallback)`.
 
-**4. Check the real models headlessly (optional)**
+### 7. Open the TrueForge UI
+
+Open http://localhost:8790. The **Sessions** page shows every turn, its tool calls and approvals.
+
+### 8. Prepare the Flask 3.1.3 workspace
+
+This is the fixed demo target, at commit `22d92470`:
 
 ```bash
-node scripts/smoke-real-model.mjs --tasks A,C
+git clone https://github.com/pallets/flask ~/flask-demo && git -C ~/flask-demo checkout -q 22d92470
+python3 -m venv ~/flask-demo/.venv && echo ".venv/" >> ~/flask-demo/.git/info/exclude
+~/flask-demo/.venv/bin/pip install -q -e ~/flask-demo "pytest==9.0.2"   # Flask's lockfile pins pytest 9.0.2
+git -C ~/flask-demo status --short                                      # prints nothing
 ```
 
-This runs the same checks as `e2e-mock.sh` and costs real requests. Task B takes 50–70 requests on the
-primary.
+### 9. Launch the extension under Remote-WSL
 
-To count requests and 429s per task, use `scripts/model-meter.mjs`. It is a loopback pass-through proxy that
-logs status, duration, `Retry-After` and tokens, never bodies, headers or keys. It sees the retries TrueForge
-makes internally, which the harness cannot see. To use it:
+1. In VS Code run **WSL: Connect to WSL**, then open the `forgeathon/extension` folder.
+2. Press **F5** (*Launch Forge editor*). An Extension Development Host window opens; it runs in WSL.
+3. In that window, open `~/flask-demo`.
+4. Open the commands with `Ctrl+Shift+P`, "Forge-a-thon":
+   - **Inline Edit** (`Ctrl+Alt+I`)
+   - **Open Agent Panel**
+   - **Accept All Hunks**, **Reject All Hunks**, **Review Hunks**
+   - **Undo Last Reviewed Edit**
+   - **Stop Turn**
 
-1. Copy `config/models.json` and point each `baseUrl` in the copy at `http://127.0.0.1:47800/<route>`.
-2. Run the setup with `--config <copy>`.
-3. Pass `--config <copy> --meter-log <log>` to the smoke script.
+## Running Tasks A, B and C
 
-Then open the extension as in step 4 of the demo.
+Run them in the Extension Development Host on `~/flask-demo`, in the integrated terminal at `~/flask-demo`.
 
-## The three fixed tasks
+### Task A: inline edit
 
-**Task A: inline edit**
+1. Open `src/flask/helpers.py` and select the whole `get_debug_flag` function.
+2. Press `Ctrl+Alt+I` and enter:
 
-- **Do:** open `src/flask/helpers.py`, select `get_debug_flag`, press `Ctrl+Alt+I` and enter: *Treat the values
-  'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is
-  treated as false.* Review the diff, then Accept.
-- **Verify:** `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"`
-  prints `False`.
+   > Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list
+   > every value that is treated as false.
 
-**Task B: agent mode**
+**What you'll see:** a progress notification, then a diff editor with "Review N hunks". **Choose Hunks**
+opens the per-hunk picker; **Accept All** writes and saves the file. **Undo Last Reviewed Edit** restores it.
 
-- **Do:** in the Agent panel, naming no files, enter: *Add a new built-in CLI command flask config that prints the
-  loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD,
-  TOKEN or KEY as "\*\*\*". It must appear in flask --help, be covered by a test, and be documented alongside
-  the other built-in commands.* Review each file. Allow the test command, and deny anything marked
-  ⚠ Unrestricted.
-- **Verify:**
-  - `.venv/bin/python -m pytest tests/test_cli.py -q` passes.
-  - `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` lists `config`.
-  - `../../.venv/bin/flask --app flaskr config` prints JSON with `"SECRET_KEY": "***"`.
+**Verify:**
 
-**Task C: resilience**
+```bash
+FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
+# False
+```
 
-- **Do:** break the primary model, then repeat Task A and reject the proposal.
-  - Demo mode: `scripts/dev-mock.sh --break-primary`.
-  - Real models: `NVIDIA_API_KEY=invalid node scripts/setup-trueforge.mjs`.
-- **Verify:** the panel banner says "Primary model failed: … → switched to …", and `git status` shows no
-  changes.
-- **Restore:** `scripts/dev-mock.sh --restore` in demo mode, or rerun the setup with the real key.
+### Task B: agent mode
 
-Open the extension's commands with `Ctrl+Shift+P`, "Forge-a-thon":
+1. Optional, as in the demo video: set `"forge.autoApproveSafeCommands": true` in the Extension Development
+   Host's settings.
+2. Open the Agent panel and send, naming no files:
 
-- **Inline Edit** (`Ctrl+Alt+I`)
-- **Open Agent Panel**
-- **Accept All Hunks**, **Reject All Hunks**, **Review Hunks**
-- **Undo Last Reviewed Edit**
-- **Stop Turn**
+   > Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON,
+   > masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "\*\*\*". It must appear in
+   > flask --help, be covered by a test, and be documented alongside the other built-in commands.
 
-## Settings
+**What you'll see:**
 
-| Setting | Default | What it does |
+- Streamed text, then the **Context block**, with `src/flask/cli.py` ranked first.
+- Tool calls: reads and searches, then one diff per file: `src/flask/cli.py`, `tests/test_cli.py` and
+  `docs/cli.rst`.
+- The test run, then a summary.
+- At most 3 commands per turn. Any more appear as "command budget reached".
+
+**What to click:**
+
+| What appears | Click |
+|---|---|
+| Each diff | **Accept All** (or choose hunks) |
+| `python -m pytest …` | Nothing if auto-approval is on (an "auto-approved: …" line appears). Otherwise **Allow** |
+| A command prompt without a warning (`python -c …`, `flask …`) | **Allow** if you agree with it |
+| A prompt marked **⚠ Unrestricted** (`cd …`, pipes, here-docs, `python -m flask …`) | **Deny**. The reason goes back to the model |
+
+**Verify:**
+
+```bash
+.venv/bin/python -m pytest tests/test_cli.py -q
+# … passed (no failures)
+cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help
+# the command list includes:  config  …
+../../.venv/bin/flask --app flaskr config
+# JSON including "SECRET_KEY": "***"
+cd ~/flask-demo
+```
+
+### Task C: resilience (fallback)
+
+1. Start from a clean workspace: `git checkout -- . && git status --short` prints nothing.
+2. Break the primary model's key in TrueForge. In the setup terminal, inside `forgeathon`:
+
+   ```bash
+   NVIDIA_API_KEY=invalid node scripts/setup-trueforge.mjs
+   ```
+
+3. Repeat Task A.
+
+**What you'll see:** within a few seconds, the banner
+"Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to groq/qwen3-8-27b"
+(also shown as a VS Code notification). Then the fallback model's diff appears; the editor stays responsive.
+
+**Click:** **Reject All**.
+
+**Verify:**
+
+```bash
+git status --short
+# (nothing: the workspace is unchanged)
+```
+
+**Restore the primary:**
+
+```bash
+source ~/.forge-keys.env && node scripts/setup-trueforge.mjs
+```
+
+## How context is selected
+
+- **Pinned first:** the selection, `@symbol:Name` (resolved through a Python def/class index), `@file:path`,
+  and an outline of the active file.
+- **Chunking:** the workspace is split into functions and classes (with decorators) and doc sections,
+  respecting every `.gitignore` and skipping dependencies, virtualenvs, build output and credentials files.
+- **Scoring:** identifiers are split (`routes_command` → `routes`, `command`), and chunks are scored with BM25
+  plus symbol-name, decorator and file-name boosts.
+- **File ranking:** a file's score sums its best chunks and its coverage of the task's terms. Code is weighted
+  above docs and tests.
+- **Neighbour bonuses:** docs and tests rise through these: `src/x.py` → `tests/test_x.py`, docs that mention
+  the module or its symbols, and one-hop imports. Changelogs are down-weighted.
+- **Packing:** outlines of the top files come first, then whole functions and sections, until the budget is
+  reached. Anything that does not fit is listed as skipped.
+- **More on demand:** the agent can ask for more context with the `gather_context` tool.
+- **Budget:** `forge.context.budgetTokens` (default 8000 tokens, estimated as characters ÷ 4).
+
+**Reading the Context block** in the agent panel:
+
+- The first line is `used / budget estimated tokens`.
+- Each item reads `path | symbol | source | rationale | tokens`. The source is `selection`, `explicit` (an `@`
+  mention), `active` or `automatic`. The rationale is the plain-English reason, for example
+  `matches "config", "command" (n of m task terms)`.
+- **Skipped** lists what did not fit, with the reason.
+
+On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `src/flask/cli.py` first and
+`tests/test_cli.py` and `docs/cli.rst` included.
+
+## Safety model
+
+- **Review before write:**
+  - `propose_edit` never writes by itself. Only the hunks you accept are applied, through one VS Code
+    `WorkspaceEdit`, and then saved.
+  - The result is one of six reported outcomes (stale, approval missing, failed before apply, applied but
+    unsaved, save failed, saved).
+- **Per hunk:** accept or reject each hunk, or all of them.
+- **Undo:** restores the exact original bytes, even with format-on-save, after checking the file has not
+  changed since.
+- **Stale-base refusal:** an edit is based on the file's sha256. If the file changed since it was read, the
+  edit is refused (in both the harness and the editor), and the model is told to read it again.
+- **Cancel:**
+  - Stop closes the approval gate, cancels the TrueForge turn, closes any open review without writing, and
+    kills a running command's process group.
+  - An approved command never starts after Stop.
+- **run_command gating:**
+  - Each command needs your approval of that exact command and directory, used once.
+  - Any command other than `pytest`, `python -m pytest`, `python -c`, `flask`, `git status` and `git diff`
+    (without shell operators) is marked **⚠ Unrestricted** with a warning.
+  - The working directory must resolve inside the workspace, and the command gets your environment **minus**
+    credential-like variables.
+  - A timeout (default 120 s, maximum 600 s) and an output cap apply.
+  - `git status` before and after reports files the command changed "outside review".
+- **Command budget:**
+  - The harness, not the model's instructions, allows at most 3 commands per agent turn and 1 per inline turn,
+    whether asked or auto-approved.
+  - Further `run_command` calls are refused to the model with "command budget for this turn exhausted; stop
+    running commands, finish edits and summarize". You are not asked, and the panel shows "command budget
+    reached".
+- **Auto-approval scope** (`forge.autoApproveSafeCommands`, off by default):
+  - Only bare `pytest`, `python -m pytest`, `git status` and `git diff`, with no shell operators and no path or
+    `NAME=value` prefix.
+  - `python -c` and `flask` always ask. Edits are always reviewed.
+- **Residual risk:** `run_command` is **not a sandbox**. A command you approve runs as you, so it can:
+  - write files outside review, including git-ignored files and paths outside the workspace;
+  - reach the network;
+  - read files.
+
+  Deny commands you do not understand.
+
+## Settings and environment
+
+| Name | Default | Purpose |
 |---|---|---|
 | `forge.trueforgeUrl` | `http://127.0.0.1:8790` | TrueForge server |
 | `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token per session) |
 | `forge.context.budgetTokens` | `8000` | Agent-mode context budget |
-| `forge.autoApproveSafeCommands` | **off** | Runs `pytest`, `python -m pytest`, `git status` and `git diff` (bare, no shell operators) without asking; each is shown in the panel as "auto-approved: …" |
-| `forge.commandBudget.agent` | `3` | Most commands the agent may run in one turn. More are refused without asking; the panel shows "command budget reached" |
-| `forge.commandBudget.inline` | `1` | The same for inline edits (the inline agent does not run commands today) |
+| `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
+| `forge.commandBudget.agent` | `3` | Most commands per agent turn |
+| `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
+| `NVIDIA_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` | (none) | Provider keys, read by the setup script; only those your config uses are needed |
+| `OUTBOUND_URL_ALLOWED_HOSTS` | (none) | TrueForge: must include `127.0.0.1` so it can call the editor's MCP server |
+| `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults | We use `3000` and `1`: fail fast so the harness can fall back |
+| `SQLITE_PATH` | TrueForge default | TrueForge's database; a new path starts fresh |
+| `FORGE_FLASK_DIR` | `~/projects/flask-3.1.3` | Flask checkout for the context-ranking unit test |
 
-## Shell commands (run_command)
+The turn log at `~/.forge/turns.jsonl` records model, attempts, tokens, timing and approvals per turn, with no
+content.
 
-The agent runs shell commands (to run the tests) through the `run_command` MCP tool. It is **not a
-sandbox**: an approved command runs as you, with your file access, and can change files without hunk review.
+## Mock mode (no keys)
 
-The harness enforces the following.
+The **scripted demo model** stands in for an LLM on loopback. It calls the same tools a real model would and
+knows the fixed tasks, so the rest of the stack (TrueForge, the harness, the MCP tools, the extension) is
+real. **It is for testing only and is not used in the demo video.**
 
-- **Approval:**
-  - Nothing runs without your approval of that exact command and directory, and an approval is used once.
-  - A command never starts after Stop, and Stop kills its whole process group.
-- **Unrestricted flag:** any command other than `pytest`, `python -m pytest`, `python -c`, `flask`,
-  `git status` and `git diff` (without shell operators) is marked **⚠ Unrestricted**, with a warning in the
-  approval prompt.
-- **Command budget:**
-  - At most 3 commands per agent turn and 1 per inline turn, whether asked or auto-approved. You can change
-    this in `forge.commandBudget.*`.
-  - Further `run_command` calls are refused to the model with *"command budget for this turn exhausted; stop
-    running commands, finish edits and summarize"*. You are not asked, and the panel shows "command budget
-    reached".
-  - The budget is enforced by the harness, whatever the model's instructions say. Before the budget existed,
-    the real primary model ran 7 and 17 commands in two Task B turns after being told to run at most 2.
-- **Auto-approval** (`forge.autoApproveSafeCommands`), off by default:
-  - Only bare `pytest`, `python -m pytest`, `git status` and `git diff` with no shell operators run without a
-    prompt. A path or `NAME=value` prefix still asks.
-  - `python -c` and `flask` are on the verification list but always ask, because they run arbitrary code.
-  - Edits are always reviewed hunk by hunk.
-- **Workspace and environment:**
-  - The working directory must resolve inside the workspace, symlinks included.
-  - The command gets your environment **minus** credential-like variables (`*KEY*`, `*TOKEN*`, `*SECRET*`,
-    `*PASSW*`, …) and editor IPC handles.
-  - It is killed after its timeout (default 120 s, maximum 600 s), and its output is capped.
-- **Change reporting:** `git status` is compared before and after the command. Files it changed are reported
-  to you and to the model as "changed outside review". A command counts as a write, so there is no retry or
-  fallback after it.
+```bash
+scripts/dev-mock.sh            # demo model + fresh TrueForge on :8790 + setup; Ctrl+C stops all
+```
 
-**Residual risk:** a command you approve can still:
+Then do steps 7–9 of the quickstart. For Task C, use `scripts/dev-mock.sh --break-primary` and then
+`scripts/dev-mock.sh --restore`.
 
-- write anywhere you can, including absolute paths and git-ignored files;
-- reach the network;
-- read files.
+## Testing
 
-git cannot see changes to ignored files or to files outside the workspace. Deny commands you do not
-understand.
-
-## Tests
+Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
+real model solves the tasks; real-model results are recorded in `docs/STATUS.md`.
 
 | Command | What it proves | Needs |
 |---|---|---|
-| `npm --prefix src/harness test` | Harness unit tests and turn races against an in-memory TrueForge stand-in (see below) | Nothing. The Flask ranking test needs a Flask 3.1.3 checkout at `FORGE_FLASK_DIR` or `~/projects/flask-3.1.3`, and is skipped otherwise |
-| `npm --prefix src/harness run test:integration` | Turns against real TrueForge with a scripted model (see below) | TrueForge on :8790, for example `scripts/dev-mock.sh --background` |
-| `scripts/e2e-mock.sh` | Tasks A, B, G (guardrails) and C end to end through the harness, on a copy of Flask 3.1.3, with the verification commands | A Flask checkout: `--flask DIR`, default `~/flask-demo` |
-| `scripts/test-extension.sh` | Extension suites inside a real VS Code window: EditorPort, review, panel, settings | A display (WSLg). Fetches 3 libraries without sudo |
-| `scripts/test-extension-e2e.sh` | Tasks A, B, Stop and C through the extension UI code, against TrueForge and the demo model | As above, plus the Flask checkout |
-| `node scripts/smoke-real-model.mjs --tasks A,C` | The `e2e-mock.sh` checks with your real models. `--meter-log` adds requests and 429s per task | `config/models.json`, keys, TrueForge |
+| `npm --prefix src/harness test` | Harness unit tests, and turn races against an in-memory TrueForge stand-in (late writes against retry and fallback; a silent server against Stop) | Nothing. The Flask ranking test needs `FORGE_FLASK_DIR`, otherwise it is skipped |
+| `npm --prefix src/harness run test:integration` | Turns through a real TrueForge 0.185.1: approvals, partial accept, deny, cancel races, 401/429/watchdog → retry or fallback, run_command, setup | TrueForge on :8790 (`scripts/dev-mock.sh --background`) |
+| `scripts/e2e-mock.sh` | Tasks A, B, C and G (guardrails) through the harness on a copy of Flask 3.1.3, with the verification commands: 21 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
+| `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
+| `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, panel, settings | A display (WSLg). Fetches 3 libraries without sudo |
+| `scripts/test-extension-e2e.sh` | Tasks A, B, Stop and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |
+| `node scripts/smoke-real-model.mjs --tasks A,B,C` | The `e2e-mock.sh` checks with your real models (costs real requests) | Keys, `config/models.json`, TrueForge |
 
-The harness unit tests cover:
+The unit tests cover:
 
 - the review core and the MCP tools;
-- the ignore policy and the regex deadline;
-- run_command cancel races, the command budget and auto-approval;
-- the context engine, including Flask ranking;
-- setup, errors and the model meter;
-- turn races: late writes against retry and fallback, and a silent server against Stop and the watchdog.
+- run_command, including the command budget and auto-approval;
+- the context engine;
+- setup and errors;
+- the model meter.
 
-The integration tests cover:
+The smoke script also accepts these options:
 
-- approvals, partial accept, deny and cancel races;
-- 401, refused, 429 and watchdog responses leading to retry or fallback;
-- run_command;
-- setup.
+- `--auto-approve-safe-commands` and `--deny-unrestricted` answer prompts as in the video.
+- `--meter-log` reports requests and 429s per task. It needs `scripts/model-meter.mjs`, a loopback proxy that
+  records status, timing, `Retry-After` and tokens, never bodies or keys (usage in the script's header).
 
-## Repository layout
+## Troubleshooting
 
-| Path | What |
+| Symptom | Fix |
 |---|---|
-| `extension/` | VS Code extension: commands, inline review, agent panel, `EditorPort` (editor reads and writes) |
-| `src/harness/` | `forge-harness`: the TrueForge adapter (turns, approvals, cancel, retry, fallback, command budget), the MCP server and tools, the context engine, the review core, the demo model and the model meter |
-| `contracts/` | Shared TypeScript contract between the extension and the harness (protocol 0.4.4) |
-| `agent/` | **TrueForge agent definitions**: `forge-coder.json` (agent mode), `forge-inline.json` (inline edit) |
-| `config/` | `models.example.json` (real providers), `models.mock.example.json` (demo model) |
-| `scripts/` | Setup, demo mode, end-to-end checks, real-model smoke test, model meter, extension tests |
-| `docs/` | Status, write-up, demo script, manual test, submission checklist, branching convention |
-| `spike/` | TrueForge 0.185.1 feasibility spike and its findings (not shipped) |
+| `Outbound URL blocked for host "127.0.0.1"` (TrueForge, at setup or on the first tool call) | Start TrueForge with `OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]'`, exactly as in step 5 |
+| Port in use (`EADDRINUSE` on 8790 or 47615) | Find the process with `ss -ltnp \| grep -E '8790\|47615'` and stop it, often an earlier TrueForge or `scripts/dev-mock.sh stop`. Or change the port: add `--port N` to the TrueForge command and set `forge.trueforgeUrl`; for the MCP server, change `forge.mcpPort` |
+| `Request failed (401): Unauthorized` and an immediate fallback, when you did not intend Task C | The key TrueForge has is wrong. `source ~/.forge-keys.env` in the same terminal, then rerun `node scripts/setup-trueforge.mjs` |
+| `provider "nvidia" is used by the agents but NVIDIA_API_KEY is not set` | The key is not exported in that terminal; `source ~/.forge-keys.env` |
+| 429 rate limit | The harness waits for `Retry-After` (capped at 30 s), retries once, then falls back. On NVIDIA's free tier (≈ 40 requests/min), wait a minute between long Task B runs |
+| A model is missing from the free list, or has a 404 or unknown model id | List the models (step 4), pick a tool-calling one, edit `config/models.json`, rerun the setup, then restart the Extension Development Host so it shows the new model name |
+| The extension does not load, or Node/npm is not found, under Windows | Open the folder from a **WSL** window (green "WSL: Ubuntu" in the corner), and install Node inside WSL, not only on Windows |
+| `TrueForge is not reachable at http://127.0.0.1:8790` | Start TrueForge (step 5) and check http://localhost:8790 opens. If you use another URL, set `forge.trueforgeUrl` |
+| `agent "forge-coder" not found; run the setup script` | Run step 6 against the running TrueForge, for example after starting it with a new `SQLITE_PATH` |
 
-## Starting point, licence and attribution
+## Project structure
+
+```text
+agent/        TrueForge agent definitions (forge-coder.json, forge-inline.json)
+config/       models.example.json (real providers), models.mock.example.json (demo model)
+contracts/    shared TypeScript contract between extension and harness (protocol 0.4.4)
+extension/    VS Code extension: commands, inline review, agent panel, EditorPort
+src/harness/  forge-harness: TrueForge adapter, MCP server and tools, context engine,
+              review core, command budget, demo model, model meter
+scripts/      setup, demo mode, end-to-end checks, real-model smoke test, model meter
+docs/         status, write-up, demo script, manual test, submission checklist, images
+spike/        TrueForge 0.185.1 feasibility spike and findings (not shipped)
+```
+
+## Starting point, versions and licence
 
 - **Built from scratch, not a fork.** No editor or agent code was copied from another project. The first
-  commit of this repository is the TrueForge spike, and the extension was scaffolded from an empty folder.
+  commit is a TrueForge feasibility spike, and the extension was scaffolded from an empty folder. TrueForge is
+  used unmodified.
+- **Pinned versions:**
+  - TrueForge `@truefoundry/trueforge@0.185.1`, `@truefoundry/trueforge-sdk` 0.185.0
+  - `@modelcontextprotocol/sdk` 1.32.2
+  - Node ≥ 22.14
+  - VS Code ≥ 1.95 (tested on 1.146)
+  - Flask 3.1.3 at `22d92470` with `pytest==9.0.2`
+  - Exact dependency versions are in the lockfiles.
+- **Third-party notices:** `THIRD_PARTY_NOTICES.md`. All dependencies are permissive (MIT, ISC, BSD,
+  Apache-2.0).
 - **Licence:** MIT (`LICENSE`).
-- **Third-party components** (listed in `THIRD_PARTY_NOTICES.md`):
-  - TrueForge (MIT), the TrueForge SDK (MIT), the MCP TypeScript SDK (MIT), zod (MIT) and TypeScript
-    (Apache-2.0).
-  - Flask 3.1.3 (BSD-3-Clause) is the demo target and is cloned separately.
 - **No secrets are committed:**
   - Keys come only from environment variables, and `config/models.json` is gitignored.
   - The MCP server listens on 127.0.0.1 with a random bearer token per session.
-  - The demo "keys" are fixed dummy values that only the local demo model accepts.
-- **AI assistance** used to build this project is declared in the write-up (`docs/writeup/WRITEUP.md`, "Tools
-  used").
+  - The demo "keys" are dummy values that only the local demo model accepts.
 
-## More
+## AI tools used
 
-- `docs/STATUS.md`: what works, how it was verified, open items
-- `docs/MANUAL-TEST.md`: step-by-step manual check in VS Code
-- `docs/DEMO-SCRIPT.md`: the shot list for the video (4 minutes or less)
-- `docs/writeup/WRITEUP.md`: the write-up (render it with `scripts/render-writeup.sh`)
-- `spike/FINDINGS.md` and `docs/harness/`: TrueForge behaviour verified during development
+As declared in the write-up (`docs/writeup/WRITEUP.md`, "Tools used"):
+
+- **Claude** (Anthropic), through the Claude Code CLI and Claude chat: the TrueForge spike, the harness
+  architecture and implementation, the context engine and tests. After the hand-over, also the editor
+  workstream, the documentation and the write-up draft.
+- **OpenAI Codex (via ChatGPT):** the initial VS Code extension scaffold, the editor features (EditorPort,
+  inline review, agent panel) and the shared contracts.
+
+All code was reviewed and directed by the team.
+
+More: `docs/STATUS.md` (what works and how it was verified), `docs/MANUAL-TEST.md`, `docs/DEMO-SCRIPT.md`,
+`spike/FINDINGS.md`.

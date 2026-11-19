@@ -11,6 +11,9 @@ export class InlineReview implements vscode.Disposable {
   private pending?: { proposal: EditProposal; resolve: (value: ReviewDecision | undefined) => void };
   private readonly status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   private picker?: vscode.QuickPick<vscode.QuickPickItem & { hunkId: string }>;
+  /** Accept All / Reject All / Choose Hunks next to the diff. A quick pick, not a notification: it can be
+   * closed when the review ends, so a cancelled or decided review never leaves an actionable prompt behind. */
+  private actions?: vscode.QuickPick<vscode.QuickPickItem>;
   constructor(private edits: EditReview) {
     this.status.text = '$(diff) Review hunks';
     this.status.command = 'forgeathon.reviewHunks';
@@ -29,23 +32,37 @@ export class InlineReview implements vscode.Disposable {
       await vscode.commands.executeCommand('vscode.diff', left, right, p.path + ' - proposed changes');
       if (!this.edits.isActive(p)) return undefined;
       this.status.show();
-      return await new Promise(resolve => { this.pending = {proposal: p, resolve}; void this.prompt(p); });
+      return await new Promise(resolve => { this.pending = {proposal: p, resolve}; this.prompt(p); });
     } finally {
       this.status.hide();
+      this.actions?.hide();
       this.texts.delete(left.toString()); this.texts.delete(right.toString());
     }
   }
 
-  // Non-modal prompt next to the diff; dismissing it keeps the review open (status bar item or commands).
-  private async prompt(p: EditProposal) {
+  // Non-modal prompt next to the diff; Escape hides it and keeps the review open (status bar item or commands).
+  private prompt(p: EditProposal) {
     const n = p.hunks.length;
-    const pick = await vscode.window.showInformationMessage(
-      `Review ${n} hunk${n === 1 ? '' : 's'} in ${p.path}`, 'Accept All', 'Reject All', 'Choose Hunks...');
-    if (this.pending?.proposal !== p) return;
-    if (pick === 'Choose Hunks...') this.choose();
-    else if (pick === 'Accept All') this.decideAll('accept');
-    else if (pick === 'Reject All') this.decideAll('reject');
+    const qp = vscode.window.createQuickPick();
+    this.actions = qp;
+    qp.title = `Review ${n} hunk${n === 1 ? '' : 's'} in ${p.path}`;
+    qp.placeholder = 'The proposed change is in the diff editor. Escape hides this; "Review hunks" in the status bar reopens the hunk list.';
+    qp.ignoreFocusOut = true;
+    qp.items = [{label: 'Accept All'}, {label: 'Reject All'}, {label: 'Choose Hunks...'}];
+    qp.onDidAccept(() => {
+      const pick = qp.selectedItems[0]?.label;
+      qp.hide();
+      if (this.pending?.proposal !== p) return;
+      if (pick === 'Choose Hunks...') this.choose();
+      else if (pick === 'Accept All') this.decideAll('accept');
+      else if (pick === 'Reject All') this.decideAll('reject');
+    });
+    qp.onDidHide(() => { if (this.actions === qp) this.actions = undefined; qp.dispose(); });
+    qp.show();
   }
+
+  /** Any review control is still on screen (pending decision, action prompt or hunk list). */
+  get open(): boolean { return !!(this.pending || this.actions || this.picker); }
 
   decideAll(choice: 'accept' | 'reject') {
     const pending = this.pending;
@@ -53,7 +70,7 @@ export class InlineReview implements vscode.Disposable {
     const p = pending.proposal;
     const decision = this.edits.decide(p, Object.fromEntries(p.hunks.map(h => [h.hunkId, choice])));
     this.pending = undefined;
-    this.picker?.hide();
+    this.picker?.hide(); this.actions?.hide();
     pending.resolve(decision);
   }
 
@@ -86,7 +103,7 @@ export class InlineReview implements vscode.Disposable {
   // A cancelled review leaves nothing that looks actionable: its diff tab closes and the status bar says so.
   cancel() {
     const wasPending = !!this.pending;
-    this.pending?.resolve(undefined); this.pending = undefined; this.picker?.hide(); this.status.hide();
+    this.pending?.resolve(undefined); this.pending = undefined; this.picker?.hide(); this.actions?.hide(); this.status.hide();
     const diff = this.diff?.toString();
     this.diff = undefined;
     if (!diff || !wasPending) return;

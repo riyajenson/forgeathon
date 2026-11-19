@@ -163,9 +163,9 @@ export class EditReview implements vscode.Disposable {
     this.busy.add(lock);
     try {
       if (r.created) {
-        const removal = new vscode.WorkspaceEdit();
-        removal.deleteFile(doc.uri, { ignoreIfNotExists: false });
-        if (!await vscode.workspace.applyEdit(removal)) throw new Error('VS Code declined to delete the created file');
+        // Not via WorkspaceEdit.deleteFile: that moves to the trash, which WSL mounts do not support.
+        if (doc.isDirty) throw new Error('The created file has unsaved changes; inspect before undo');
+        await vscode.workspace.fs.delete(doc.uri, { useTrash: false });
         this.receipts.delete(id);
         return;
       }

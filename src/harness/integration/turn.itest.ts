@@ -483,3 +483,20 @@ test('429 twice per model call, no Retry-After: TrueForge retries below the turn
   assert.equal(last['retries'], 0);
   assert.equal((last['attempts'] as unknown[]).length, 1, 'one TrueForge turn');
 });
+
+test('a model switch in TrueForge (scripts/use-models.sh) shows on the next turn without restarting the harness', async () => {
+  const { client } = await createClient(TF_URL);
+  const agentOf = async () => (await client.agents.list({ agentName: 'it-coder' })).data.find((a) => a.name === 'it-coder')!;
+  const original = await agentOf();
+  try {
+    await withHarness('it-coder', async (h, sid) => {
+      const first = ofType(await runTurn(h, sid, 'hello'), 'session')[0]!;
+      assert.equal(first.model, 'itgood/primary');
+      await client.agents.update(original.id, { description: original.description ?? '', manifest: { ...original.manifest, model: { ...original.manifest.model, name: 'itfb/fb' } } as never });
+      const second = ofType(await runTurn(h, sid, 'hello'), 'session')[0]!;
+      assert.equal(second.model, 'itfb/fb', 'the panel and fallback banner name the model TrueForge now uses');
+    });
+  } finally {
+    await client.agents.update(original.id, { description: original.description ?? '', manifest: original.manifest as never });
+  }
+});

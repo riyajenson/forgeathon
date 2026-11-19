@@ -72,7 +72,6 @@ class ForgeHarnessImpl implements ForgeHarness {
   private readonly scopes = new ScopeRegistry();
   private readonly sessions = new Map<SessionId, AppSession>();
   private readonly submitted = new Map<string, { fingerprint: string; response: Response<TurnRef> }>();
-  private readonly models = new Map<string, Promise<string>>();
   private port: EditorBridge | undefined;
   private sdk: TrueForgeSdk | undefined;
   private client: TrueForgeClient | undefined;
@@ -246,18 +245,11 @@ class ForgeHarnessImpl implements ForgeHarness {
     return { sessionId: s.id, state: s.state, activeTurnId: s.active && !s.active.done ? s.active.req.turnId : null };
   }
 
-  private modelOf(agent: string): Promise<string> {
-    let p = this.models.get(agent);
-    if (!p) {
-      p = (async () => {
-        const page = await this.client!.agents.list({ agentName: agent }, { maxRetries: 0, timeoutInSeconds: 15 });
-        const found = page.data.find((a) => a.name === agent);
-        return found?.manifest.model.name ?? agent;
-      })();
-      p.catch(() => this.models.delete(agent));
-      this.models.set(agent, p);
-    }
-    return p;
+  /** Looked up for every turn (not cached), so a model switch (scripts/use-models.sh) shows on the next turn. */
+  private async modelOf(agent: string): Promise<string> {
+    const page = await this.client!.agents.list({ agentName: agent }, { maxRetries: 0, timeoutInSeconds: 15 });
+    const found = page.data.find((a) => a.name === agent);
+    return found?.manifest.model.name ?? agent;
   }
 }
 

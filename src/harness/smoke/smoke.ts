@@ -6,8 +6,9 @@
 // git status, git diff are not prompted).
 // --deny-unrestricted: deny commands flagged unrestricted instead of allowing them (as in the demo video).
 // Task G (mock model only, scripts/e2e-mock.sh): the guardrails. The scripted model sends a malformed propose_edit
-// twice on one file, then five commands; the harness must refuse the last two by the command budget (3) without
-// prompting, and spell out the propose_edit argument shape in the second refusal.
+// twice on one file, then five commands (git status, python -c, the unrestricted `ls src`, git status, git diff);
+// the harness must flag `ls src` as unrestricted, refuse the last two by the command budget (3) without prompting,
+// and spell out the propose_edit argument shape in the second refusal.
 // --meter-log: the log of scripts/model-meter.mjs, to report model requests and 429s per task (TrueForge's
 // internal retries included).
 import { execFile } from 'node:child_process';
@@ -49,6 +50,9 @@ interface TurnStats {
   /** Commands the user had to approve, and commands the harness auto-approved (--auto-approve-safe-commands). */
   commandPrompts: number;
   autoApproved: number;
+  /** Prompts flagged unrestricted, and how many of them were denied (--deny-unrestricted). */
+  unrestrictedPrompts: number;
+  deniedCommands: number;
   /** run_command calls refused by the turn's command budget (command_budget_reached). */
   budgetReached: number;
   /** The model's reply text. */
@@ -83,7 +87,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, text: '', contextFiles: [] };
+  const stats: TurnStats = { task, status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [] };
   for await (const r of h.stream(req({ sessionId, turnId, afterSequence: 0 }))) {
     if (!r.ok) { stats.error = r.error.message; break; }
     const e: HarnessEvent = r.body;
@@ -112,6 +116,8 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
         if (e.autoApproved) { stats.autoApproved++; console.log(`  [${task}] command ${e.command} → auto-approved`); break; }
         stats.commandPrompts++;
         const allow = !(e.unrestricted && process.argv.includes('--deny-unrestricted'));
+        if (e.unrestricted) stats.unrestrictedPrompts++;
+        if (!allow) stats.deniedCommands++;
         console.log(`  [${task}] command ${e.command}${e.unrestricted ? ' (UNRESTRICTED)' : ''} → ${allow ? 'allow' : 'deny'}`);
         await h.submitReview(req({ sessionId, turnId, callId: e.callId, kind: 'command' as const, allow }));
         break;
@@ -241,9 +247,13 @@ async function main(): Promise<void> {
       const shown = g.commandPrompts + g.autoApproved;
       check('G: 3 commands shown (budget 3), the other 2 refused without a prompt', shown === 3 && g.budgetReached === 2,
         `${g.commandPrompts} asked, ${g.autoApproved} auto-approved, ${g.budgetReached} refused`);
-      check(`G: auto-approval ${autoApprove ? 'on: git status/diff not asked, python -c asked' : 'off: every shown command asked'}`,
-        autoApprove ? g.autoApproved === 2 && g.commandPrompts === 1 : g.autoApproved === 0 && g.commandPrompts === 3, '');
-      check('G: the model received both budget refusals and one shape hint', /2 command\(s\) refused by the budget; shape hint in 1 refusal/.test(g.text), g.text.trim().slice(-200));
+      check(`G: auto-approval ${autoApprove ? 'on: git status not asked; python -c and ls asked' : 'off: every shown command asked'}`,
+        autoApprove ? g.autoApproved === 1 && g.commandPrompts === 2 : g.autoApproved === 0 && g.commandPrompts === 3, '');
+      const denyUnrestricted = process.argv.includes('--deny-unrestricted');
+      check(`G: ⚠ Unrestricted prompt for ls src, ${denyUnrestricted ? 'denied' : 'allowed'}`,
+        g.unrestrictedPrompts === 1 && g.deniedCommands === (denyUnrestricted ? 1 : 0), `${g.unrestrictedPrompts} unrestricted, ${g.deniedCommands} denied`);
+      check('G: the model received both budget refusals, one shape hint and the denial (if any)',
+        new RegExp(`2 command\\(s\\) refused by the budget; shape hint in 1 refusal\\(s\\); ${denyUnrestricted ? 1 : 0} command\\(s\\) denied`).test(g.text), g.text.trim().slice(-200));
       check('G: no file changed', (await status()) === '', '');
     }
     if (tasks.includes('C')) {
@@ -276,7 +286,7 @@ async function main(): Promise<void> {
 
   console.log('\n=== turns');
   for (const s of results) {
-    console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, ${s.budgetReached} refused by the budget, tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
+    console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, ${s.budgetReached} refused by the budget, ${s.unrestrictedPrompts} unrestricted (${s.deniedCommands} denied), tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
     if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
     if (s.contextUsed) console.log(`   context: ${s.contextUsed}: ${s.contextFiles.join(', ')}`);
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);

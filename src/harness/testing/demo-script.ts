@@ -183,19 +183,21 @@ export function demoScript(req: MockRequest): MockReply {
   }
 
   if (user.includes(GUARD_MARK)) {
-    // A model that ignores its instructions: a malformed edit twice on one file, then five commands.
+    // A model that ignores its instructions: a malformed edit twice on one file, then five commands
+    // (the third, `ls src`, is unrestricted).
     const malformed = () => call('propose_edit', { path: 'src/flask/cli.py', base_sha256: shaOf(req, 'src/flask/cli.py'), edits: '[{"old_text": "import' });
     const plan: Array<() => MockReply> = [
       () => call('read_file', { path: 'src/flask/cli.py', start_line: 1, end_line: 5 }),
       malformed,
       malformed,
-      ...['git status --short', 'git diff --stat', 'python -c "print(1)"', 'git status --short', 'git diff'].map((command) => () => call('run_command', { command })),
+      ...['git status --short', 'python -c "print(1)"', 'ls src', 'git status --short', 'git diff'].map((command) => () => call('run_command', { command })),
     ];
     if (step < plan.length) return plan[step]!();
     const results = toolTexts(req);
     const refused = results.filter((t) => t.includes('command budget for this turn exhausted')).length;
     const hint = results.filter((t) => t.includes('Expected arguments, exactly this shape')).length;
-    return { text: `Guardrail check: ${refused} command(s) refused by the budget; shape hint in ${hint} refusal(s).` };
+    const denied = results.filter((t) => t.includes('user refused to run the command')).length;
+    return { text: `Guardrail check: ${refused} command(s) refused by the budget; shape hint in ${hint} refusal(s); ${denied} command(s) denied by the user.` };
   }
 
   return { text: 'This is the scripted demo model. It only knows the fixed Task A and Task B instructions; configure a real model in config/models.json for anything else.' };

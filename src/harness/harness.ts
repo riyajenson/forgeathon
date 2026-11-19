@@ -6,6 +6,7 @@ import {
   type Request, type Response, type ReviewDecision, type SessionId, type SessionStatus, type TurnRef, type TurnRequest,
 } from './contract-types';
 import { ScopeRegistry } from './mcp/scope';
+import { canonicalJson } from './review/canonical';
 import { startMcpServer, type RunningMcpServer } from './mcp/server';
 import { isTrueForgeUnreachable, safeMessage } from './trueforge/errors';
 import { createClient, type TrueForgeClient, type TrueForgeSdk } from './trueforge/sdk';
@@ -130,7 +131,8 @@ class ForgeHarnessImpl implements ForgeHarness {
   async submitTurn(req: Request<TurnRequest>): Promise<Response<TurnRef>> {
     const bad = versionError(req);
     if (bad) return refuse(req, bad);
-    const fingerprint = JSON.stringify(req.body);
+    // Same contents, any property order (contracts/README.md: identity is defined by contents).
+    const fingerprint = canonicalJson(req.body);
     const prior = this.submitted.get(req.requestId);
     if (prior) return prior.fingerprint === fingerprint ? prior.response : refuse(req, err('conflict', 'requestId was already used for a different turn'));
 

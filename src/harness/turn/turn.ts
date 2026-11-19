@@ -130,7 +130,7 @@ export class TurnRun {
     if (d.sessionId !== this.req.sessionId || d.turnId !== this.req.turnId) return invalid('decision does not belong to this turn');
     const previous = this.decided.get(d.callId);
     if (previous) {
-      return JSON.stringify(previous) === JSON.stringify(d)
+      return canonicalArgsKey(previous) === canonicalArgsKey(d)
         ? { ok: true }
         : { ok: false, error: { code: 'conflict', message: 'a different decision was already recorded for this call', retryable: false, workspaceEffect: 'unchanged' } };
     }

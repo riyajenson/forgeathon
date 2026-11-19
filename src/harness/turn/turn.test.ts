@@ -591,3 +591,25 @@ test('a non-network error creating the session is not retried', async () => {
   assert.equal(calls, 1);
   assert.match(lastError(run)!.error.message, /agent "coder" not found/);
 });
+
+test('a repeated review decision is accepted whatever its property order; a different one is a conflict', async () => {
+  const tf = stepwise([['propose_edit', editArgs()]]);
+  const run = makeRun(tf);
+  const replies: unknown[] = [];
+  const answering = (async () => {
+    for await (const e of run.buffer.read(0)) {
+      if (e.t !== 'review_request') continue;
+      const p = e.proposal;
+      const hunks = Object.fromEntries(p.hunks.map((h) => [h.hunkId, 'accept' as const]));
+      replies.push(run.submitReview({ kind: 'edit', sessionId: p.sessionId, turnId: p.turnId, callId: p.callId, proposalId: p.proposalId, hunks }));
+      // The same decision, keys in another order (as a retried message from the editor could arrive).
+      replies.push(run.submitReview({ hunks, proposalId: p.proposalId, callId: p.callId, turnId: p.turnId, sessionId: p.sessionId, kind: 'edit' } as ReviewDecision));
+      replies.push(run.submitReview({ kind: 'edit', sessionId: p.sessionId, turnId: p.turnId, callId: p.callId, proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((h) => [h.hunkId, 'reject' as const])) }));
+    }
+  })();
+  await run.start();
+  await answering;
+  assert.deepEqual(replies[0], { ok: true });
+  assert.deepEqual(replies[1], { ok: true }, 'reordered duplicate accepted');
+  assert.equal((replies[2] as { error?: { code: string } }).error?.code, 'conflict');
+});

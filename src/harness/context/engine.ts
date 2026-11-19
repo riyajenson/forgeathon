@@ -67,10 +67,10 @@ function resolveSymbol(index: WorkspaceIndex, name: string): IndexedChunk[] {
 export async function assembleContext(port: EditorPort, req: ContextRequest, prebuilt?: WorkspaceIndex): Promise<ContextResult> {
   const t0 = Date.now();
   const index = prebuilt ?? await buildIndex(port);
-  const budget = Math.max(500, Math.floor(req.budgetTokens));
+  const budget = Math.max(1, Math.floor(req.budgetTokens));
   let remaining = budget;
   const selections: Selection[] = [];
-  const skipped: Skipped[] = [];
+  const skipped: Skipped[] = index.skipped.map(item => ({ ...item, estimatedTokens: 0 }));
   const parts: string[] = [];
   const pinnedPaths = new Set<string>();
   const includedChunks = new Set<string>();
@@ -190,7 +190,9 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
   }
 
   const used = budget - remaining;
-  const report: ContextReport = { budgetTokens: budget, estimatedTokens: used, selections, skipped: skipped.slice(0, 20) };
+  const visibleSkipped = skipped.slice(0, 20);
+  if (skipped.length > 20) visibleSkipped.push({ path: '.', reason: `${skipped.length - 20} additional omissions are not displayed`, estimatedTokens: 0 });
+  const report: ContextReport = { budgetTokens: budget, estimatedTokens: used, selections, skipped: visibleSkipped };
   const header = `## Context gathered by the editor (≈${used} of ${budget} tokens; files ranked by relevance to the task)\n` +
     'Line numbers are 1-based. Read more with read_file if you need it; do not assume code you have not seen.';
   return { report, text: [header, ...parts].join('\n\n'), ranked, ms: Date.now() - t0 };

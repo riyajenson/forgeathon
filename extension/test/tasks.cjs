@@ -63,7 +63,13 @@ exports.run = async () => {
     assert.ok(ui.panel.state.context && ui.panel.state.context.selections.some((s) => s.source === 'selection'), 'context report with the pinned selection');
     await ui.undo();
     assert.equal(await git(root, 'status', '--porcelain'), '', 'undo restores helpers.py');
-    console.log('PASS Task A: inline review, accept, saved, session link, context report, undo');
+    // The video's re-apply step: the editor's own Undo (Ctrl+Z) reverts the Forge undo, then Ctrl+S saves.
+    await vscode.window.showTextDocument(doc);
+    await vscode.commands.executeCommand('undo');
+    await doc.save();
+    assert.equal(await fs.readFile(helpers.fsPath, 'utf8'), afterA, 'Ctrl+Z after Forge undo re-applies the accepted change');
+    await git(root, 'checkout', '--', '.');
+    console.log('PASS Task A: inline review, accept, saved, session link, context report, undo, re-apply with Ctrl+Z');
 
     // ---------------- Task B: agent panel, per-file reviews, command approval, three files
     const b = await withAnswers(ui, 'accept', () => ui.run('agent', TASK_B, {}));

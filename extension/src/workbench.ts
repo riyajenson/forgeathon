@@ -38,7 +38,15 @@ export class Workbench implements vscode.Disposable {
     return doc && vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === this.folder.uri.toString()
       ? { activeFile: vscode.workspace.asRelativePath(doc.uri, false) } : {};
   }
-  events(event: HarnessEvent) { this.panel.event(event); }
+  events(event: HarnessEvent) {
+    this.panel.event(event);
+    // Also notify outside the panel, which may be closed during an inline edit.
+    if (event.t === 'fallback') {
+      void vscode.window.showWarningMessage('Primary model failed: ' + event.reason + ' → switched to ' + event.toModel);
+    } else if (event.t === 'error') {
+      void vscode.window.showErrorMessage('Forge: ' + event.error.message);
+    }
+  }
   notice(text: string) { this.panel.notice(text); }
   showPanel() { this.panel.open(); }
   choose() { this.review.choose(); }

@@ -11,6 +11,7 @@ import type { EditorPort } from './port';
 import { SESSION_HEADER, type ScopeRegistry } from './scope';
 import { runCommandTool } from './command';
 import { gatherContextTool } from './context-tool';
+import { findSymbolTool, listFilesTool } from './symbol-tools';
 import { proposeEditTool, readFileTool, searchWorkspaceTool, type ToolContext, type ToolOutcome } from './tools';
 
 export const MCP_PATH = '/mcp';
@@ -98,6 +99,19 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, (args) => run(ctx, () => gatherContextTool(ctx, args)));
+
+  // Deferred in the agent templates: TrueForge loads them on demand via list_tools / get_tool_info / call_tool.
+  server.registerTool('find_symbol', {
+    description: 'Find where a Python function, method or class is defined (path and line range). Accepts Name or Class.method.',
+    inputSchema: { name: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, (args) => run(ctx, () => findSymbolTool(ctx, args)));
+
+  server.registerTool('list_files', {
+    description: 'List workspace files (ignores .git, node_modules and build output), optionally under a directory prefix.',
+    inputSchema: { prefix: z.string().optional(), limit: z.number().int().min(1).max(1000).optional() },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, (args) => run(ctx, () => listFilesTool(ctx, args)));
 
   server.registerTool('run_command', {
     description:

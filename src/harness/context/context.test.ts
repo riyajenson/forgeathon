@@ -1,5 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { existsSync, promises as fs } from 'node:fs';
@@ -234,4 +235,32 @@ test('Flask 3.1.3: the file to change ranks first, with its test and docs packed
 
 test('parseMentions', () => {
   assert.deepEqual(parseMentions('fix @file:src/a.py, then @symbol:Foo.bar.'), [{ kind: 'file', path: 'src/a.py' }, { kind: 'symbol', name: 'Foo.bar' }]);
+});
+
+test('indexing yields to the event loop and reuses unchanged files', async () => {
+  const files = Array.from({ length: 400 }, (_, i) => `pkg/mod_${i}.py`);
+  const text = (i: number, v = 0) => Array.from({ length: 40 }, (_, j) => `def handler_${i}_${j}_${v}(request):\n    return compute_value(request, ${j})\n`).join('\n');
+  const contents = new Map(files.map((f, i) => [f, text(i)]));
+  let reads = 0;
+  const port: EditorPort = {
+    listFiles: async () => files,
+    readText: async (file) => {
+      reads++;
+      const t = contents.get(file);
+      return t === undefined ? null : { text: t, sha256: createHash('sha256').update(t).digest('hex') };
+    },
+    log: () => {}, applyText: async () => { throw new Error('not used'); },
+  };
+  let ticks = 0;
+  const tick = setInterval(() => { ticks++; }, 1);
+  const first = await buildIndex(port);
+  clearInterval(tick);
+  assert.equal(first.files.size, 400);
+  assert.ok(ticks >= 2, `the event loop ran during indexing (${ticks} ticks)`);
+  contents.set('pkg/mod_7.py', text(7, 1));
+  const second = await buildIndex(port);
+  assert.ok(second.symbols.has('handler_7_0_1') && !second.symbols.has('handler_7_0_0'), 'a changed file is re-analysed');
+  assert.deepEqual([...second.chunks.map((c) => c.id)], second.chunks.map((_, i) => i), 'chunk ids are dense and fresh per build');
+  assert.equal(second.chunks.length, first.chunks.length);
+  assert.ok(reads >= 800);
 });

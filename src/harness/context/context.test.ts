@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import { FakePort } from '../mcp/fake-port';
 import { chunkDocs, chunkPython } from './chunks';
 import { GitIgnore } from './files';
@@ -138,6 +138,29 @@ test('assembleContext respects the budget, pins selection and mentions, and repo
   const tiny = await assembleContext(port, { instruction: 'routes command cli test docs', budgetTokens: 500, mode: 'agent' });
   assert.ok(tiny.report.estimatedTokens <= 500);
   assert.ok(tiny.report.selections.every((s) => s.rationale.length > 0));
+});
+
+const FLASK = process.env['FORGE_FLASK_DIR'] ?? path.join(os.homedir(), 'projects', 'flask-3.1.3');
+const haveFlask = existsSync(path.join(FLASK, 'src', 'flask', 'cli.py'));
+
+test('Flask 3.1.3: the file to change ranks first, with its test and docs packed', { skip: !haveFlask && 'Flask checkout not found' }, async () => {
+  const flask = new FakePort(FLASK);
+  const index = await buildIndex(flask);
+  const cases: Array<[string, string]> = [
+    ['Add a new built-in CLI command flask config that prints the loaded application\'s configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "***". It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.', 'src/flask/cli.py'],
+    ['Make url_for support an _anchor argument that is URL-quoted', 'src/flask/helpers.py'],
+    ['The session cookie should honour SESSION_COOKIE_PARTITIONED', 'src/flask/sessions.py'],
+    ['Add a send_file option to set the Content-Disposition filename', 'src/flask/helpers.py'],
+    ['Blueprint registration should reject a name containing a dot', 'src/flask/sansio/blueprints.py'],
+  ];
+  for (const [task, expected] of cases) {
+    assert.equal(rankFiles(index, task).files[0]?.path, expected, task);
+  }
+  const r = await assembleContext(flask, { instruction: cases[0]![0], budgetTokens: 8000, mode: 'agent' }, index);
+  const packed = new Set(r.report.selections.map((s) => s.path));
+  for (const p of ['src/flask/cli.py', 'tests/test_cli.py', 'docs/cli.rst']) assert.ok(packed.has(p), `${p} packed`);
+  assert.ok(r.report.estimatedTokens <= 8000);
+  assert.ok(r.report.skipped.length > 0, 'budget cut-offs are reported');
 });
 
 test('parseMentions', () => {

@@ -517,7 +517,7 @@ The smoke script also accepts these options:
 | `Request failed (401): Unauthorized` and an immediate fallback, when you did not intend Task C | The key TrueForge has is wrong. `source ~/.forge-keys.env` in the same terminal, then rerun `node scripts/setup-trueforge.mjs` |
 | `provider "nvidia" is used by the agents but NVIDIA_API_KEY is not set` | The key is not exported in that terminal; `source ~/.forge-keys.env` |
 | 429 rate limit | TrueForge resends the request up to 4 times (about 15 s, step 5); if it still fails, the harness waits for the hint (capped at 30 s), retries once, then falls back to OpenRouter. If NVIDIA keeps answering 429, `scripts/use-models.sh openrouter-free` (check first with `node scripts/preflight-model.mjs`) |
-| A model is missing from the free list, or has a 404 or unknown model id | List the models (step 4), pick a tool-calling one, edit `config/models.json`, rerun the setup, then restart the Extension Development Host so it shows the new model name |
+| A model is missing from the free list, or has a 404 or unknown model id | List the models (step 4), pick a tool-calling one, edit `config/models.json` and rerun the setup. The next turn uses it and the panel names it; no restart needed |
 | The extension does not load, or Node/npm is not found, under Windows | Open the folder from a **WSL** window (green "WSL: Ubuntu" in the corner), and install Node inside WSL, not only on Windows |
 | `TrueForge is not reachable at http://127.0.0.1:8790` | Start TrueForge (step 5) and check http://localhost:8790 opens. If you use another URL, set `forge.trueforgeUrl` |
 | `agent "forge-coder" not found; run the setup script` | Run step 6 against the running TrueForge, for example after starting it with a new `SQLITE_PATH` |

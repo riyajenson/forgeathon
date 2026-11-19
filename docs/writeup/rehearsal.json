@@ -1,0 +1,170 @@
+{
+  "$comment": "Real-model rehearsal on the final main with the video settings (auto-approve safe commands, budget 3, deny Unrestricted), run as A, then C, then B by scripts/smoke-real-model.mjs through scripts/model-meter.mjs (--min-interval-ms 1600). Session URLs point at the local TrueForge used for the rehearsal. videoUrl and videoTimestamp are filled in after recording. Task B did not pass in this rehearsal; see tasks[B].outcome.",
+  "repositoryCommit": "e5afea6e99e497514303847f4ad734cd5c835df8",
+  "flaskCommit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
+  "repositoryUrl": "https://github.com/riyajenson/forgeathon",
+  "videoUrl": "<public video URL>",
+  "models": [
+    {
+      "role": "primary",
+      "name": "nvidia/nemotron-3-ultra",
+      "providerModelId": "nvidia/nemotron-3-ultra-550b-a55b",
+      "hosting": "NVIDIA API Catalog, free tier",
+      "approximateCostUsd": 0
+    },
+    {
+      "role": "fallback",
+      "name": "groq/qwen3-8-27b",
+      "providerModelId": "qwen/qwen3.8-27b",
+      "hosting": "Groq, free tier",
+      "approximateCostUsd": 0
+    }
+  ],
+  "tasks": [
+    {
+      "task": "A",
+      "mode": "real",
+      "model": "nvidia/nemotron-3-ultra",
+      "passed": true,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfbe7xs28kr1a9nwv54ssk",
+      "verification": "diff accepted and saved to src/flask/helpers.py; FLASK_DEBUG=off and N return False, 1 returns True; docstring lists 0, false, no, off, n",
+      "recordedAt": "2026-11-19T17:58:26.623Z",
+      "videoTimestamp": "[mm:ss]",
+      "inputTokens": 11274,
+      "outputTokens": 675,
+      "firstDiffSeconds": 7.8,
+      "turnSeconds": 9.1,
+      "reviews": {
+        "src/flask/helpers.py": 1
+      },
+      "edits": [
+        "src/flask/helpers.py: saved"
+      ],
+      "commands": {
+        "autoApproved": 0,
+        "prompted": 0,
+        "refusedByBudget": 0
+      },
+      "modelRequests": {
+        "total": 3,
+        "status429": 0,
+        "otherErrors": 0,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 3
+        }
+      },
+      "checks": "6/6 passed"
+    },
+    {
+      "task": "C",
+      "mode": "real",
+      "model": "groq/qwen3-8-27b",
+      "passed": true,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfc27k5yqxc27atmcm8p8n",
+      "verification": "invalid NVIDIA key: 401, automatic fallback to Groq, proposal rejected, git status clean",
+      "recordedAt": "2026-11-19T17:58:46.830Z",
+      "videoTimestamp": "[mm:ss]",
+      "inputTokens": 6835,
+      "outputTokens": 393,
+      "firstDiffSeconds": 2.0,
+      "turnSeconds": 2.5,
+      "reviews": {
+        "src/flask/helpers.py": 1
+      },
+      "edits": [],
+      "commands": {
+        "autoApproved": 0,
+        "prompted": 0,
+        "refusedByBudget": 0
+      },
+      "modelRequests": {
+        "total": 3,
+        "status429": 0,
+        "otherErrors": 1,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 1,
+          "groq qwen/qwen3.8-27b": 2
+        }
+      },
+      "checks": "3/3 passed",
+      "fallback": "nvidia/nemotron-3-ultra \u2192 groq/qwen3-8-27b: [Model Error] Request failed (401): Unauthorized"
+    },
+    {
+      "task": "B",
+      "mode": "real",
+      "model": "nvidia/nemotron-3-ultra",
+      "passed": false,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfcfhx3w85hjgf7r1gg2nb",
+      "verification": "FAILED: B: turn done; B: \u22653 files changed incl. cli.py, test_cli.py, cli.rst",
+      "recordedAt": "2026-11-19T17:59:00.736Z",
+      "videoTimestamp": "[mm:ss]",
+      "inputTokens": 627824,
+      "outputTokens": 4171,
+      "firstDiffSeconds": 68.0,
+      "turnSeconds": 127.7,
+      "reviews": {
+        "src/flask/cli.py": 3
+      },
+      "edits": [
+        "src/flask/cli.py: saved",
+        "src/flask/cli.py: saved",
+        "src/flask/cli.py: saved"
+      ],
+      "commands": {
+        "autoApproved": 0,
+        "prompted": 0,
+        "refusedByBudget": 0
+      },
+      "modelRequests": {
+        "total": 30,
+        "status429": 2,
+        "otherErrors": 0,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 30
+        }
+      },
+      "checks": "4/6 passed",
+      "attempts": [
+        {
+          "startedAt": "2026-11-19T17:59:00.736Z",
+          "turnSeconds": 127.7,
+          "firstDiffSeconds": 68.0,
+          "edits": [
+            "src/flask/cli.py: saved",
+            "src/flask/cli.py: saved",
+            "src/flask/cli.py: saved"
+          ],
+          "modelRequests": {
+            "total": 30,
+            "status429": 2,
+            "otherErrors": 0,
+            "byModel": {
+              "nvidia nvidia/nemotron-3-ultra-550b-a55b": 30
+            }
+          },
+          "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfcfhx3w85hjgf7r1gg2nb",
+          "error": "Model unavailable: [Model Error] Request failed (429): Too Many Requests (no retry or fallback: this turn already changed the workspace)"
+        },
+        {
+          "startedAt": "2026-11-19T18:06:44.218Z",
+          "turnSeconds": 32.4,
+          "firstDiffSeconds": null,
+          "edits": [],
+          "modelRequests": {
+            "total": 16,
+            "status429": 6,
+            "otherErrors": 1,
+            "byModel": {
+              "nvidia nvidia/nemotron-3-ultra-550b-a55b": 15,
+              "groq qwen/qwen3.8-27b": 1
+            }
+          },
+          "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfvkdp32yyk3qed251xpnj",
+          "error": "Model error: [Model Error] Request failed (413): Request too large for model `qwen/qwen3.8-27b` in organization [redacted] service tier `on_demand` on input tokens per minute (ITPM): Limit 7000, Requested 10901, please"
+        }
+      ],
+      "outcome": "Not passed: NVIDIA's free tier answered 429 (no Retry-After) at 9-15 requests/min in both attempts. Attempt 1 had saved three cli.py edits (flask config worked, masked JSON, --help listed it) when the 429 came, so by policy there was no retry or fallback. Attempt 2 (after a 5-minute pause) got 429s before any edit, retried once, fell back to Groq, and Groq refused the 10.9k-token request (413: free-tier limit 7,000 input tokens/min).",
+      "tokenSource": "model meter, attempt 1 (the failed turn sent no usage event)"
+    }
+  ]
+}

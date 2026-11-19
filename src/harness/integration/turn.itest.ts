@@ -36,6 +36,10 @@ function lastToolMessage(req: MockRequest): string | undefined {
 
 let currentSha = '';
 let rateLimited = 0;
+// Set by the test when the harness announces its own retry: the 'ratelimit' scenario answers 429 until then.
+let harnessRetried = false;
+// 'ratelimit-tf': 429s served per model call (keyed by whether the request carries a tool result).
+const tfLimited = new Map<string, number>();
 const TURN_LOG = path.join(os.tmpdir(), `forge-itest-turns-${process.pid}.jsonl`);
 process.env['FORGE_TURN_LOG'] = TURN_LOG;
 function script(req: MockRequest): MockReply {
@@ -61,9 +65,18 @@ function script(req: MockRequest): MockReply {
       if (toolResult !== undefined) return { status: 500, message: 'mock upstream exploded' };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
     case 'ratelimit':
-      // Rate-limited until the harness's own retry (TrueForge retries once by itself first).
-      if (rateLimited < 2) { rateLimited++; return { status: 429, message: 'Rate limit reached for requests. Please try again in 1s.' }; }
+      // Rate-limited until the harness's own retry, so TrueForge's retries (MODEL_HTTP_MAX_RETRIES) are all used
+      // up first, however many there are. retry-after-ms keeps TrueForge's own waits short.
+      if (!harnessRetried) { rateLimited++; return { status: 429, message: 'Rate limit reached for requests. Please try again in 1s.', headers: { 'retry-after-ms': '50' } }; }
       return { text: 'answered after the rate limit' };
+    case 'ratelimit-tf': {
+      // Every model call is refused twice with 429 and no Retry-After (what NVIDIA's free tier sends), then answered.
+      const phase = toolResult === undefined ? 'edit' : 'summary';
+      const served = tfLimited.get(phase) ?? 0;
+      if (served < 2) { tfLimited.set(phase, served + 1); return { status: 429, message: 'Too Many Requests' }; }
+      if (toolResult !== undefined) return { text: `finished after: ${toolResult.slice(0, 200)}` };
+      return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
+    }
     case 'stall':
       return { text: 'thinking ... ... ...', delayMsPerWord: 4000 };
     case 'slow':
@@ -406,12 +419,16 @@ test('run_command: approval prompt, execution, changed-file report', async () =>
   });
 });
 
-test('429 with a retry hint: one harness retry after the hinted delay, then success; turn log records it', async () => {
+test('429 that outlasts TrueForge\'s own retries: one harness retry after the hinted delay, then success; turn log records it', async () => {
   rateLimited = 0;
+  harnessRetried = false;
   await fs.rm(TURN_LOG, { force: true });
   await withHarness('it-coder', async (h, sid) => {
     const t0 = Date.now();
-    const events = await runTurn(h, sid, 'SCENARIO:ratelimit');
+    const events = await runTurn(h, sid, 'SCENARIO:ratelimit', (e) => {
+      if (e.t === 'status' && e.state === 'retrying') harnessRetried = true;
+    });
+    assert.ok(rateLimited >= 2, `TrueForge retried the 429 itself before giving up (served ${rateLimited})`);
     assert.equal(doneOf(events).status, 'done');
     const retrying = ofType(events, 'status').filter((s) => s.state === 'retrying');
     assert.equal(retrying.length, 1);
@@ -429,4 +446,57 @@ test('429 with a retry hint: one harness retry after the hinted delay, then succ
   assert.equal((last['attempts'] as unknown[]).length, 2);
   assert.equal((last['attempts'] as Array<{ errorClass?: string }>)[0]!.errorClass, 'MODEL_UNAVAILABLE');
   assert.doesNotMatch(JSON.stringify(last), /SCENARIO|answered after/, 'no prompt or model text in the log');
+});
+
+test('429 twice per model call, no Retry-After: TrueForge retries below the turn; no harness retry, no duplicate tool call', async () => {
+  // Needs TrueForge started with MODEL_HTTP_MAX_RETRIES >= 2 (scripts/dev-mock.sh uses 4, like the README).
+  tfLimited.clear();
+  await fs.rm(TURN_LOG, { force: true });
+  await withHarness('it-coder', async (h, sid) => {
+    const t0 = Date.now();
+    const events = await runTurn(h, sid, 'SCENARIO:ratelimit-tf bump alpha', async (e) => {
+      if (e.t === 'review_request') await review(h, e, () => 'accept');
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(doneOf(events).status, 'done');
+    assert.equal(ofType(events, 'status').filter((s) => s.state === 'retrying').length, 0, 'no harness-level retry');
+    assert.equal(ofType(events, 'fallback').length, 0, 'no fallback');
+    assert.equal(ofType(events, 'review_request').length, 1, 'the edit is proposed once');
+    assert.equal(ofType(events, 'edit_applied').length, 1, 'and applied once');
+    assert.equal(port.applies.length, 1);
+    assert.equal(await disk(), ORIGINAL.replace('    return 1', '    return 10'));
+    assert.deepEqual(Object.fromEntries(tfLimited), { edit: 2, summary: 2 }, 'both model calls were refused twice');
+    const modelCalls = mock.requests.filter((r) => r.model === 'mock-primary');
+    assert.equal(modelCalls.length, 6, 'two model calls, each sent three times by TrueForge');
+    // Every follow-up request carries exactly one executed propose_edit call and its single result.
+    for (const r of modelCalls.filter((q) => lastToolMessage(q) !== undefined)) {
+      const calls = r.messages.flatMap((m) => ((m as { tool_calls?: unknown[] }).tool_calls ?? []));
+      assert.equal(calls.length, 1, 'one tool call in the conversation');
+      assert.equal(r.messages.filter((m) => m.role === 'tool').length, 1, 'one tool result in the conversation');
+    }
+    // TrueForge backs off 1 s then 2 s (±10 %) per call when there is no Retry-After.
+    assert.ok(elapsed >= 5000, `TrueForge waited between retries (${elapsed} ms)`);
+  });
+  for (let i = 0; i < 40 && !(await fs.stat(TURN_LOG).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 50));
+  const last = JSON.parse((await fs.readFile(TURN_LOG, 'utf8')).trim().split('\n').pop()!) as Record<string, unknown>;
+  assert.equal(last['status'], 'done');
+  assert.equal(last['retries'], 0);
+  assert.equal((last['attempts'] as unknown[]).length, 1, 'one TrueForge turn');
+});
+
+test('a model switch in TrueForge (scripts/use-models.sh) shows on the next turn without restarting the harness', async () => {
+  const { client } = await createClient(TF_URL);
+  const agentOf = async () => (await client.agents.list({ agentName: 'it-coder' })).data.find((a) => a.name === 'it-coder')!;
+  const original = await agentOf();
+  try {
+    await withHarness('it-coder', async (h, sid) => {
+      const first = ofType(await runTurn(h, sid, 'hello'), 'session')[0]!;
+      assert.equal(first.model, 'itgood/primary');
+      await client.agents.update(original.id, { description: original.description ?? '', manifest: { ...original.manifest, model: { ...original.manifest.model, name: 'itfb/fb' } } as never });
+      const second = ofType(await runTurn(h, sid, 'hello'), 'session')[0]!;
+      assert.equal(second.model, 'itfb/fb', 'the panel and fallback banner name the model TrueForge now uses');
+    });
+  } finally {
+    await client.agents.update(original.id, { description: original.description ?? '', manifest: original.manifest as never });
+  }
 });

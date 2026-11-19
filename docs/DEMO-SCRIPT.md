@@ -14,10 +14,17 @@ cd ~/flask-demo && git checkout -q 22d92470 && python3 -m venv .venv && echo ".v
 .venv/bin/pip install -q -e . "pytest==9.0.2" && git status --short    # must print nothing
 
 # 2. Fresh TrueForge database + setup (real models)
-cd ~/projects/forgeathon && source ~/.forge-keys.env     # NVIDIA_API_KEY, GROQ_API_KEY (never shown on screen)
-OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=1 \
+cd ~/projects/forgeathon && source ~/.forge-keys.env     # NVIDIA_API_KEY, OPENROUTER_API_KEY (never shown on screen)
+OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1","integrate.api.nvidia.com","openrouter.ai","api.groq.com"]' \
+  MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=4 \
   SQLITE_PATH=$HOME/forge-demo-$(date +%Y%m%d-%H%M).sqlite npx -y @truefoundry/trueforge@0.185.1   # terminal 1
-node scripts/setup-trueforge.mjs                                                                  # terminal 2
+scripts/use-models.sh nvidia-free                                                                 # terminal 2
+
+# 2b. Pre-flight: ONE tiny request to the primary model (max_tokens 1). Exit 0 = ready.
+node scripts/preflight-model.mjs
+#   "RATE LIMITED (HTTP 429 …)" → NVIDIA is throttling: switch and check again (no code change):
+#     scripts/use-models.sh openrouter-free && node scripts/preflight-model.mjs
+#   Only if you have added OpenRouter credit: scripts/use-models.sh openrouter-paid --paid-ok
 
 # 3. Command protection: approved commands run in bubblewrap (read-only checkout, no network). Must succeed:
 bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protection-ok
@@ -41,7 +48,14 @@ bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protec
 
 ## Task B: what to expect
 
-Models: NVIDIA `nemotron-3-ultra-550b-a55b` (primary), Groq `qwen3.8-27b` (fallback).
+Models (profile `nvidia-free`): NVIDIA `nemotron-3-ultra-550b-a55b` (primary), the same model on OpenRouter's free
+tier (`nvidia/nemotron-3-ultra-550b-a55b:free`, fallback). Groq `qwen3.8-27b` is a configured spare; it was the
+fallback until the rehearsal below showed its free tier cannot take Task B.
+
+**TrueForge's rate-limit cushion:** the start command's `MODEL_HTTP_MAX_RETRIES=4` makes TrueForge resend a 429'd
+model request up to 4 times (waits 1, 2, 4, 8 s when there is no `Retry-After`) before the turn sees an error.
+The wait is invisible on screen except as a pause, and it happens after the first diff or before it; never cut it
+before the first diff.
 
 **Measured on the current code** (QA run on `37fb675`, 2026-11-19, with bubblewrap protection and the
 recording settings: auto-approval on, budget 3):
@@ -58,9 +72,15 @@ recording settings: auto-approval on, budget 3):
 returned 429 (no `Retry-After`) at 9–15 requests/min; a second attempt after 5 minutes hit 429s before any edit,
 and Groq's free tier refused the fallback (413: 7,000 input tokens/min, B needs ~11k).
 
-**Before recording B:** leave the NVIDIA key idle for some hours (no tests, no probes), and record B first in a
-session if the 429s persist. The fallback cannot carry Task B on Groq's free tier; if NVIDIA throttles during the
-take, stop and re-record later rather than cutting.
+**Task C with the new fallback** (2026-11-19, after the rehearsal; the only real run that evening): NVIDIA 401 →
+OpenRouter, first diff 8.0 s, turn 9.2 s, 4 model requests (1 NVIDIA 401 with the invalid key, 3 OpenRouter),
+3/3 checks.
+
+**Before recording B:** leave the NVIDIA key idle for some hours (no tests, no probes) and run the pre-flight
+(step 2b). If NVIDIA throttles during the take, stop and re-record later rather than cutting. The OpenRouter
+fallback can carry B's requests, but its free tier allows 50 requests a day without credit and B takes about
+40–70, so a fallback during B may not finish. On `openrouter-free` the same cap applies to the primary: record
+B first that day.
 
 **Your clicks in Task B:** **Accept All** on each diff (expect 3–8) and **Allow once** on any command prompt
 without a warning (`python -c …`, `flask …`; 0–3). Deny any ⚠ Unrestricted prompt.
@@ -91,12 +111,13 @@ waiting *after* a diff has appeared; every such cut gets an on-screen caption **
 | 2:48–2:56 | **TrueForge session (required for eligibility)**: panel **Open TrueForge session** → hold ~8 s on Task B's turn with its tool calls (read/search/propose_edit/run_command) and approvals | Note this timestamp for the write-up. |
 | 2:56–3:08 | **Task B verification**: `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (lists `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | |
 | 3:08–3:14 | **Stop**: panel, send "Add type hints to every function in src/flask/cli.py", press **Stop** while it streams → status cancelled, no edits listed | "Stop cancels the TrueForge turn; nothing half-applied." |
-| 3:14–3:50 | **Task C, uncut from instruction to diff**: `git checkout -- . && git status --short` (empty) → terminal 2 `NVIDIA_API_KEY=invalid node scripts/setup-trueforge.mjs` → repeat Task A → banner "Primary model failed: … 401 … → switched to groq/qwen3-8-27b" → fallback's diff → **Reject All** → `git status --short` (empty) | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." Repo URL on the last frame. |
+| 3:14–3:50 | **Task C, uncut from instruction to diff**: `git checkout -- . && git status --short` (empty) → terminal 2 `scripts/use-models.sh nvidia-free --break-primary` (the profile you are using) → repeat Task A → banner "Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to openrouter/nemotron-3-ultra-free" (on `openrouter-free`: "… → switched to nvidia/nemotron-3-ultra") → fallback's diff (≈ 8 s measured) → **Reject All** → `git status --short` (empty) | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." Repo URL on the last frame. |
 
 Timing check: the C slot leaves ~22 s for instruction → diff. If the rehearsal's C wait is longer (QA measured
 29.5 s), take the difference from the 2:34–2:48 cut segment; never from an uncut segment. The hard limit is 4:00.
 
-After recording: restore the primary key (`source ~/.forge-keys.env && node scripts/setup-trueforge.mjs`) and
+After recording: restore the primary key (`source ~/.forge-keys.env && scripts/use-models.sh nvidia-free`, or the
+profile you recorded with) and
 write the real timestamps of each shot into the write-up scorecard (`docs/writeup/WRITEUP.md`, section 6).
 
 ## Exact instructions
@@ -104,6 +125,14 @@ write the real timestamps of each shot into the write-up scorecard (`docs/writeu
 - **A:** `Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.`
 - **B:** `Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "***". It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.`
 - **C:** repeat A.
+
+## If NVIDIA throttles on recording day
+
+Run the pre-flight (step 2b). On a 429, switch with `scripts/use-models.sh openrouter-free` and run the pre-flight
+again. The switch rewrites `config/models.json` and reruns the setup: no code change, no restart of TrueForge or
+VS Code; the next turn uses the new models and the panel and banner name them. Task C then breaks the OpenRouter
+key (`scripts/use-models.sh openrouter-free --break-primary`) and falls back to NVIDIA. `openrouter-paid`
+(`qwen/qwen3-coder-next`) is only for after adding OpenRouter credit, and needs `--paid-ok`.
 
 ## Without keys (rehearsal only)
 

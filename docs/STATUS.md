@@ -272,6 +272,27 @@ NVIDIA's 429s came at 9–15 requests in the preceding minute, without `Retry-Af
 below the documented 40/min after the day's use. Groq's free tier cannot run Task B as the fallback. A passing
 real Task B on the sandboxed build exists from QA's run on `37fb675` (first diff 105.5 s, turn 160.3 s).
 
+## Rate-limit resilience (2026-11-19, late, branch fix/rate-limit-resilience)
+
+No real NVIDIA requests (the key rests). Found in TrueForge 0.185.1 (`trueforge-core` `ssrfGuard.js`): model
+calls go through one retry layer (the AI SDK calls use `maxRetries: 0`). It resends on 408, 429, 503, 521–523,
+530, and for model calls also 409, 502, 520, 524, plus connect/headers timeouts; 401 and 500 are not resent.
+Backoff 1 s × 2^n ±10 %; `Retry-After`/`retry-after-ms` is honoured only up to 5 s (longer hints fall back
+to the backoff). Default `MODEL_HTTP_MAX_RETRIES=2`; we now start with 4 (≈ 15 s worst case, inside the 45 s
+watchdog). The resend happens before any output is streamed, so it is below the turn.
+
+| Change | Evidence |
+|---|---|
+| `MODEL_HTTP_MAX_RETRIES=4` in every start command | Integration test: two 429s (no `Retry-After`) per model call → turn done, no harness retry, one review, one apply, 6 model requests; fails with the old value 1 |
+| Fallback: `openrouter/nemotron-3-ultra-free`; Groq a spare | One real Task C (the only real run): NVIDIA 401 (invalid key) → OpenRouter, first diff 8.0 s, turn 9.2 s, 4 requests (1 NVIDIA, 3 OpenRouter), 3/3 checks |
+| Profiles `nvidia-free`, `openrouter-free`, `openrouter-paid` (`scripts/use-models.sh`) | `scripts/use-models.test.mjs`; setup validates every profile |
+| Pre-flight `scripts/preflight-model.mjs` | `scripts/preflight-model.test.mjs` (fake provider) |
+| Model name looked up per turn (switch shows without restart) | Integration test; fails with the old cache |
+| Provider hosts in `OUTBOUND_URL_ALLOWED_HOSTS` | On this WSL network DNS returns NAT64 `64:ff9b::` addresses for the providers, and TrueForge refused setup ("Outbound URL blocked"); listed hosts skip that check (setup verified, no model request) |
+
+Limits: OpenRouter serves the free Nemotron 3 Ultra from NVIDIA's endpoint (separate key and quota, same
+backend), and allows 50 free requests/day on an account without credit; one Task B takes about 40–70.
+
 ## Branch map
 
 The repository is public. `origin/main` is `37fb675` (history without commit trailers); later work on `main`
@@ -309,7 +330,7 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
 10. Fallback and errors also appear as VS Code notifications (the panel may be closed during an inline edit).
 11. The inline agent stops after the user rejects its change (avoids repeated proposals in Task C with a real model).
 12. Real models, free tiers only: NVIDIA `nemotron-3-ultra-550b-a55b` primary, Groq `qwen3.8-27b` fallback, OpenRouter
-    `nemotron-3-ultra-550b-a55b:free` spare (reasons in "Real-model run"). No `reasoningEfforts` configured for them
+    `nemotron-3-ultra-550b-a55b:free` spare (reasons in "Real-model run"). Superseded by decision 22. No `reasoningEfforts` configured for them
     (TrueForge only warns), so no reasoning parameter is sent to the providers.
 13. Requests and 429s are counted by a loopback metering proxy (`scripts/model-meter.mjs`), because TrueForge's
     internal HTTP retries are invisible to the harness. It records no bodies, headers or keys.
@@ -328,6 +349,9 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
 20. An unsettled tool holds the session until it finishes (origin), instead of our bounded settle-then-end.
 21. Retrieval keeps our shared ignore policy and 20,000-file listing; origin's coverage reporting and fail-closed
     unreadable `.gitignore` are ported onto it.
+22. Fallback is OpenRouter's free `nvidia/nemotron-3-ultra-550b-a55b:free` (Groq's free tier cannot take Task B);
+    Groq stays configured as a spare. Model pairs are named profiles in `config/models.example.json`, switched with
+    `scripts/use-models.sh`; the paid profile needs `--paid-ok`.
 
 ## Known issues and risks
 
@@ -335,8 +359,8 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
   133–259 s, 7–17 command approvals, 7–12 reviews before the command budget; with it: 47 requests, 204.5 s, 3
   commands, 6 reviews). The budget caps commands but not reviews: the model still splits `cli.py` into about 3
   proposals despite its instructions. NVIDIA's free tier is ≈ 40 requests/min account-wide: Task B peaked well below that, but two Task B
-  runs back to back could approach it (429s wait for `Retry-After`, then one retry, then fallback to Groq, whose
-  8000 tokens/min limit is small for Task B's ≈ 33k-token requests).
+  runs back to back could approach it (TrueForge resends a 429 up to 4 times, then the harness retries once, then
+  falls back to OpenRouter, whose free tier allows 50 requests/day without credit).
 - Compaction is configured but never triggered by the demo tasks.
 - A fallback starts a new TrueForge session (no earlier panel history).
 - `run_command` runs in bubblewrap (read-only checkout and host, private /tmp, no network, no keys) on top of
@@ -356,7 +380,9 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
 
 1. ~~Choose models + export keys~~ — done (`config/models.json`; keys from `~/.forge-keys.env`).
 2. ~~Setup + one real-model rehearsal~~ — done 2026-11-19, A/B/C green (see "Real-model run"). For the video:
-   start TrueForge (README step 2) on a fresh database, `source ~/.forge-keys.env`, `node scripts/setup-trueforge.mjs`.
+   start TrueForge (README step 5, with the provider hosts allowed) on a fresh database, `source ~/.forge-keys.env`,
+   `scripts/use-models.sh nvidia-free`, then the pre-flight `node scripts/preflight-model.mjs` (on 429:
+   `scripts/use-models.sh openrouter-free`).
    Video settings decided: `forge.autoApproveSafeCommands` on (narrowed list), budget 3, Deny ⚠ Unrestricted
    (see `docs/DEMO-SCRIPT.md`, "Task B: what to expect").
    ~~Real Task B validation with those settings~~: done 2026-11-19 night (6/6; numbers in DEMO-SCRIPT), but

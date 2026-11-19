@@ -1,5 +1,5 @@
 {
-  "$comment": "Real-model rehearsal on the final main with the video settings (auto-approve safe commands, budget 3, deny Unrestricted), run as A, then C, then B by scripts/smoke-real-model.mjs through scripts/model-meter.mjs (--min-interval-ms 1600). Session URLs point at the local TrueForge used for the rehearsal. videoUrl and videoTimestamp are filled in after recording. Task B did not pass in this rehearsal; see tasks[B].outcome.",
+  "$comment": "Real-model rehearsal on the final main with the video settings (auto-approve safe commands, budget 3, deny Unrestricted), run as A, then C, then B by scripts/smoke-real-model.mjs through scripts/model-meter.mjs (--min-interval-ms 1600). Session URLs point at the local TrueForge used for the rehearsal. videoUrl and videoTimestamp are filled in after recording. Task B did not pass in this rehearsal; see tasks[B].outcome. Task C was re-run once on 2026-11-19 at 20:13 UTC after the fallback switched to OpenRouter (commit b3dca29, same settings and meter); tasks[C] records that run and tasks[C].previousRun the Groq run from this rehearsal.",
   "repositoryCommit": "e5afea6e99e497514303847f4ad734cd5c835df8",
   "flaskCommit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
   "repositoryUrl": "https://github.com/riyajenson/forgeathon",
@@ -14,9 +14,16 @@
     },
     {
       "role": "fallback",
+      "name": "openrouter/nemotron-3-ultra-free",
+      "providerModelId": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "hosting": "OpenRouter, free model",
+      "approximateCostUsd": 0
+    },
+    {
+      "role": "spare",
       "name": "groq/qwen3-8-27b",
       "providerModelId": "qwen/qwen3.8-27b",
-      "hosting": "Groq, free tier",
+      "hosting": "Groq, free tier (the fallback in this rehearsal; cannot take Task B)",
       "approximateCostUsd": 0
     }
   ],
@@ -58,16 +65,17 @@
     {
       "task": "C",
       "mode": "real",
-      "model": "groq/qwen3-8-27b",
+      "model": "openrouter/nemotron-3-ultra-free",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfc27k5yqxc27atmcm8p8n",
-      "verification": "invalid NVIDIA key: 401, automatic fallback to Groq, proposal rejected, git status clean",
-      "recordedAt": "2026-11-19T17:58:46.830Z",
+      "repositoryCommit": "b3dca29b5c3546f5be7e208f11f169cf59ddd412",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tq2kr1bsask2fm6sp25jv1",
+      "verification": "invalid NVIDIA key: 401, automatic fallback to OpenRouter (same model, free tier), proposal rejected, git status clean",
+      "recordedAt": "2026-11-19T20:13:25.193Z",
       "videoTimestamp": "[mm:ss]",
-      "inputTokens": 6835,
-      "outputTokens": 393,
-      "firstDiffSeconds": 2.0,
-      "turnSeconds": 2.5,
+      "inputTokens": 11178,
+      "outputTokens": 623,
+      "firstDiffSeconds": 8.0,
+      "turnSeconds": 9.2,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -78,16 +86,47 @@
         "refusedByBudget": 0
       },
       "modelRequests": {
-        "total": 3,
+        "total": 4,
         "status429": 0,
         "otherErrors": 1,
         "byModel": {
           "nvidia nvidia/nemotron-3-ultra-550b-a55b": 1,
-          "groq qwen/qwen3.8-27b": 2
+          "openrouter nvidia/nemotron-3-ultra-550b-a55b:free": 3
         }
       },
       "checks": "3/3 passed",
-      "fallback": "nvidia/nemotron-3-ultra \u2192 groq/qwen3-8-27b: [Model Error] Request failed (401): Unauthorized"
+      "fallback": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (401): Unauthorized",
+      "previousRun": {
+        "model": "groq/qwen3-8-27b",
+        "passed": true,
+        "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfc27k5yqxc27atmcm8p8n",
+        "verification": "invalid NVIDIA key: 401, automatic fallback to Groq, proposal rejected, git status clean",
+        "recordedAt": "2026-11-19T17:58:46.830Z",
+        "inputTokens": 6835,
+        "outputTokens": 393,
+        "firstDiffSeconds": 2.0,
+        "turnSeconds": 2.5,
+        "reviews": {
+          "src/flask/helpers.py": 1
+        },
+        "edits": [],
+        "commands": {
+          "autoApproved": 0,
+          "prompted": 0,
+          "refusedByBudget": 0
+        },
+        "modelRequests": {
+          "total": 3,
+          "status429": 0,
+          "otherErrors": 1,
+          "byModel": {
+            "nvidia nvidia/nemotron-3-ultra-550b-a55b": 1,
+            "groq qwen/qwen3.8-27b": 2
+          }
+        },
+        "checks": "3/3 passed",
+        "fallback": "nvidia/nemotron-3-ultra → groq/qwen3-8-27b: [Model Error] Request failed (401): Unauthorized"
+      }
     },
     {
       "task": "B",
@@ -95,7 +134,7 @@
       "model": "nvidia/nemotron-3-ultra",
       "passed": false,
       "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfcfhx3w85hjgf7r1gg2nb",
-      "verification": "FAILED: B: turn done; B: \u22653 files changed incl. cli.py, test_cli.py, cli.rst",
+      "verification": "FAILED: B: turn done; B: ≥3 files changed incl. cli.py, test_cli.py, cli.rst",
       "recordedAt": "2026-11-19T17:59:00.736Z",
       "videoTimestamp": "[mm:ss]",
       "inputTokens": 627824,

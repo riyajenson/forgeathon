@@ -24,7 +24,7 @@ exports.run = async() => {
   const tfPort = await freePort(), mcpPort = await freePort(), url = 'http://127.0.0.1:'+tfPort;
   const server = spawn(process.env.FORGE_TEST_NODE,[process.env.FORGE_TEST_TRUEFORGE_CLI,'--port',String(tfPort)],{
     cwd:data, stdio:'ignore',env:{PATH: process.env.PATH,HOST:'127.0.0.1',SQLITE_PATH:path.join(data,'test.sqlite'),
-      OUTBOUND_URL_ALLOWED_HOSTS:'["127.0.0.1"]',MODEL_HTTP_CONNECT_TIMEOUT_MS:'3000',MODEL_HTTP_MAX_RETRIES:'1'}
+      OUTBOUND_URL_ALLOWED_HOSTS:'["127.0.0.1"]',MODEL_HTTP_CONNECT_TIMEOUT_MS:'3000',MODEL_HTTP_MAX_RETRIES:'4'}
   });
   const closed = once(server,'exit');
   const entry = path.dirname(require.resolve('forge-harness'));

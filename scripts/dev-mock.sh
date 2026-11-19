@@ -48,7 +48,7 @@ mkdir -p "$state"
 db="$state/trueforge-$(date +%Y%m%d-%H%M%S).sqlite"
 setsid node "$repo/src/harness/dist/src/harness/testing/demo-model-cli.js" --port "$model_port" > "$state/demo-model.log" 2>&1 &
 echo $! > "$state/demo-model.pid"
-OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=1 SQLITE_PATH="$db" \
+OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=4 SQLITE_PATH="$db" \
   setsid npx -y @truefoundry/trueforge@0.185.1 --port "$tf_port" > "$state/trueforge.log" 2>&1 &
 echo $! > "$state/trueforge.pid"
 [ "${1:-}" = "--background" ] || trap 'echo; stop_all' EXIT INT TERM

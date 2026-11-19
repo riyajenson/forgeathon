@@ -14,6 +14,26 @@ test('the committed example config is valid', () => {
   assert.deepEqual(validateConfig(example), []);
 });
 
+test('the example config: NVIDIA primary with an OpenRouter fallback that can carry Task B; Groq stays a spare; profiles are valid', () => {
+  assert.equal(example.agents.primaryModel, 'nvidia/nemotron-3-ultra');
+  assert.equal(example.agents.fallbackModel, 'openrouter/nemotron-3-ultra-free');
+  const fb = example.providers.find((p) => p.name === 'openrouter')!.models.find((m) => m.name === 'nemotron-3-ultra-free')!;
+  assert.ok((fb.contextLength ?? 0) >= 131072, 'room for Task B context');
+  assert.ok(example.providers.some((p) => p.name === 'groq'), 'Groq is still configured');
+  const profiles = example.profiles ?? {};
+  assert.deepEqual(Object.keys(profiles), ['nvidia-free', 'openrouter-free', 'openrouter-paid']);
+  assert.deepEqual({ primaryModel: profiles['nvidia-free']!.primaryModel, fallbackModel: profiles['nvidia-free']!.fallbackModel }, example.agents, 'the default profile is the committed default');
+  assert.equal(profiles['openrouter-paid']!.primaryModel, 'openrouter/qwen3-coder-next');
+  assert.deepEqual(Object.entries(profiles).filter(([, p]) => p.paid).map(([n]) => n), ['openrouter-paid'], 'only the paid profile is marked paid');
+});
+
+test('validateConfig checks every profile like agents', () => {
+  const problems = validateConfig({ ...example, profiles: { 'Bad': { primaryModel: 'openrouter/qwen3-coder-next', fallbackModel: 'openrouter/nemotron-3-ultra-free' }, 'x': { primaryModel: 'nope/m', fallbackModel: 'nvidia/nemotron-3-ultra' } } }).join('\n');
+  assert.match(problems, /profile name "Bad"/);
+  assert.match(problems, /profiles\.Bad: the fallback model must use a different provider/);
+  assert.match(problems, /profiles\.x\.primaryModel "nope\/m" is not a configured/);
+});
+
 test('validateConfig catches unknown models, same-provider fallback and bad names', () => {
   const bad: ModelsConfig = {
     providers: [{ type: 'custom', name: 'Bad_Name', baseUrl: 'http://x', models: [{ name: 'm', modelId: 'm' }] }, { type: 'openai', models: [{ name: 'a', modelId: 'a' }, { name: 'b', modelId: 'b' }] }],

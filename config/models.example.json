@@ -1,5 +1,5 @@
 {
-  "$comment": "Copy to config/models.json (gitignored), keep the providers you have keys for, and pick agents.primaryModel / agents.fallbackModel as '<provider name>/<model name>' from different providers. Keys are read from the environment variables named in apiKeyEnv and never stored in this file. Default (tested 2026-11-19 on Tasks A, B, C, free tiers only, $0): primary NVIDIA API Catalog nvidia/nemotron-3-ultra-550b-a55b, fallback Groq qwen/qwen3.8-27b, spare OpenRouter nvidia/nemotron-3-ultra-550b-a55b:free (configured, unused). The other providers are untested alternatives; check model ids against your account (GET <baseUrl>/models). Switching models is a config change plus `node scripts/setup-trueforge.mjs`.",
+  "$comment": "Copy to config/models.json (gitignored), or let scripts/use-models.sh <profile> write it. Keep the providers you have keys for and pick agents.primaryModel / agents.fallbackModel as '<provider name>/<model name>' from different providers. Keys are read from the environment variables named in apiKeyEnv and never stored in this file. Default profile nvidia-free (free tiers only, $0): primary NVIDIA API Catalog nvidia/nemotron-3-ultra-550b-a55b, fallback the same model on OpenRouter's free tier (nvidia/nemotron-3-ultra-550b-a55b:free: a different provider, key and quota whose context and token rate carry Task B; OpenRouter caps free models at 50 requests a day without credit); Groq qwen/qwen3.8-27b stays configured as a spare (its free tier allows 7,000 input tokens per minute, too few for Task B). The other providers are untested alternatives; check model ids against your account (GET <baseUrl>/models). Switching models is a config change plus `node scripts/setup-trueforge.mjs`, or `scripts/use-models.sh <profile>`.",
   "providers": [
     {
       "type": "custom",
@@ -29,7 +29,8 @@
       "apiKeyEnv": "OPENROUTER_API_KEY",
       "optional": true,
       "models": [
-        { "name": "nemotron-3-ultra-free", "modelId": "nvidia/nemotron-3-ultra-550b-a55b:free", "contextLength": 1000000, "maxOutputTokens": 65536 }
+        { "name": "nemotron-3-ultra-free", "modelId": "nvidia/nemotron-3-ultra-550b-a55b:free", "contextLength": 1000000, "maxOutputTokens": 65536 },
+        { "name": "qwen3-coder-next", "modelId": "qwen/qwen3-coder-next", "contextLength": 262144, "maxOutputTokens": 32768 }
       ]
     },
     {
@@ -60,6 +61,20 @@
   ],
   "agents": {
     "primaryModel": "nvidia/nemotron-3-ultra",
-    "fallbackModel": "groq/qwen3-8-27b"
+    "fallbackModel": "openrouter/nemotron-3-ultra-free"
+  },
+  "profiles": {
+    "nvidia-free": {
+      "primaryModel": "nvidia/nemotron-3-ultra", "fallbackModel": "openrouter/nemotron-3-ultra-free", "paid": false,
+      "note": "Default. NVIDIA API Catalog free tier; fallback OpenRouter free tier (same model, separate key and quota)."
+    },
+    "openrouter-free": {
+      "primaryModel": "openrouter/nemotron-3-ultra-free", "fallbackModel": "nvidia/nemotron-3-ultra", "paid": false,
+      "note": "If NVIDIA throttles (429). OpenRouter free tier as primary, NVIDIA as fallback. OpenRouter caps free-model requests per day."
+    },
+    "openrouter-paid": {
+      "primaryModel": "openrouter/qwen3-coder-next", "fallbackModel": "nvidia/nemotron-3-ultra", "paid": true,
+      "note": "PAID: needs OpenRouter credit. qwen/qwen3-coder-next primary, NVIDIA free tier fallback. Requires --paid-ok."
+    }
   }
 }

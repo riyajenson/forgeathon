@@ -1,5 +1,7 @@
 # Harness handoff — 2026-11-19 01:00 IST
 
+> **Historical.** Superseded by `docs/STATUS.md` and the README; kept as a record of the integration night.
+
 Working copy: `~/projects/forgeathon` (WSL). Nothing has been pushed. Every branch below builds; its tests
 pass; the tree is clean (only the editor's untracked `extension/` is present, untouched).
 

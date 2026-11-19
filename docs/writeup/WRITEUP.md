@@ -89,7 +89,8 @@ probes. Real run on a fresh TrueForge database (2026-11-19, each task once, all 
 requests counted by `scripts/model-meter.mjs`): **Task A** 3 requests, 11.4k input / 0.6k output tokens,
 8.5 s; **Task C** 401 from NVIDIA in 0.19 s → Groq, 3 requests, 6.8k / 0.4k tokens, 2.6 s; **Task B** (three
 runs before the command budget, all checks passed) 49–71 requests, 1.6–2.5M / 7.5–18.6k tokens, 133–259 s,
-7–17 command approvals and 7–12 reviews. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
+7–17 command approvals and 7–12 reviews; **with the guardrails** (video settings) 47 requests (peak 28/min),
+1.44M / 9.3k tokens, 204.5 s, 3 commands (4 more refused by the budget) and 6 reviews, all checks passed. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and then fall back to the
 `-fallback` agent in a new TrueForge session; nothing is retried after the turn changed the workspace. A
 watchdog stops a turn that streams nothing for 45 s. Every turn is logged (model, attempts, tokens, timing; no
@@ -111,9 +112,9 @@ refused connection 0.1–0.2 s; unreachable host 7.6 s (connect timeout 3 s, one
 | PDF write-up (15) | This document | — |
 
 Automated checks use a **scripted model**, so they show that the plumbing works, not that a real model
-solves the tasks. Without a GUI or keys: `scripts/e2e-mock.sh` (20/20 checks: Task A one-liner and docstring,
-`pytest tests/test_cli.py -q` 57 passed, `flask --help` lists `config`, masked JSON, the command budget and
-argument hint, Task C fallback + clean status); in a real VS Code window: `scripts/test-extension-e2e.sh` (Tasks A, B, Stop, C through the extension
+solves the tasks. Without a GUI or keys: `scripts/e2e-mock.sh` (21/21 checks: Task A one-liner and docstring,
+`pytest tests/test_cli.py -q` 57 passed, `flask --help` lists `config`, masked JSON, the command budget,
+argument hint and a denied ⚠ Unrestricted command, Task C fallback + clean status); in a real VS Code window: `scripts/test-extension-e2e.sh` (Tasks A, B, Stop, C through the extension
 code) and 4 extension suites. Harness: 98 unit tests (including cancel and retry races against an in-memory
 TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
 
@@ -131,8 +132,8 @@ TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
 
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split edits to one
-file over several reviews even with instructions against both, hence the harness command budget (not yet
-measured on a real run); each step resends the whole conversation, so token use grows with the number of
+file over several reviews even with instructions against both, hence the harness command budget (3 commands
+in the measured run; `cli.py` still took 3 reviews); each step resends the whole conversation, so token use grows with the number of
 steps. An optional setting auto-approves bare `pytest`/`git status|diff` only. Retrieval is lexical (no embeddings) and
 the symbol index covers Python only; ranking weights were tuned on Flask. A fallback starts a new TrueForge
 session, so it does not see earlier panel turns. **`run_command` is not sandboxed:** an approved command can

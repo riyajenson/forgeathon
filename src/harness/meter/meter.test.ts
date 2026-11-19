@@ -93,3 +93,23 @@ test('per-task request stats from the part of the meter log written during the t
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('min-interval pacing: concurrent requests on one route start at least the interval apart', async () => {
+  const model = new MockModel();
+  model.handler = () => ({ text: 'ok' });
+  await model.start();
+  const records: MeterRecord[] = [];
+  const meter = await startMeter({ routes: { demo: `http://127.0.0.1:${model.port}/v1/` }, minIntervalMs: 150, onRecord: (r) => records.push(r) });
+  try {
+    const url = `http://127.0.0.1:${meter.port}/demo/chat/completions`;
+    const body = { model: 'demo-primary', stream: false, messages: [{ role: 'user', content: 'hi' }] };
+    const replies = await Promise.all([1, 2, 3, 4].map(() => post(url, MOCK_KEY, body)));
+    assert.ok(replies.every((r) => r.status === 200));
+    const starts = records.map((r) => Date.parse(r.ts)).sort((a, b) => a - b);
+    for (let i = 1; i < starts.length; i++) assert.ok(starts[i]! - starts[i - 1]! >= 140, `starts ${starts[i]! - starts[i - 1]!} ms apart`);
+    assert.ok(records.filter((r) => (r.queuedMs ?? 0) > 0).length >= 3, 'later requests waited in the meter');
+  } finally {
+    await meter.close();
+    await model.stop();
+  }
+});

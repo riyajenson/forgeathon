@@ -19,6 +19,8 @@ export interface MeterRecord {
   inputTokens?: number;
   outputTokens?: number;
   error?: string;
+  /** Time the request waited in the meter to keep the route's pace (--min-interval-ms). */
+  queuedMs?: number;
 }
 
 export interface MeterSummary {
@@ -91,18 +93,34 @@ export async function meterRecordsSince(file: string | undefined, from: number):
 /** Keeps the last `max` characters of a stream: enough for the final SSE usage chunk. */
 const TAIL_CHARS = 16_384;
 
-export async function startMeter(o: { port?: number; routes: Record<string, string>; onRecord(r: MeterRecord): void }): Promise<Meter> {
+/**
+ * minIntervalMs: upstream requests on one route start at least this far apart (e.g. 1600 ms keeps a provider under
+ * 40 requests/min, NVIDIA's free tier). Requests wait in the meter; TrueForge only sees a slower response.
+ */
+export async function startMeter(o: { port?: number; routes: Record<string, string>; minIntervalMs?: number; onRecord(r: MeterRecord): void }): Promise<Meter> {
   const routes = new Map(Object.entries(o.routes).map(([k, v]) => [k, new URL(v.replace(/\/+$/, ''))]));
+  const nextSlot = new Map<string, number>();
+  const paced = (route: string): Promise<number> => {
+    const gap = o.minIntervalMs ?? 0;
+    if (gap <= 0) return Promise.resolve(0);
+    const now = Date.now();
+    const at = Math.max(now, nextSlot.get(route) ?? 0);
+    nextSlot.set(route, at + gap);
+    return new Promise((resolve) => setTimeout(() => resolve(at - now), at - now));
+  };
   const server = http.createServer((req, res) => {
     const [, routeName = '', ...rest] = (req.url ?? '/').split('/');
     const upstream = routes.get(routeName);
     if (!upstream) { res.writeHead(404).end('unknown route'); return; }
     const target = new URL(`${upstream.pathname}/${rest.join('/')}`, upstream);
-    const started = Date.now();
-    const base = { ts: new Date(started).toISOString(), route: routeName, path: `/${rest.join('/')}` };
+    let started = Date.now();
+    let base: { ts: string; route: string; path: string; queuedMs?: number } = { ts: '', route: routeName, path: `/${rest.join('/')}` };
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => {
+    req.on('end', async () => {
+      const queuedMs = await paced(routeName);
+      started = Date.now();
+      base = { ts: new Date(started).toISOString(), route: routeName, path: base.path, ...(queuedMs ? { queuedMs } : {}) };
       const body = Buffer.concat(chunks);
       let model: string | undefined;
       try { const m = (JSON.parse(body.toString('utf8')) as { model?: unknown }).model; if (typeof m === 'string') model = m; } catch { /* not JSON */ }

@@ -35,6 +35,9 @@ function lastToolMessage(req: MockRequest): string | undefined {
 }
 
 let currentSha = '';
+let rateLimited = 0;
+const TURN_LOG = path.join(os.tmpdir(), `forge-itest-turns-${process.pid}.jsonl`);
+process.env['FORGE_TURN_LOG'] = TURN_LOG;
 function script(req: MockRequest): MockReply {
   if (req.model === 'mock-fallback') return lastToolMessage(req) !== undefined ? { text: 'fallback finished' } : { text: 'fallback model answered' };
   const scenario = scenarioOf(req);
@@ -57,6 +60,10 @@ function script(req: MockRequest): MockReply {
     case 'edit-then-500':
       if (toolResult !== undefined) return { status: 500, message: 'mock upstream exploded' };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
+    case 'ratelimit':
+      // Rate-limited until the harness's own retry (TrueForge retries once by itself first).
+      if (rateLimited < 2) { rateLimited++; return { status: 429, message: 'Rate limit reached for requests. Please try again in 1s.' }; }
+      return { text: 'answered after the rate limit' };
     case 'stall':
       return { text: 'thinking ... ... ...', delayMsPerWord: 4000 };
     case 'slow':
@@ -396,4 +403,29 @@ test('run_command: approval prompt, execution, changed-file report', async () =>
     assert.ok(ofType(events, 'status').some((s) => /command exited 0; changed files: made\.txt/.test(s.detail ?? '')));
     assert.ok(mock.requests.some((r) => /Files changed by the command: made\.txt/.test(lastToolMessage(r) ?? '')));
   });
+});
+
+test('429 with a retry hint: one harness retry after the hinted delay, then success; turn log records it', async () => {
+  rateLimited = 0;
+  await fs.rm(TURN_LOG, { force: true });
+  await withHarness('it-coder', async (h, sid) => {
+    const t0 = Date.now();
+    const events = await runTurn(h, sid, 'SCENARIO:ratelimit');
+    assert.equal(doneOf(events).status, 'done');
+    const retrying = ofType(events, 'status').filter((s) => s.state === 'retrying');
+    assert.equal(retrying.length, 1);
+    assert.match(retrying[0]!.detail ?? '', /rate limited; retrying once in 1 s/);
+    assert.equal(ofType(events, 'fallback').length, 0, 'a rate limit is retried, not failed over, when the retry succeeds');
+    assert.ok(Date.now() - t0 >= 1000, 'waited for the hinted delay');
+  });
+  // The log line is appended right after `done` is delivered.
+  for (let i = 0; i < 40 && !(await fs.stat(TURN_LOG).then(() => true, () => false)); i++) await new Promise((r) => setTimeout(r, 50));
+  const lines = (await fs.readFile(TURN_LOG, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+  const last = lines[lines.length - 1]!;
+  assert.equal(last['status'], 'done');
+  assert.equal(last['retries'], 1);
+  assert.equal(last['fallback'], false);
+  assert.equal((last['attempts'] as unknown[]).length, 2);
+  assert.equal((last['attempts'] as Array<{ errorClass?: string }>)[0]!.errorClass, 'MODEL_UNAVAILABLE');
+  assert.doesNotMatch(JSON.stringify(last), /SCENARIO|answered after/, 'no prompt or model text in the log');
 });

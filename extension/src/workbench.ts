@@ -100,7 +100,9 @@ export class Workbench implements vscode.Disposable {
     try {
       const controller = this.controller ?? await (this.starting ??= this.connect().finally(() => { this.starting = undefined; }));
       if (run.signal.aborted) { this.panel.notice('Stopped before submitting'); return; }
-      await controller.run(mode, instruction, context);
+      // Off by default. Only listed commands without shell operators qualify (decided by the harness); edits are always reviewed.
+      const autoApproveSafeCommands = vscode.workspace.getConfiguration('forge').get<unknown>('autoApproveSafeCommands', false) === true;
+      await controller.run(mode, instruction, context, {autoApproveSafeCommands});
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Turn failed';
       this.panel.error(message); this.panel.notice('Failed'); throw error;

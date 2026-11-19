@@ -13,6 +13,25 @@ export function classifyTurnError(message: string | undefined): TurnErrorClass {
   return 'OTHER';
 }
 
+export const MAX_RETRY_DELAY_MS = 30_000;
+export const RATE_LIMIT_DEFAULT_DELAY_MS = 5_000;
+
+export function isRateLimited(message: string | undefined): boolean {
+  return /\(429\)|rate.?limit|too many requests/i.test(message ?? '');
+}
+
+/**
+ * Delay before the single retry. Rate-limit errors (429) honour a retry hint in the provider message
+ * ("Retry-After: 12", "try again in 1.5s", "retry after 800ms"), else wait 5 s; capped at 30 s.
+ */
+export function retryDelayMs(message: string | undefined, baseMs: number): number {
+  if (!isRateLimited(message)) return baseMs;
+  const m = /(?:retry[- ]after|try again in|retry in|wait)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|sec|seconds?)?/i.exec(message ?? '');
+  let ms = RATE_LIMIT_DEFAULT_DELAY_MS;
+  if (m) ms = Number(m[1]) * (/^m(s|illi)/i.test(m[2] ?? '') ? 1 : 1000);
+  return Math.min(MAX_RETRY_DELAY_MS, Math.max(baseMs, Math.ceil(ms)));
+}
+
 /** Short, safe text for the UI: drops anything after the first line and caps the length. */
 export function safeMessage(message: string | undefined, fallback = 'unknown error'): string {
   const first = (message ?? '').split('\n')[0]!.trim();

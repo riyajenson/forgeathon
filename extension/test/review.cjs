@@ -88,7 +88,17 @@ exports.run=async()=>{
   const fresh=make({proposalId:'new',callId:'new',path:path.basename(dir)+'/new.py',isNewFile:true,baseSha256:null,originalText:'',proposedText:'new',
     hunks:[{hunkId:'a',startOffset:0,endOffset:0,oldText:'',newText:'new'}]});
   edits.begin(fresh); edits.decide(fresh,{a:'accept'});
-  await check('failed_before_apply',request(fresh,{path:fresh.path,text:'new',textSha256:hash('new')}));
+  const created=await edits.applyText(request(fresh,{path:fresh.path,text:'new',textSha256:hash('new')}));
+  assert.equal(created.status,'saved');
+  assert.equal(await fs.readFile(path.join(dir,'new.py'),'utf8'),'new');
+  await edits.undo(created.undo.undoId);
+  await assert.rejects(fs.access(path.join(dir,'new.py')),'undo removes a created file');
+  const clash=make({proposalId:'clash',callId:'clash',path:path.basename(dir)+'/clash.py',isNewFile:true,baseSha256:null,originalText:'',proposedText:'mine',
+    hunks:[{hunkId:'a',startOffset:0,endOffset:0,oldText:'',newText:'mine'}]});
+  edits.begin(clash); edits.decide(clash,{a:'accept'});
+  await fs.writeFile(path.join(dir,'clash.py'),'theirs');
+  await check('stale',request(clash,{path:clash.path,text:'mine',textSha256:hash('mine')}));
+  assert.equal(await fs.readFile(path.join(dir,'clash.py'),'utf8'),'theirs','a file that appeared after review is never overwritten');
   edits.dispose(); failing.dispose();
-  console.log('PASS simulated turn, all six apply outcomes, partial approval, cancel gate, guarded undo, replay after save failure');
+  console.log('PASS simulated turn, all six apply outcomes, partial approval, cancel gate, guarded undo, replay after save failure, safe new-file creation');
 };

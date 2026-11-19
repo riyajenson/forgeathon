@@ -2,7 +2,11 @@
 // 3.1.3 checkout with a directory-backed editor port, answers every review, then runs the verifications.
 // Works with the scripted demo model (scripts/e2e-mock.sh) or real models (scripts/smoke-real-model.mjs).
 // Usage: node scripts/smoke-real-model.mjs [--flask DIR] [--tasks A,B,C] [--config config/models.json] [--meter-log FILE] [--keep]
-// --auto-approve-safe-commands: Task B with TurnRequest.autoApproveSafeCommands (listed commands are not prompted).
+// --auto-approve-safe-commands: Tasks B and G with TurnRequest.autoApproveSafeCommands (pytest, python -m pytest,
+// git status, git diff are not prompted).
+// Task G (mock model only, scripts/e2e-mock.sh): the guardrails. The scripted model sends a malformed propose_edit
+// twice on one file, then five commands; the harness must refuse the last two by the command budget (3) without
+// prompting, and spell out the propose_edit argument shape in the second refusal.
 // --meter-log: the log of scripts/model-meter.mjs, to report model requests and 429s per task (TrueForge's
 // internal retries included).
 import { execFile } from 'node:child_process';
@@ -22,6 +26,8 @@ import { meterRecordsSince, requestStats, type RequestStats } from '../meter/met
 const run = promisify(execFile);
 export const TASK_A = "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.";
 export const TASK_B = 'Add a new built-in CLI command flask config that prints the loaded application\'s configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "***". It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.';
+/** Mock model only: the scripted model's guardrail check (src/harness/testing/demo-script.ts). */
+const GUARD_TASK = 'guardrail check: try a malformed edit twice, then run five commands.';
 /** Flask 3.1.3 pins pytest 9.0.2 (uv.lock); newer pytest removed an internal tests/test_cli.py imports. */
 const PYTEST = 'pytest==9.0.2';
 
@@ -42,6 +48,10 @@ interface TurnStats {
   /** Commands the user had to approve, and commands the harness auto-approved (--auto-approve-safe-commands). */
   commandPrompts: number;
   autoApproved: number;
+  /** run_command calls refused by the turn's command budget (command_budget_reached). */
+  budgetReached: number;
+  /** The model's reply text. */
+  text: string;
   fallback?: string;
   error?: string;
   usage?: { inputTokens: number; outputTokens: number };
@@ -72,7 +82,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, contextFiles: [] };
+  const stats: TurnStats = { task, status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, text: '', contextFiles: [] };
   for await (const r of h.stream(req({ sessionId, turnId, afterSequence: 0 }))) {
     if (!r.ok) { stats.error = r.error.message; break; }
     const e: HarnessEvent = r.body;
@@ -104,6 +114,8 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
         await h.submitReview(req({ sessionId, turnId, callId: e.callId, kind: 'command' as const, allow: true }));
         break;
       }
+      case 'command_budget_reached': stats.budgetReached++; console.log(`  [${task}] command ${e.command} → refused: command budget (${e.budget}) reached`); break;
+      case 'text': stats.text = (stats.text + e.delta).slice(-4000); break;
       case 'edit_applied': stats.edits.push(`${e.result.path}: ${e.result.status}`); break;
       case 'fallback': stats.fallback = `${e.fromModel} → ${e.toModel}: ${e.reason}`; console.log(`  [${task}] FALLBACK ${stats.fallback}`); break;
       case 'error': stats.error = e.error.message; break;
@@ -149,7 +161,7 @@ async function main(): Promise<void> {
   const url = arg('--url', process.env['TRUEFORGE_URL'] ?? 'http://127.0.0.1:8790');
   const configPath = path.resolve(arg('--config', path.join(repo, 'config', 'models.json')));
   const meterLog = process.argv.includes('--meter-log') ? path.resolve(arg('--meter-log', '')) : undefined;
-  // Task B only, like the editor setting forge.autoApproveSafeCommands (default off).
+  // Tasks B and G, like the editor setting forge.autoApproveSafeCommands (default off).
   const autoApprove = process.argv.includes('--auto-approve-safe-commands');
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-smoke-'));
   const ws = path.join(work, 'flask');
@@ -219,6 +231,19 @@ async function main(): Promise<void> {
       } catch { /* not JSON */ }
       check('B: flask config prints JSON with secrets masked', masked, cfg.out.trim().slice(0, 200));
     }
+    if (tasks.includes('G')) {
+      await sh('git', ['checkout', '--', '.'], ws);
+      const g = await turn(h, ws, 'G', { mode: 'agent', instruction: GUARD_TASK, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) }, 'accept', meterLog);
+      results.push(g);
+      check('G: turn done', g.status === 'done', g.error ?? '');
+      const shown = g.commandPrompts + g.autoApproved;
+      check('G: 3 commands shown (budget 3), the other 2 refused without a prompt', shown === 3 && g.budgetReached === 2,
+        `${g.commandPrompts} asked, ${g.autoApproved} auto-approved, ${g.budgetReached} refused`);
+      check(`G: auto-approval ${autoApprove ? 'on: git status/diff not asked, python -c asked' : 'off: every shown command asked'}`,
+        autoApprove ? g.autoApproved === 2 && g.commandPrompts === 1 : g.autoApproved === 0 && g.commandPrompts === 3, '');
+      check('G: the model received both budget refusals and one shape hint', /2 command\(s\) refused by the budget; shape hint in 1 refusal/.test(g.text), g.text.trim().slice(-200));
+      check('G: no file changed', (await status()) === '', '');
+    }
     if (tasks.includes('C')) {
       await sh('git', ['checkout', '--', '.'], ws);
       const cfg = JSON.parse(await fs.readFile(configPath, 'utf8')) as ModelsConfig;
@@ -249,7 +274,7 @@ async function main(): Promise<void> {
 
   console.log('\n=== turns');
   for (const s of results) {
-    console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
+    console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, ${s.budgetReached} refused by the budget, tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
     if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
     if (s.contextUsed) console.log(`   context: ${s.contextUsed}: ${s.contextFiles.join(', ')}`);
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);

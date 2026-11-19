@@ -14,6 +14,8 @@ type EventBody =
   | { t: 'review_request'; proposal: EditProposal }
   // autoApproved (0.4.3): already allowed by the adapter (TurnRequest.autoApproveSafeCommands); show it, do not prompt.
   | { t: 'command_request'; callId: CallId; command: string; cwd: string; unrestricted?: boolean; warning?: string; autoApproved?: boolean }
+  // 0.4.4: the turn's command budget (TurnRequest.commandBudget) is used up; the command was refused to the model, not run.
+  | { t: 'command_budget_reached'; callId: CallId; command: string; budget: number }
   | { t: 'edit_applied'; result: ApplyTextResult }
   | { t: 'fallback'; fromModel: string; toModel: string; reason: string }
   | { t: 'error'; error: ProtocolError }

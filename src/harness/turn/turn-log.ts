@@ -29,6 +29,8 @@ export interface TurnRecord {
   /** Commands the user was asked to approve, and listed commands allowed by autoApproveSafeCommands. */
   commandPrompts: number;
   autoApprovedCommands: number;
+  /** run_command calls refused because the turn's command budget was used up. */
+  budgetRefusedCommands: number;
   inputTokens: number;
   outputTokens: number;
 }

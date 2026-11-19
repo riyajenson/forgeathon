@@ -2,7 +2,7 @@
 // and translates everything into the shared HarnessEvent stream.
 import type { CancelStatus, EditProposal, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
-import { isListedCommand, UNRESTRICTED_WARNING } from '../mcp/command';
+import { isAutoApprovableCommand, isListedCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
@@ -48,6 +48,27 @@ export type ReviewSubmitResult = { ok: true } | { ok: false; error: ProtocolErro
 
 const FALLBACK_SUFFIX = '-fallback';
 
+/** Default most run_command calls per turn (presented to the user or auto-approved), by mode. */
+export const DEFAULT_COMMAND_BUDGET = { agent: 3, inline: 1 } as const;
+
+export function commandBudgetOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>): number {
+  const b = req.commandBudget;
+  return typeof b === 'number' && Number.isInteger(b) && b >= 0 ? b : DEFAULT_COMMAND_BUDGET[req.mode];
+}
+
+export const COMMAND_BUDGET_EXHAUSTED =
+  'command budget for this turn exhausted; stop running commands, finish edits and summarize';
+
+/** propose_edit refusals caused by the shape of the arguments rather than by the file's content. */
+const ARGUMENT_ERROR_CODES = new Set(['INVALID_ARGS', 'INVALID_EDIT', 'OUTSIDE_WORKSPACE']);
+
+/** Added to a repeated argument-error refusal for the same file in one turn. */
+export const PROPOSE_EDIT_SHAPE_HINT =
+  'Expected arguments, exactly this shape: {"path": "src/pkg/module.py", "base_sha256": "<sha256 from read_file; \\"\\" for a new file>", ' +
+  '"edits": [{"old_text": "def f():\\n    return 1\\n", "new_text": "def f():\\n    return 2\\n"}], "summary": "one line"}. ' +
+  '"edits" is a JSON array of objects (not a string); each old_text is copied verbatim from the file and matches once. ' +
+  'Put every change to this file in that one call.';
+
 export class TurnRun {
   readonly buffer: TurnEventBuffer;
   private attempt: Attempt | undefined;
@@ -58,7 +79,11 @@ export class TurnRun {
   private readonly waiters = new Map<string, ReviewWaiter>();
   private readonly decided = new Map<string, ReviewDecision>();
   private finishedPromise: Promise<void> | undefined;
-  private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, commandPrompts: 0, autoApproved: 0, attempts: [] as AttemptRecord[] };
+  private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, commandPrompts: 0, autoApproved: 0, budgetRefused: 0, attempts: [] as AttemptRecord[] };
+  /** run_command calls presented (prompted or auto-approved) this turn, counted against the command budget. */
+  private commandsUsed = 0;
+  /** Files with a propose_edit refused this turn for an argument error. */
+  private readonly argumentErrors = new Set<string>();
 
   constructor(readonly req: TurnRequest, private readonly deps: TurnDeps) {
     this.buffer = new TurnEventBuffer({ sessionId: req.sessionId, turnId: req.turnId });
@@ -93,7 +118,7 @@ export class TurnRun {
       time: new Date().toISOString(), sessionId: this.req.sessionId, turnId: this.req.turnId, mode: this.req.mode,
       status: done && done.t === 'done' ? done.status : 'error', ms, attempts: this.log.attempts,
       retries: this.log.retries, fallback: this.log.fallback, toolCalls: this.log.toolCalls, reviews: this.log.reviews,
-      commandPrompts: this.log.commandPrompts, autoApprovedCommands: this.log.autoApproved,
+      commandPrompts: this.log.commandPrompts, autoApprovedCommands: this.log.autoApproved, budgetRefusedCommands: this.log.budgetRefused,
       inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
     });
   }
@@ -321,7 +346,16 @@ export class TurnRun {
       if (call.tool === 'propose_edit') {
         const args = call.toolArgs as ProposeEditArgs;
         const built = await buildProposal(this.deps.port, args);
-        if (!built.ok) { deny(`${built.code}: ${built.message}`); continue; }
+        if (!built.ok) {
+          let reason = `${built.code}: ${built.message}`;
+          if (ARGUMENT_ERROR_CODES.has(built.code)) {
+            const file = typeof args?.path === 'string' ? args.path.trim() : '';
+            if (this.argumentErrors.has(file)) reason += `. ${PROPOSE_EDIT_SHAPE_HINT}`;
+            this.argumentErrors.add(file);
+          }
+          deny(reason);
+          continue;
+        }
         const p = built.proposal;
         const callRef = { sessionId: this.req.sessionId, turnId: this.req.turnId, callId: call.id };
         const hunkIds = p.hunks.map((h) => hunkId(call.id, h.index));
@@ -352,10 +386,19 @@ export class TurnRun {
         const command = typeof a.command === 'string' ? a.command : '';
         const cwd = typeof a.cwd === 'string' && a.cwd ? a.cwd : '.';
         if (!command) { deny('INVALID_ARGS: command must be a non-empty string'); continue; }
+        const budget = commandBudgetOf(this.req);
+        if (this.commandsUsed >= budget) {
+          // Hard per-turn limit, enforced here rather than trusted to the instructions: refused without a prompt.
+          this.log.budgetRefused++;
+          this.buffer.emit({ t: 'command_budget_reached', callId: call.id, command, budget });
+          deny(`COMMAND_BUDGET_EXHAUSTED: ${COMMAND_BUDGET_EXHAUSTED} (limit ${budget} per turn; nothing was run)`);
+          continue;
+        }
+        this.commandsUsed++;
         this.buffer.emit({ t: 'status', state: 'awaiting_review', detail: command.slice(0, 120) });
         const listed = isListedCommand(command);
-        if (listed && this.req.autoApproveSafeCommands === true) {
-          // Opt-in: a listed verification command (no shell operators) is allowed without a prompt, and shown.
+        if (this.req.autoApproveSafeCommands === true && isAutoApprovableCommand(command)) {
+          // Opt-in: pytest / python -m pytest / git status / git diff (no shell operators) run without a prompt, and are shown.
           this.log.autoApproved++;
           this.buffer.emit({ t: 'command_request', callId: call.id, command, cwd, autoApproved: true });
           scope.commands.record(approvalKey('run_command', call.toolArgs), { callRef: { sessionId: this.req.sessionId, turnId: this.req.turnId, callId: call.id }, command, cwd });

@@ -14,6 +14,9 @@ const path = require('node:path');
   try {
     await runTests({
       version: process.env.FORGE_VSCODE_VERSION || '1.146.0',
+      // One shared download for every checkout; the first download (~390 MB) can be slow.
+      cachePath: process.env.FORGE_VSCODE_CACHE || path.join(os.homedir(), '.cache', 'forge-vscode'),
+      timeout: 120000,
       extensionDevelopmentPath: ext,
       extensionTestsPath: test,
       extensionTestsEnv: { ...process.env },

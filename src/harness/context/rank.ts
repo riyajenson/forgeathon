@@ -61,6 +61,8 @@ function docMentions(doc: IndexedFile, source: IndexedFile, symbols: string[]): 
   return hits;
 }
 
+const SUPPORTING_WEIGHT = 0.6;
+const isSupporting = (path: string) => /(^|\/)(tests?|docs?)\//.test(path) || /\.(rst|md)$/.test(path) || /(^|\/)test_[^/]*\.py$/.test(path);
 const isCode = (path: string) => !path.startsWith('tests/') && !path.startsWith('docs/') && /\.(py|ts|js|go|rs|java|rb|php|cs|cpp|c)$/.test(path);
 
 export function rankFiles(index: WorkspaceIndex, task: string): { files: RankedFile[]; queryTerms: string[] } {
@@ -96,6 +98,9 @@ export function rankFiles(index: WorkspaceIndex, task: string): { files: RankedF
       reasons.push(`file name matches ${pathHits.map((t) => `"${t}"`).join(', ')}`);
     }
     if (isCode(path)) score *= CODE_PRIOR;
+    // Docs and tests restate the task's vocabulary; their own match counts for less, and they rise
+    // mainly through the neighbour bonus from the code they document or test.
+    else if (isSupporting(path)) score *= SUPPORTING_WEIGHT;
     if (HISTORY_FILE.test(path)) {
       score *= 0.3;
       reasons.push('changelog: down-weighted');

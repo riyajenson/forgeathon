@@ -137,7 +137,9 @@ test('approvalKey ignores keys the MCP server would strip', () => {
 test('tools/list exposes the five tools with read-only annotations on the readers', async () => {
   const { tools } = await client.listTools();
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  assert.deepEqual(Object.keys(byName).sort(), ['gather_context', 'propose_edit', 'read_file', 'run_command', 'search_workspace']);
+  assert.deepEqual(Object.keys(byName).sort(), ['find_symbol', 'gather_context', 'list_files', 'propose_edit', 'read_file', 'run_command', 'search_workspace']);
+  assert.equal(byName['find_symbol']!.annotations?.readOnlyHint, true);
+  assert.equal(byName['list_files']!.annotations?.readOnlyHint, true);
   assert.equal(byName['gather_context']!.annotations?.readOnlyHint, true);
   assert.equal(byName['run_command']!.annotations?.destructiveHint, true);
   assert.equal(byName['read_file']!.annotations?.readOnlyHint, true);
@@ -172,6 +174,20 @@ test('search_workspace: text, regex, prefix', async () => {
   assert.match(prefixed.text, /docs\/cli\.rst:4: flask routes/);
   assert.doesNotMatch(prefixed.text, /src\//);
   assert.equal(errorCode((await call('search_workspace', { query: '(', regex: true })).text), 'INVALID_ARGS');
+});
+
+test('deferred tools: find_symbol (exact, qualified, fuzzy) and list_files', async () => {
+  const exact = await call('find_symbol', { name: 'get_debug_flag' });
+  assert.match(exact.text, /^1 definition\(s\) of "get_debug_flag":\nsrc\/flask\/helpers\.py:1-4  function get_debug_flag: def get_debug_flag\(\) -> bool:/);
+  const fuzzy = await call('find_symbol', { name: 'dotenv' });
+  assert.match(fuzzy.text, /names containing "dotenv"/);
+  assert.match(fuzzy.text, /get_load_dotenv/);
+  assert.match((await call('find_symbol', { name: 'nothing_here' })).text, /No Python definition/);
+  const all = await call('list_files', {});
+  assert.match(all.text, /docs\/cli\.rst\nsrc\/flask\/helpers\.py/);
+  const docs = await call('list_files', { prefix: 'docs' });
+  assert.match(docs.text, /^1 file\(s\) under docs:\ndocs\/cli\.rst$/);
+  assert.equal(errorCode((await call('list_files', { prefix: '../x' })).text), 'OUTSIDE_WORKSPACE');
 });
 
 test('propose_edit without a review decision writes nothing (NO_REVIEW_DECISION)', async () => {

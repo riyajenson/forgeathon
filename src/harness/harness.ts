@@ -10,6 +10,7 @@ import { startMcpServer, type RunningMcpServer } from './mcp/server';
 import { isTrueForgeUnreachable, safeMessage } from './trueforge/errors';
 import { createClient, type TrueForgeClient, type TrueForgeSdk } from './trueforge/sdk';
 import { TurnRun } from './turn/turn';
+import { defaultTurnLogPath } from './turn/turn-log';
 
 export interface HarnessOptions {
   /** TrueForge base URL. Default http://127.0.0.1:8790. */
@@ -28,6 +29,9 @@ export interface HarnessOptions {
   contextBudgetTokens?: number;
   /** Name of the MCP connector registered in TrueForge. Default "vscode". */
   connectorName?: string;
+  /** JSON-lines log of every turn (models, attempts, tokens, timing; no content). Default ~/.forge/turns.jsonl
+   *  or FORGE_TURN_LOG; false disables it. */
+  turnLogPath?: string | false;
 }
 
 /** Connector name the agent definitions reference. */
@@ -162,6 +166,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       contextBudgetTokens: this.options.contextBudgetTokens ?? 8000,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: 10000,
+      turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,
     });
     session.turns.set(b.turnId, run);
     session.active = run;

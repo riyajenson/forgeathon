@@ -7,6 +7,8 @@ export class AgentViewState {
   status = 'Ready';
   banner = '';
   trace = '';
+  model = '';
+  usage = '';
   busy = false;
   reviewing = false;
   tools: {id: string; label: string; detail: string}[] = [];
@@ -16,7 +18,7 @@ export class AgentViewState {
 
   update(e: HarnessEvent) {
     switch (e.t) {
-      case 'session': this.trace = e.traceUrl; break;
+      case 'session': this.trace = e.traceUrl; this.model = e.model + ' (' + e.agentName + ')'; break;
       case 'turn_started': this.status = 'Running'; break;
       case 'status': this.status = e.detail || e.state; break;
       case 'text': this.text = (this.text + e.delta).slice(-100000); break;
@@ -38,7 +40,10 @@ export class AgentViewState {
         break;
       case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; break;
       case 'error': this.banner = e.error.message + '; workspace effect: ' + e.error.workspaceEffect; break;
-      case 'done': this.status = e.summary || e.status; this.busy = this.reviewing = false; this.command = undefined; break;
+      case 'done':
+        this.status = e.summary || e.status; this.busy = this.reviewing = false; this.command = undefined;
+        if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
+        break;
     }
   }
 }
@@ -93,7 +98,7 @@ button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
 <section id="context" hidden><h2>Context</h2><p id="budget"></p><ul id="selected"></ul><h2 id="skippedTitle">Skipped</h2><ul id="skipped"></ul></section>

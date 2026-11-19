@@ -6,7 +6,8 @@ import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
 import { Attempt, type AttemptResult, type CallDecision, type PendingCall } from '../trueforge/attempt';
-import { classifyTurnError, isTrueForgeUnreachable, safeMessage } from '../trueforge/errors';
+import { classifyTurnError, isRateLimited, isTrueForgeUnreachable, retryDelayMs, safeMessage } from '../trueforge/errors';
+import { appendTurnLog, type AttemptRecord } from './turn-log';
 import { traceUrl, type TrueForgeClient, type TrueForgeSdk } from '../trueforge/sdk';
 import { TurnEventBuffer } from './event-buffer';
 import { buildTurnInput } from './prompt';
@@ -30,6 +31,8 @@ export interface TurnDeps {
   contextBudgetTokens: number;
   retryDelayMs: number;
   settleMs: number;
+  /** JSON-lines turn log (no content); undefined disables it. */
+  turnLogPath?: string | undefined;
 }
 
 type ReviewWaiter = {
@@ -54,6 +57,7 @@ export class TurnRun {
   private readonly waiters = new Map<string, ReviewWaiter>();
   private readonly decided = new Map<string, ReviewDecision>();
   private finishedPromise: Promise<void> | undefined;
+  private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, attempts: [] as AttemptRecord[] };
 
   constructor(readonly req: TurnRequest, private readonly deps: TurnDeps) {
     this.buffer = new TurnEventBuffer({ sessionId: req.sessionId, turnId: req.turnId });
@@ -64,10 +68,32 @@ export class TurnRun {
   }
 
   start(): Promise<void> {
-    this.finishedPromise ??= this.run().catch((e) => {
-      this.fail({ code: 'internal', message: safeMessage((e as Error).message), retryable: false, workspaceEffect: 'unknown' });
-    });
+    const t0 = Date.now();
+    this.finishedPromise ??= this.run()
+      .catch((e) => {
+        this.fail({ code: 'internal', message: safeMessage((e as Error).message), retryable: false, workspaceEffect: 'unknown' });
+      })
+      .then(() => this.writeLog(Date.now() - t0));
     return this.finishedPromise;
+  }
+
+  private record(agent: string, model: string, runtimeSessionId: string, r: AttemptResult, since: number, errorClass?: string): void {
+    this.log.attempts.push({
+      agent, model, runtimeSessionId, status: r.status, ms: Date.now() - since,
+      ...(errorClass ? { errorClass } : {}),
+      ...(r.usage ? { inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens } : {}),
+    });
+  }
+
+  private async writeLog(ms: number): Promise<void> {
+    const done = this.buffer.snapshot().find((e) => e.t === 'done');
+    const sum = (k: 'inputTokens' | 'outputTokens') => this.log.attempts.reduce((s, a) => s + (a[k] ?? 0), 0);
+    await appendTurnLog(this.deps.turnLogPath, {
+      time: new Date().toISOString(), sessionId: this.req.sessionId, turnId: this.req.turnId, mode: this.req.mode,
+      status: done && done.t === 'done' ? done.status : 'error', ms, attempts: this.log.attempts,
+      retries: this.log.retries, fallback: this.log.fallback, toolCalls: this.log.toolCalls, reviews: this.log.reviews,
+      inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
+    });
   }
 
   // ------------------------------------------------------------------ review & cancel (editor → harness)
@@ -153,12 +179,16 @@ export class TurnRun {
       this.scope = scope;
       if (this.cancelRequested) scope.cancel();
 
+      const attemptStart = Date.now();
       const result = await this.runAttempt(runtimeSessionId, input, scope);
       const settled = await scope.settle(this.deps.settleMs);
       if (!settled) this.deps.port.log('warn', `tool calls still running ${this.deps.settleMs} ms after the turn ended`);
       const wrote = scope.writes > 0;
       const effect: ProtocolError['workspaceEffect'] = !settled ? 'unknown' : wrote ? 'changed' : 'unchanged';
 
+      if (result.status === 'done' || (result.status === 'cancelled' && this.cancelRequested)) {
+        this.record(agent, model, runtimeSessionId, result, attemptStart);
+      }
       if (result.status === 'done') {
         return void emit({ t: 'done', status: 'done', ...(result.summary ? { summary: result.summary.slice(0, 2000) } : {}), ...(result.usage ? { usage: result.usage } : {}) });
       }
@@ -170,11 +200,15 @@ export class TurnRun {
         : result.status === 'cancelled' ? `TrueForge stopped the turn (${result.cancelReason || 'cancelled'})` : safeMessage(result.message);
       const cls = result.watchdog ? 'MODEL_UNAVAILABLE' : result.status === 'error' ? classifyTurnError(result.message) : 'OTHER';
 
+      this.record(agent, model, runtimeSessionId, result, attemptStart, cls);
       if (!wrote && !this.cancelRequested && cls !== 'OTHER') {
         if (cls === 'MODEL_UNAVAILABLE' && !retried && !onFallback) {
           retried = true;
-          emit({ t: 'status', state: 'retrying', detail: `${message}; retrying once in ${Math.round(this.deps.retryDelayMs / 1000)} s` });
-          await this.sleep(this.deps.retryDelayMs);
+          this.log.retries++;
+          const delay = retryDelayMs(result.message, this.deps.retryDelayMs);
+          const why = isRateLimited(result.message) ? 'rate limited' : message;
+          emit({ t: 'status', state: 'retrying', detail: `${why}; retrying once in ${Math.round(delay / 100) / 10} s` });
+          await this.sleep(delay);
           fresh = false;
           continue;
         }
@@ -183,6 +217,7 @@ export class TurnRun {
           const toModel = await this.deps.agentModel(toAgent).catch(() => toAgent);
           emit({ t: 'status', state: 'fallback', detail: message });
           emit({ t: 'fallback', fromModel: model, toModel, reason: message });
+          this.log.fallback = true;
           agent = toAgent;
           onFallback = true;
           fresh = true;
@@ -211,6 +246,7 @@ export class TurnRun {
             emit({ t: 'text', messageId: e.messageId, delta: e.delta });
             break;
           case 'tool_call':
+            this.log.toolCalls++;
             emit({
               t: 'tool_call', callId: e.call.id, tool: toolIdOf(e.call.tool), displayName: e.call.tool,
               summary: summarizeArgs(e.call.tool, e.call.toolArgs), requiresApproval: APPROVAL_TOOLS.has(e.call.tool),
@@ -264,6 +300,7 @@ export class TurnRun {
           hunks: p.hunks.map((h) => ({ hunkId: hunkId(call.id, h.index), startOffset: h.start, endOffset: h.end, oldText: h.oldText, newText: h.newText })),
         };
         this.buffer.emit({ t: 'status', state: 'awaiting_review', detail: p.path });
+        this.log.reviews++;
         this.buffer.emit({ t: 'review_request', proposal });
         const d = await this.waitFor(call.id, { kind: 'edit', hunkIds, proposalId: call.id });
         if (d === 'cancelled' || d.kind !== 'edit') return 'cancelled';

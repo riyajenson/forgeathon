@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 
 export type MockReply =
   | { text: string; delayMsPerWord?: number }
-  | { toolCalls: Array<{ name: string; args: unknown }> }
+  | { toolCalls: Array<{ name: string; args: unknown }>; text?: string; delayMsPerWord?: number }
   | { status: number; message: string };
 
 export interface MockRequest {
@@ -37,6 +37,8 @@ export function scenarioOf(req: MockRequest): string {
 export class MockModel {
   readonly requests: MockRequest[] = [];
   handler: (req: MockRequest) => MockReply = () => ({ text: 'ok' });
+  /** Default delay between streamed words (demo mode uses it so streaming is visible). */
+  delayMsPerWord = 0;
   private server: http.Server | undefined;
   port = 0;
 
@@ -86,17 +88,19 @@ export class MockModel {
     rs.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     rs.write(chunk({ role: 'assistant', content: '' }));
     let finish = 'stop';
+    const delay = (reply.delayMsPerWord ?? this.delayMsPerWord) || 0;
+    if (reply.text) {
+      for (const word of reply.text.split(' ')) {
+        if (rs.destroyed) return;
+        rs.write(chunk({ content: `${word} ` }));
+        if (delay) await new Promise((r) => setTimeout(r, delay));
+      }
+    }
     if ('toolCalls' in reply) {
       finish = 'tool_calls';
       reply.toolCalls.forEach((c, i) => {
         rs.write(chunk({ tool_calls: [{ index: i, id: `call_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 8)}`, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } }] }));
       });
-    } else {
-      for (const word of reply.text.split(' ')) {
-        if (rs.destroyed) return;
-        rs.write(chunk({ content: `${word} ` }));
-        if (reply.delayMsPerWord) await new Promise((r) => setTimeout(r, reply.delayMsPerWord));
-      }
     }
     rs.write(chunk({}, finish));
     rs.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: req.model, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })}\n\n`);

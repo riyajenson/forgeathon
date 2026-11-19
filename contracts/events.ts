@@ -12,7 +12,7 @@ type EventBody =
   | { t: 'tool_result'; callId: CallId; ok: boolean; summary: string }
   | { t: 'context_report'; report: ContextReport }
   | { t: 'review_request'; proposal: EditProposal }
-  | { t: 'command_request'; callId: CallId; command: string; cwd: string }
+  | { t: 'command_request'; callId: CallId; command: string; cwd: string; unrestricted?: boolean; warning?: string }
   | { t: 'edit_applied'; result: ApplyTextResult }
   | { t: 'fallback'; fromModel: string; toModel: string; reason: string }
   | { t: 'error'; error: ProtocolError }

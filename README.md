@@ -173,12 +173,20 @@ Which models were used for what:
 ### 5. Start TrueForge (keep this terminal open)
 
 ```bash
-OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=1 \
+OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=4 \
   SQLITE_PATH=$HOME/forge-data/trueforge.sqlite npx -y @truefoundry/trueforge@0.185.1
 ```
 
 `OUTBOUND_URL_ALLOWED_HOSTS` lets TrueForge reach the editor's MCP server on 127.0.0.1; its SSRF guard blocks
 loopback otherwise.
+
+`MODEL_HTTP_MAX_RETRIES=4` is the rate-limit cushion. TrueForge 0.185.1 resends a model request that gets 429,
+408, 409, 502, 503 or a 52x/530 gateway error up to that many times, before any output is streamed. It honours a
+`Retry-After` of up to 5 s; otherwise it waits 1, 2, 4, 8 s (±10 %), so about 15 s at most, inside the
+harness's 45 s silence limit. These resends happen below the turn: no tool runs twice, and the harness's own
+rule (at most one retry, never after a change was applied) is unchanged. 401 and 500 are not resent, so the
+fallback for an invalid key is still immediate; a host that never answers (connect timeouts are resent too)
+takes about 30 s before the fallback.
 
 ### 6. Load providers, connector and agents
 
@@ -414,7 +422,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
 | `NVIDIA_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` | (none) | Provider keys, read by the setup script; only those your config uses are needed |
 | `OUTBOUND_URL_ALLOWED_HOSTS` | (none) | TrueForge: must include `127.0.0.1` so it can call the editor's MCP server |
-| `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults | We use `3000` and `1`: fail fast so the harness can fall back |
+| `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults (5000, 2) | We use `3000` and `4`: a short connect timeout, and TrueForge resends a rate-limited (429) model request up to 4 times (about 15 s) before the turn sees the error |
 | `SQLITE_PATH` | TrueForge default | TrueForge's database; a new path starts fresh |
 | `FORGE_FLASK_DIR` | `~/projects/flask-3.1.3` | Flask checkout for the context-ranking unit test |
 

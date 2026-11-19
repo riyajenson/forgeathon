@@ -38,7 +38,7 @@ node scripts/setup-trueforge.mjs                                                
 | 0:15–0:55 | **Task A, uncut from instruction to diff** — open `src/flask/helpers.py`, select `get_debug_flag` (lines 28–33), `Ctrl+Alt+I`, paste instruction A, Enter → progress → diff editor + "Review 2 hunks" → **Choose Hunks** (show the two hunks) → accept both | Point at the per-hunk picker. |
 | 0:55–1:05 | **Task A verification** — terminal: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` → `False` | |
 | 1:05–2:20 | **Task B, uncut from instruction to the first diff** — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: budget used/8000, `src/flask/cli.py` ranked first with its reason, skipped items) → tool calls (find_symbol, read_file, …) → diff for `src/flask/cli.py` → Accept All → `tests/test_cli.py` → Accept All → `docs/cli.rst` → Accept All → command approval in the panel → **Allow once** → summary | "No file names in the request; the agent found three files." Cut model waiting between diffs if needed. |
-| 2:20–2:35 | **TrueForge session** — panel button **Open TrueForge session** (or the Sessions tab): the turn, tool calls including `call_tool → find_symbol`, the approvals | Brief. |
+| 2:20–2:35 | **TrueForge session (required for eligibility)** — panel button **Open TrueForge session** (or the Sessions tab): hold ~10 s on Task B's turn with its list of tool calls (read/search/propose_edit/run_command, and `call_tool` if the model used deferred tools) and the approvals | Brief; note the timestamp for the write-up. |
 | 2:35–2:55 | **Task B verification** — `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (shows `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | |
 | 2:55–3:10 | **Cancel** — panel: send any request (e.g. "Add type hints to every function in src/flask/cli.py"), press **Stop** while it streams or at the first review → status cancelled, review closed; `git diff --stat` unchanged from before | "Stop cancels the TrueForge turn; nothing half-applied." |
 | 3:10–3:40 | **Task C** — `git checkout -- .` (clean baseline, `git status` empty) → terminal 2: `GEMINI_API_KEY=invalid node scripts/setup-trueforge.mjs` (use your primary's variable) → repeat Task A → banner "Primary model failed: … 401 … → switched to …" → fallback's diff → **Reject All** → `git status` (empty) | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." |
@@ -56,5 +56,5 @@ timestamps of each shot for the write-up scorecard (`docs/writeup/WRITEUP.md`, s
 ## Without keys (rehearsal only)
 
 `scripts/dev-mock.sh` gives the same flow with the scripted demo model (Task C: `scripts/dev-mock.sh
---break-primary` / `--restore`). Do not submit a video recorded with the demo model unless no real model
-is available — and say so in the write-up if you do.
+--break-primary` / `--restore`). **Rehearsal only: the submitted video must use real models.** A real model
+may choose different tools, hunks and timing than the shot list; record what actually happens.

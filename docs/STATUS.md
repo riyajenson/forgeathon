@@ -1,6 +1,6 @@
 # Project status
 
-Updated: 2026-11-19 ~11:45 IST (final for today). The repository is submission-ready except for the
+Updated: 2026-11-19 (review fixes). **Stopped early (usage limit):** the independent review was triaged (`docs/review/codex-review-triage.md`) and blockers B2-B4 plus I1-I10 fixed and merged; all suites green on main (78 unit, 17 integration, 4 extension suites, e2e-mock 15/15, UI e2e 4/4). Not yet redone: the fresh-clone walkthrough, the rest of this file and `docs/SUBMISSION-CHECKLIST.md` (some rows below predate the fixes). The human steps at the end still apply.
 human steps at the end of this file (models and keys, a real-model rehearsal, push, video, PDF, form).
 
 ## MVP checklist

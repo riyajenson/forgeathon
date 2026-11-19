@@ -43,11 +43,14 @@ used only by the tool call of the same session, once, with the same arguments.
 **Diff safety.** `propose_edit` never writes by itself. The approved text (only accepted hunks) goes to the
 editor's `applyText`, which checks the buffer hash, applies one `WorkspaceEdit`, saves, and returns one of six
 outcomes (stale, approval missing, failed before apply, applied but unsaved, save failed, saved); undo is
-guarded by the post-save hash.
+guarded by the post-save hash and restores the exact original bytes (saved without save participants).
 
 **Cancellation.** Stop closes the approval gate, cancels the TrueForge turn (confirmed in 10–25 ms in our
-spike), kills a running command and closes the open review; `done` is held until in-flight tool calls settle
-because TrueForge 0.185.1 reports the turn cancelled before an MCP call returns (found in the spike).
+spike), kills a running command's process group and closes the open review; an approved command never starts
+after Stop. `done` waits (bounded) for in-flight tool calls, because TrueForge 0.185.1 reports the turn
+cancelled before an MCP call returns. Every wait is bounded: if TrueForge stays silent, the harness stops
+observing after twice the cancel timeout and ends the turn exactly once. Retry and fallback happen only when
+every tool call of the failed attempt has settled and no approved edit or command is unfinished.
 
 ## 4. How context is selected
 
@@ -94,14 +97,16 @@ refused connection 0.1–0.2 s; unreachable host 7.6 s (connect timeout 3 s, one
 | Context assembly (15) | Context block: used/budget, ranked files with reasons, skipped items | `[mm:ss]` |
 | Diff safety (10) | Per-hunk review, partial accept, undo | `[mm:ss]` |
 | Resilience (10) | Task C: invalid primary key → fallback banner → `git status` clean | `[mm:ss]` |
-| TrueForge depth (10) | Session view: turns, tool calls, approvals, deferred `find_symbol` via `call_tool` | `[mm:ss]` |
+| TrueForge depth (10) | Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` when the model uses them) | `[mm:ss]` |
 | Demo video (10) | Tasks A, B, C in order, each verified on screen | — |
 | PDF write-up (15) | This document | — |
 
-Verification without a GUI or keys: `scripts/e2e-mock.sh` (15/15 checks: Task A one-liner, `pytest
-tests/test_cli.py -q` 57 passed, `flask --help` lists `config`, masked JSON, Task C fallback + clean status);
-in a real VS Code window: `scripts/test-extension-e2e.sh` (Tasks A, B, Stop, C through the extension code).
-Harness: 55 unit + 17 integration tests against TrueForge 0.185.1.
+Automated checks use a **scripted model**, so they show that the plumbing works, not that a real model
+solves the tasks. Without a GUI or keys: `scripts/e2e-mock.sh` (15/15 checks: Task A one-liner and docstring,
+`pytest tests/test_cli.py -q` 57 passed, `flask --help` lists `config`, masked JSON, Task C fallback + clean
+status); in a real VS Code window: `scripts/test-extension-e2e.sh` (Tasks A, B, Stop, C through the extension
+code) and 4 extension suites. Harness: 78 unit tests (including cancel and retry races against an in-memory
+TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
 
 ## 7. Tools used
 
@@ -118,8 +123,11 @@ Harness: 55 unit + 17 integration tests against TrueForge 0.185.1.
 **Limitations.** `<Update after the real-model rehearsal.>` Development and automated tests used a scripted
 model; real-model behaviour was checked only in `<n>` rehearsals. Retrieval is lexical (no embeddings) and
 the symbol index covers Python only; ranking weights were tuned on Flask. A fallback starts a new TrueForge
-session, so it does not see earlier panel turns. `run_command` runs with approval but can change files outside
-the diff review (changes are reported from `git status` and count as writes). Compaction is configured but the
+session, so it does not see earlier panel turns. **`run_command` is not sandboxed:** an approved command can
+change any file you can, without hunk review. Mitigations: one-use approval of the exact command, an
+"Unrestricted" warning for anything beyond pytest/`python -c`/`flask`/`git status|diff`, workspace-confined
+cwd, credential-like variables withheld, timeout and output cap, and a `git status` diff reported as "changed
+outside review" (it cannot see ignored files or paths outside the workspace). Compaction is configured but the
 demo tasks never reach the threshold. Hunk review uses a picker rather than per-hunk CodeLens. One workspace
 folder; tested on WSL only.
 

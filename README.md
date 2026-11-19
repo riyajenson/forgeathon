@@ -10,7 +10,8 @@ A VS Code extension whose entire agent loop runs on **[TrueForge](https://github
   retrieval (BM25 over code, symbol index, test/doc pairing) within a token budget, with the chosen files,
   reasons and skipped items shown in the panel.
 - **Diff safety** — proposals never touch disk until you accept them; per-hunk accept/reject; stale-file
-  refusal; undo.
+  refusal; undo (exact original bytes, even with format-on-save). Shell commands run only after you approve
+  them; they are **not sandboxed** (see [run_command: what is and is not protected](#run_command-what-is-and-is-not-protected)).
 - **Streaming and cancellation** — streamed text and tool calls; Stop cancels the TrueForge turn and closes
   any open review without writing.
 - **Resilience** — retry on transient errors (rate limits honour `Retry-After`), automatic fallback to a
@@ -29,7 +30,7 @@ extension is tied to a provider.
 |---|---|
 | `extension/` | VS Code extension: commands, inline review, agent panel, `EditorPort` (editor reads/writes) |
 | `src/harness/` | `forge-harness`: TrueForge adapter (turns, approvals, cancel, retry, fallback), MCP server and tools, context engine, review core |
-| `contracts/` | Shared TypeScript contract between extension and harness (protocol 0.4.1) |
+| `contracts/` | Shared TypeScript contract between extension and harness (protocol 0.4.2) |
 | `agent/` | **TrueForge agent definitions**: `forge-coder.json` (agent mode), `forge-inline.json` (inline edit) |
 | `config/` | `models.example.json` (real providers), `models.mock.example.json` (demo model) |
 | `scripts/` | setup, demo mode, end-to-end checks, real-model smoke test, extension tests |
@@ -43,12 +44,17 @@ extension is tied to a provider.
 - **Node.js ≥ 22.14** in WSL (e.g. `nvm install 24`), npm, git.
 - **Python ≥ 3.10** with `venv` for the Flask demo workspace.
 
-## Quick start without model keys (demo mode)
+## Install and build (once, for both modes below)
 
 ```bash
 git clone https://github.com/riyajenson/forgeathon.git && cd forgeathon
 npm --prefix src/harness ci && npm --prefix src/harness run build
 (cd extension && npm ci && npm run compile)
+```
+
+## Quick start without model keys (demo mode)
+
+```bash
 scripts/dev-mock.sh            # scripted demo model + fresh TrueForge on :8790 + setup; Ctrl+C stops all
 ```
 
@@ -114,12 +120,32 @@ knows the three fixed tasks. It costs nothing and needs no keys. Then open the e
 
 | Command | What it proves | Needs |
 |---|---|---|
-| `npm --prefix src/harness test` | Harness unit tests (review core, MCP tools, context engine incl. Flask ranking, setup, errors) | — |
+| `npm --prefix src/harness test` | Harness unit tests (review core, MCP tools, ignore policy, regex deadline, run_command cancel races, context engine incl. Flask ranking, setup, errors) and turn races against an in-memory TrueForge stand-in (late writes vs retry/fallback, silent server vs Stop/watchdog) | — (the Flask ranking test needs a Flask 3.1.3 checkout at `FORGE_FLASK_DIR` or `~/projects/flask-3.1.3`; otherwise it is skipped) |
 | `npm --prefix src/harness run test:integration` | Turns against real TrueForge with a scripted model: approvals, partial accept, deny, cancel races, 401/refused/429/watchdog → retry/fallback, run_command, setup | TrueForge on :8790 started as above |
-| `scripts/e2e-mock.sh` | Tasks A, B, C end to end through the harness on a copy of Flask 3.1.3, with the verification commands | Flask checkout at `~/projects/flask-3.1.3` (or `--flask DIR`) |
+| `scripts/e2e-mock.sh` | Tasks A, B, C end to end through the harness on a copy of Flask 3.1.3, with the verification commands | Flask checkout: `--flask DIR`, default `~/flask-demo`, else `~/projects/flask-3.1.3` |
 | `scripts/test-extension.sh` | Extension suites inside a real VS Code window (EditorPort, review, panel) | A display (WSLg); fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A, B, Stop, C through the extension UI code against TrueForge + demo model | as above + Flask checkout |
 | `node scripts/smoke-real-model.mjs --tasks A,C` | Same checks as `e2e-mock.sh` with your real models | `config/models.json`, keys, TrueForge |
+
+## run_command: what is and is not protected
+
+The agent can run shell commands (to run the tests) through the `run_command` MCP tool. It is **not a
+sandbox**: an approved command runs as you, with your file access, and can change files without hunk review.
+What the harness does:
+
+- Nothing runs without your approval of that exact command and directory (one use); a command never starts
+  after Stop, and Stop kills its whole process group.
+- Commands other than `pytest`, `python -m pytest`, `python -c`, `flask`, `git status` and `git diff`
+  (without shell operators) are marked **Unrestricted** with a warning in the approval prompt.
+- The working directory must resolve (symlinks included) inside the workspace; the command gets your
+  environment **minus** credential-like variables (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSW*`, …) and editor IPC
+  handles; it is killed after its timeout (default 120 s, max 600 s); output is capped.
+- `git status` is compared before and after; files the command changed are reported to you and to the model as
+  "changed outside review". A command counts as a write: no retry or fallback after it.
+
+Residual risk: a command you approve can still write anywhere you can (absolute paths, git-ignored files),
+reach the network, or read files; git cannot see changes to ignored files or outside the workspace. Deny
+commands you do not understand.
 
 ## Starting point, licence and attribution
 

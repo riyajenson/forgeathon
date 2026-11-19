@@ -48,7 +48,14 @@ export class Workbench implements vscode.Disposable {
     }
   }
   notice(text: string) { this.panel.notice(text); }
-  showPanel() { this.panel.open(); }
+  showPanel() { this.panel.open(); this.warm(); }
+  /** Starts the harness (module load, TrueForge check, MCP server) while the user is still typing the
+   * instruction, so that one-time cost is not paid on the extension thread after Send. */
+  warm() {
+    if (this.controller || this.starting || !this.factory || this.closed || !vscode.workspace.isTrusted) return;
+    this.starting = this.connect().finally(() => { this.starting = undefined; });
+    this.starting.catch(() => { /* reported by the turn that needs the connection */ });
+  }
   choose() { this.review.choose(); }
   decideAll(choice: 'accept' | 'reject') { this.review.decideAll(choice); }
   /** A review prompt, hunk list or pending decision is still showing. */
@@ -125,6 +132,7 @@ export class Workbench implements vscode.Disposable {
     const activeFile = vscode.workspace.asRelativePath(doc.uri, false).replace(/\\/g, '/');
     const context = {activeFile, selection:{ path: activeFile, text: doc.getText(selection),
       startLine: selection.start.line + 1, endLine: selection.end.line + (selection.end.character === 0 ? 0 : 1) }};
+    this.warm();
     const instruction = await vscode.window.showInputBox({prompt:'How should the selection change?'});
     if (!instruction?.trim()) return;
     // Visible progress for inline turns (the panel may be closed); Cancel stops the turn.

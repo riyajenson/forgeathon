@@ -1,4 +1,5 @@
 import type { ToolId } from '../contract-types';
+import { redactSecrets } from '../trueforge/errors';
 
 /** MCP tool name → contract ToolId. Anything else (TrueForge system tools) is 'internal'. */
 const TOOL_IDS: Record<string, ToolId> = {
@@ -52,7 +53,7 @@ export function summarizeArgs(tool: string, args: unknown): string {
     default:
       s = '';
   }
-  return s.replace(/\s+/g, ' ').trim().slice(0, 160);
+  return redactSecrets(s.replace(/\s+/g, ' ').trim()).slice(0, 160);
 }
 
 /** First line of a tool result, capped, for display. */
@@ -68,5 +69,5 @@ export function summarizeResult(content: string): string {
   } catch {
     // plain text result
   }
-  return text.split('\n').find((l) => l.trim() !== '')?.trim().slice(0, 200) ?? '';
+  return redactSecrets(text.split('\n').find((l) => l.trim() !== '')?.trim() ?? '').slice(0, 200);
 }

@@ -122,14 +122,21 @@ async function loadTemplates(repo: string): Promise<AgentTemplate[]> {
 
 async function main(): Promise<void> {
   const repo = repoRoot();
-  const flask = path.resolve(arg('--flask', path.join(os.homedir(), 'projects', 'flask-3.1.3')));
+  // Default: the checkout the README prepares (~/flask-demo), else ~/projects/flask-3.1.3.
+  const defaults = [path.join(os.homedir(), 'flask-demo'), path.join(os.homedir(), 'projects', 'flask-3.1.3')];
+  let defaultFlask = defaults[0]!;
+  for (const d of defaults) if (await fs.access(path.join(d, '.git')).then(() => true, () => false)) { defaultFlask = d; break; }
+  const flask = path.resolve(arg('--flask', defaultFlask));
   const tasks = arg('--tasks', 'A,B').toUpperCase().split(',');
   const url = arg('--url', process.env['TRUEFORGE_URL'] ?? 'http://127.0.0.1:8790');
   const configPath = path.resolve(arg('--config', path.join(repo, 'config', 'models.json')));
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-smoke-'));
   const ws = path.join(work, 'flask');
   console.log(`copying ${flask} → ${ws}`);
-  await fs.cp(flask, ws, { recursive: true });
+  // Without the source's virtualenv (its scripts point back at the source), then reset to the committed state.
+  await fs.cp(flask, ws, { recursive: true, filter: (src) => !/[\\/](\.venv|venv)$/.test(src) });
+  await sh('git', ['checkout', '-q', '--', '.'], ws);
+  await sh('git', ['clean', '-qfdx'], ws);
   const head = (await sh('git', ['rev-parse', 'HEAD'], ws)).out.trim();
   console.log(`flask HEAD ${head}`);
   console.log(`creating virtualenv (flask -e, ${PYTEST})`);
@@ -155,7 +162,8 @@ async function main(): Promise<void> {
       const a = await turn(h, ws, 'A', { mode: 'inline', instruction: TASK_A, activeFile: 'src/flask/helpers.py', selection }, 'accept');
       results.push(a);
       check('A: turn done', a.status === 'done', a.error ?? '');
-      check('A: one reviewed edit to helpers.py', a.reviews >= 1 && a.edits.some((x) => x.startsWith('src/flask/helpers.py: saved')), a.edits.join('; '));
+      const savedHelpers = a.edits.filter((x) => x.startsWith('src/flask/helpers.py: saved'));
+      check('A: exactly one applied edit, saved to helpers.py', savedHelpers.length === 1 && a.edits.length === 1, `${a.reviews} review(s); ${a.edits.join('; ')}`);
       const off = await debugFlag('off');
       check('A: FLASK_DEBUG=off → False', off === 'False', off);
       const n = await debugFlag('N');
@@ -163,7 +171,10 @@ async function main(): Promise<void> {
       const one = await debugFlag('1');
       check('A: FLASK_DEBUG=1 → True (unchanged)', one === 'True', one);
       const doc = await fs.readFile(path.join(ws, 'src/flask/helpers.py'), 'utf8');
-      check('A: docstring lists off and n', /off/.test(doc.slice(doc.indexOf('def get_debug_flag'), doc.indexOf('def get_load_dotenv'))), '');
+      const fn = doc.slice(doc.indexOf('def get_debug_flag'), doc.indexOf('def get_load_dotenv'));
+      const docstring = /"""([\s\S]*?)"""/.exec(fn)?.[1] ?? '';
+      const missing = ['0', 'false', 'no', 'off', 'n'].filter((v) => !new RegExp(`["'\`]${v}["'\`]`, 'i').test(docstring));
+      check('A: docstring lists every false value (0, false, no, off, n)', docstring !== '' && missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : '');
     }
     if (tasks.includes('B')) {
       const b = await turn(h, ws, 'B', { mode: 'agent', instruction: TASK_B }, 'accept');

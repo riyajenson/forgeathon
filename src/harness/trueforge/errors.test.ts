@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTurnError, isRateLimited, retryDelayMs } from './errors';
+import { classifyTurnError, isRateLimited, redactSecrets, retryDelayMs, safeMessage } from './errors';
 
 test('classification of TrueForge turn errors (formats verified on 0.185.1)', () => {
   assert.equal(classifyTurnError('[Model Error] Request failed (401): Incorrect API key provided.'), 'MODEL_AUTH');
@@ -9,8 +9,29 @@ test('classification of TrueForge turn errors (formats verified on 0.185.1)', ()
   assert.equal(classifyTurnError('[Model Error] Cannot connect to API: Connect Timeout Error (attempted address: 10.255.255.1:80, timeout: 3000ms)'), 'MODEL_UNAVAILABLE');
   assert.equal(classifyTurnError('[Model Error] Request failed (429): Rate limit reached'), 'MODEL_UNAVAILABLE');
   assert.equal(classifyTurnError('[Model Error] Request failed (503): overloaded'), 'MODEL_UNAVAILABLE');
-  assert.equal(classifyTurnError('[Model Error] Request failed (400): bad request'), 'OTHER');
+  assert.equal(classifyTurnError('[Model Error] Request failed (400): bad request'), 'MODEL_OTHER', 'other provider errors still fall back');
   assert.equal(classifyTurnError('iteration limit reached'), 'OTHER');
+});
+
+test('authentication failures are recognised by wording too (formats as documented by the providers; not observed here)', () => {
+  // Google answers an invalid key with HTTP 400.
+  assert.equal(classifyTurnError('[Model Error] Request failed (400): API key not valid. Please pass a valid API key.'), 'MODEL_AUTH');
+  assert.equal(classifyTurnError('[Model Error] Request failed (400): {"error":{"code":400,"message":"API key not valid","status":"INVALID_ARGUMENT"}}'), 'MODEL_AUTH');
+  assert.equal(classifyTurnError('[Model Error] Invalid API Key'), 'MODEL_AUTH');
+  assert.equal(classifyTurnError('[Model Error] authentication_error: invalid x-api-key'), 'MODEL_AUTH');
+  assert.equal(classifyTurnError('[Model Error] Unauthorized'), 'MODEL_AUTH');
+  assert.equal(classifyTurnError('[Model Error] Request failed (503): Service Unavailable'), 'MODEL_UNAVAILABLE');
+  assert.equal(classifyTurnError('[Model Error] The operation timed out'), 'MODEL_UNAVAILABLE');
+  assert.equal(classifyTurnError('[Model Error] model does not support tools'), 'MODEL_OTHER');
+});
+
+test('displayed messages never carry key-shaped strings', () => {
+  const m = safeMessage('[Model Error] Request failed (401): Incorrect API key provided: sk-proj-abcdefghijklmnop1234. api_key=hunter2hunter2');
+  assert.doesNotMatch(m, /abcdefghijklmnop1234|hunter2hunter2/);
+  assert.match(m, /\[redacted\]/);
+  assert.equal(redactSecrets('key AIzaSyA1234567890abcdefghijklmnop and gsk_abcdefghijklmnopqrstuvwx'), 'key [redacted] and [redacted]');
+  assert.equal(redactSecrets('Authorization: Bearer abcdef0123456789xyz'), 'Authorization: Bearer [redacted]');
+  assert.equal(redactSecrets('plain text without secrets: 401'), 'plain text without secrets: 401');
 });
 
 test('rate-limit retry delay honours provider hints, defaults to 5 s and caps at 30 s', () => {

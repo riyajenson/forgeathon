@@ -14,6 +14,7 @@ if ! ldconfig -p 2>/dev/null | grep -q libnss3.so; then
   export LD_LIBRARY_PATH="$libs/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 cd "$repo/docs/writeup"
-npx --yes md-to-pdf@5 WRITEUP.md >/dev/null
+npx --yes md-to-pdf@5.2.5 WRITEUP.md >/dev/null
 pages="$(python3 -c "import re,sys; print(len(re.findall(rb'/Type\s*/Page[^s]', open('WRITEUP.pdf','rb').read())))")"
 echo "docs/writeup/WRITEUP.pdf: $pages page(s)"
+if [ "$pages" -lt 1 ] || [ "$pages" -gt 3 ]; then echo "error: the write-up must be 1-3 pages" >&2; exit 1; fi

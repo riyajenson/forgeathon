@@ -3,7 +3,7 @@
 # then Tasks A, B and C through createHarness on a temporary copy of pristine Flask 3.1.3, with the
 # task verifications (Task A one-liner, pytest tests/test_cli.py -q, flask --help, masked flask config,
 # Task C fallback + clean git status). Exits non-zero if any check fails.
-# Usage: scripts/e2e-mock.sh [--flask ~/projects/flask-3.1.3] [--tasks A,B,C]
+# Usage: scripts/e2e-mock.sh [--flask ~/flask-demo (default; else ~/projects/flask-3.1.3)] [--tasks A,B,C]
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 (cd "$repo/src/harness" && npm run build >/dev/null)

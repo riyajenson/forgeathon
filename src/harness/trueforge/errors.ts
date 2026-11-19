@@ -3,14 +3,21 @@
 //   [Model Error] Cannot connect to API: connect ECONNREFUSED 127.0.0.1:47799
 //   [Model Error] Cannot connect to API: Connect Timeout Error (attempted address: ..., timeout: 3000ms)
 
-export type TurnErrorClass = 'MODEL_AUTH' | 'MODEL_UNAVAILABLE' | 'OTHER';
+// Providers word authentication failures differently (Google answers an invalid key with HTTP 400
+// "API key not valid"), so the wording counts as well as the status code.
+//   MODEL_AUTH → fallback at once · MODEL_UNAVAILABLE → retry once, then fallback
+//   MODEL_OTHER (any other provider error) → fallback at once
+//   OTHER (not a model error: TrueForge itself, iteration limit) → no fallback
+export type TurnErrorClass = 'MODEL_AUTH' | 'MODEL_UNAVAILABLE' | 'MODEL_OTHER' | 'OTHER';
+
+const AUTH_WORDING = /api[ _-]?key|unauthori[sz]ed|authenticat|permission[ _]denied|forbidden|credential/i;
 
 export function classifyTurnError(message: string | undefined): TurnErrorClass {
   const m = message ?? '';
   if (!m.includes('[Model Error]')) return 'OTHER';
-  if (m.includes('(401)') || m.includes('(403)')) return 'MODEL_AUTH';
-  if (m.includes('Cannot connect to API') || m.includes('Timeout') || m.includes('(429)') || /\(5\d\d\)/.test(m)) return 'MODEL_UNAVAILABLE';
-  return 'OTHER';
+  if (/\((401|403)\)/.test(m) || AUTH_WORDING.test(m)) return 'MODEL_AUTH';
+  if (m.includes('Cannot connect to API') || /timeout|timed out|overloaded|unavailable/i.test(m) || /\((408|429|5\d\d)\)/.test(m)) return 'MODEL_UNAVAILABLE';
+  return 'MODEL_OTHER';
 }
 
 export const MAX_RETRY_DELAY_MS = 30_000;
@@ -32,10 +39,28 @@ export function retryDelayMs(message: string | undefined, baseMs: number): numbe
   return Math.min(MAX_RETRY_DELAY_MS, Math.max(baseMs, Math.ceil(ms)));
 }
 
-/** Short, safe text for the UI: drops anything after the first line and caps the length. */
+const SECRET_PATTERNS: RegExp[] = [
+  /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}/g, // OpenAI, Anthropic (sk-ant-...)
+  /\bAIza[0-9A-Za-z_-]{20,}/g, // Google
+  /\bgsk_[A-Za-z0-9]{20,}/g, // Groq
+  /\b(?:ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}/g, // GitHub
+  /\bxox[abpr]-[A-Za-z0-9-]{10,}/g, // Slack
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+];
+const SECRET_ASSIGNMENT = /(bearer\s+|(?:api[_-]?key|token|secret|password|passwd)["']?\s*[:=]\s*["']?)([^\s"',;]{6,})/gi;
+
+/** Replaces key-shaped strings with [redacted]. For display and logs only, never for content under review. */
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const re of SECRET_PATTERNS) out = out.replace(re, '[redacted]');
+  return out.replace(SECRET_ASSIGNMENT, (_m, prefix: string) => `${prefix}[redacted]`);
+}
+
+/** Short, safe text for the UI: first line only, key-shaped strings redacted, length capped. */
 export function safeMessage(message: string | undefined, fallback = 'unknown error'): string {
   const first = (message ?? '').split('\n')[0]!.trim();
-  return (first || fallback).slice(0, 300);
+  return redactSecrets(first || fallback).slice(0, 300);
 }
 
 /** True when an SDK/network exception means the TrueForge server itself could not be reached. */

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { existsSync, promises as fs } from 'node:fs';
 import { FakePort } from '../mcp/fake-port';
 import { chunkDocs, chunkPython } from './chunks';
-import { GitIgnore } from './files';
+import { GitIgnore, IgnorePolicy } from './files';
 import { assembleContext, buildIndex, parseMentions, rankFiles } from './index';
 import { splitIdentifier, terms } from './text';
 
@@ -93,6 +93,29 @@ test('gitignore matcher handles directories, globs and negation', () => {
   assert.equal(gi.ignores('keep.log'), false);
   assert.equal(gi.ignores('build/x.py'), true);
   assert.equal(gi.ignores('src/build.py'), false);
+});
+
+test('gitignore semantics: ** patterns, anchoring, directory-only rules, ignored parents and nested files', () => {
+  const gi = new GitIgnore('**/tmp/\ndocs/**/*.bak\n/only-root.txt\nlogs/\n!logs/keep.txt\n[Bb]in/\n\\#literal\n');
+  assert.equal(gi.ignores('tmp/a.py'), true);
+  assert.equal(gi.ignores('a/b/tmp/c.py'), true);
+  assert.equal(gi.ignores('tmp.py'), false, 'tmp/ is directory-only');
+  assert.equal(gi.ignores('docs/x.bak'), true);
+  assert.equal(gi.ignores('docs/a/b/x.bak'), true);
+  assert.equal(gi.ignores('only-root.txt'), true);
+  assert.equal(gi.ignores('sub/only-root.txt'), false, 'a leading slash anchors');
+  assert.equal(gi.ignores('logs/keep.txt'), true, 'a file inside an ignored directory cannot be re-included');
+  assert.equal(gi.ignores('Bin/x'), true);
+  assert.equal(gi.ignores('bin/x'), true);
+  assert.equal(gi.ignores('#literal'), true);
+  const nested = new IgnorePolicy(new Map([['', new GitIgnore('*.gen.py\n')], ['pkg', new GitIgnore('!keep.gen.py\nlocal/\n')]]));
+  assert.equal(nested.ignores('a.gen.py'), true);
+  assert.equal(nested.ignores('pkg/keep.gen.py'), false, 'a deeper .gitignore overrides a shallower one');
+  assert.equal(nested.ignores('pkg/other.gen.py'), true);
+  assert.equal(nested.ignores('pkg/local/x.py'), true);
+  assert.equal(nested.ignores('local/x.py'), false, 'nested rules apply only below their directory');
+  assert.equal(nested.ignores('.venv/lib/x.py'), true, 'default excludes');
+  assert.equal(nested.ignores('src/mylib.egg-info/x.txt'), true);
 });
 
 test('index skips ignored, generated and non-text files; resolves imports', async () => {

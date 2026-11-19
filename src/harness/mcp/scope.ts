@@ -59,6 +59,11 @@ export class SessionScope {
     for (const c of this.running) c.abort();
   }
 
+  /** Drops approvals that no tool call has used yet; returns how many there were (each was a possible write). */
+  closeApprovals(): number {
+    return this.reviews.clear() + this.commands.clear();
+  }
+
   /** Re-opens the gate for the next turn on the same runtime session. */
   resetForTurn(): void {
     this.cancelledFlag = false;

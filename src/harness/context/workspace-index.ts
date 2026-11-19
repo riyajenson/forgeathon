@@ -1,7 +1,7 @@
 // In-memory index of the workspace: chunks with term counts, a Python symbol table and import edges.
 import type { EditorPort } from '../mcp/port';
 import { chunkFile, type Chunk } from './chunks';
-import { GitIgnore, isIndexable, MAX_INDEX_CHARS } from './files';
+import { isIndexable, LIST_LIMIT, MAX_INDEX_CHARS, visibleFiles } from './files';
 import { countTerms, normalise, splitIdentifier, terms } from './text';
 
 export interface IndexedChunk extends Chunk {
@@ -72,11 +72,10 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => 
 }
 
 export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
-  const all = await port.listFiles();
-  const ignoreText = (await port.readText('.gitignore'))?.text ?? '';
-  const gitignore = new GitIgnore(ignoreText);
+  const visible = await visibleFiles(port);
   const skipped: Array<{ path: string; reason: string }> = [];
-  const candidates = all.filter((p) => isIndexable(p) && !gitignore.ignores(p));
+  if (visible.truncated) skipped.push({ path: '(workspace)', reason: `listing stopped at ${LIST_LIMIT} files; files after that were not considered` });
+  const candidates = visible.files.filter(isIndexable);
   const files = new Map<string, IndexedFile>();
   const chunks: IndexedChunk[] = [];
   const read = await mapLimit(candidates, 16, async (p) => ({ p, snap: await port.readText(p) }));

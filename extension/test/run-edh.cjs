@@ -20,8 +20,10 @@ const path = require('node:path');
       extensionDevelopmentPath: ext,
       extensionTestsPath: test,
       extensionTestsEnv: { ...process.env },
+      // FORGE_TEST_CDP_PROFILE (live.cjs): that profile directory, with a DevTools port so the test can drive native UI.
       launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--disable-gpu',
-        '--user-data-dir', fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-profile-'))],
+        ...(process.env.FORGE_TEST_CDP_PROFILE ? ['--remote-debugging-port=0'] : []),
+        '--user-data-dir', process.env.FORGE_TEST_CDP_PROFILE || fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-profile-'))],
     });
     console.log(`EDH TESTS PASSED: ${path.basename(test)}`);
   } catch (error) {

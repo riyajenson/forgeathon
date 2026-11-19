@@ -71,17 +71,31 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => 
   return out;
 }
 
+// Matches the editor's maximum inventory size; reaching it is explicitly reported.
+export const INDEX_FILE_LIMIT = 2000;
+
 export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
-  const all = await port.listFiles();
-  const ignoreText = (await port.readText('.gitignore'))?.text ?? '';
-  const gitignore = new GitIgnore(ignoreText);
+  const all = await port.listFiles({ limit: INDEX_FILE_LIMIT });
   const skipped: Array<{ path: string; reason: string }> = [];
+  if (all.length >= INDEX_FILE_LIMIT) skipped.push({ path: '.', reason: `Workspace inventory reached ${INDEX_FILE_LIMIT} files; retrieval coverage may be incomplete. Narrow the workspace to include omitted files.` });
+  let ignoreText = '';
+  try { ignoreText = (await port.readText('.gitignore'))?.text ?? ''; }
+  catch {
+    // Do not index files that a missing ignore policy might have excluded.
+    return { files: new Map(), chunks: [], df: new Map(), avgLength: 1, symbols: new Map(), modules: new Map(),
+      skipped: [...skipped, { path: '.gitignore', reason: 'Cannot read ignore rules; automatic indexing refused until exclusions can be checked.' }] };
+  }
+  const gitignore = new GitIgnore(ignoreText);
   const candidates = all.filter((p) => isIndexable(p) && !gitignore.ignores(p));
   const files = new Map<string, IndexedFile>();
   const chunks: IndexedChunk[] = [];
-  const read = await mapLimit(candidates, 16, async (p) => ({ p, snap: await port.readText(p) }));
-  for (const { p, snap } of read) {
-    if (!snap) continue;
+  const read = await mapLimit(candidates, 16, async (p) => {
+    try { return { p, snap: await port.readText(p), unreadable: false }; }
+    catch { return { p, snap: null, unreadable: true }; }
+  });
+  for (const { p, snap, unreadable } of read) {
+    if (unreadable) { skipped.push({ path: p, reason: 'unreadable file; excluded from retrieval' }); continue; }
+    if (!snap) { skipped.push({ path: p, reason: 'file disappeared while indexing' }); continue; }
     if (snap.text.length > MAX_INDEX_CHARS) { skipped.push({ path: p, reason: `too large to index (${snap.text.length} chars)` }); continue; }
     if (snap.text.includes('\0')) { skipped.push({ path: p, reason: 'binary' }); continue; }
     const mod = moduleName(p);

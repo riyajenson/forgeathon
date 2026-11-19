@@ -8,6 +8,52 @@ import { chunkDocs, chunkPython } from './chunks';
 import { GitIgnore } from './files';
 import { assembleContext, buildIndex, parseMentions, rankFiles } from './index';
 import { splitIdentifier, terms } from './text';
+import type { EditorPort } from '../mcp/port';
+import { INDEX_FILE_LIMIT } from './workspace-index';
+
+function inventoryPort(count: number, broken = new Set<string>()): EditorPort {
+  const files = Array.from({ length: count }, (_, i) => `src/file_${String(i).padStart(4, '0')}.py`);
+  return {
+    listFiles: async (options) => files.slice(0, options?.limit ?? 500),
+    readText: async (file) => {
+      if (broken.has(file)) throw new Error('permission denied');
+      if (file === '.gitignore') return null;
+      const text = `def symbol_${file.match(/\d+/)?.[0] ?? 'x'}():\n    return 1\n`;
+      return { text, sha256: 'fixture' };
+    },
+    log: () => {}, applyText: async () => { throw new Error('not used'); },
+  };
+}
+
+test('index requests inventory beyond the editor default 500 files', async () => {
+  const index = await buildIndex(inventoryPort(601));
+  assert.equal(index.files.size, 601);
+  assert.ok(index.files.has('src/file_0600.py'));
+  assert.ok(!index.skipped.some(s => s.path === '.'));
+});
+
+test('full inventory reports possible coverage loss in the visible context report', async () => {
+  const result = await assembleContext(inventoryPort(INDEX_FILE_LIMIT + 1), { instruction: 'symbol_1999', mode: 'agent', budgetTokens: 8000 });
+  assert.ok(result.report.skipped.some(s => s.path === '.' && /coverage may be incomplete/.test(s.reason)));
+});
+
+test('one unreadable file does not discard other code and is visible as skipped', async () => {
+  const result = await assembleContext(inventoryPort(3, new Set(['src/file_0001.py'])), { instruction: 'symbol_0002', mode: 'agent', budgetTokens: 8000 });
+  assert.ok(result.report.selections.some(s => s.path === 'src/file_0002.py'));
+  assert.ok(result.report.skipped.some(s => s.path === 'src/file_0001.py' && /unreadable/.test(s.reason)));
+});
+
+test('unreadable ignore policy refuses indexing and explains why', async () => {
+  const result = await assembleContext(inventoryPort(3, new Set(['.gitignore'])), { instruction: 'symbol', mode: 'agent', budgetTokens: 8000 });
+  assert.equal(result.report.selections.length, 0);
+  assert.ok(result.report.skipped.some(s => s.path === '.gitignore'));
+});
+
+test('small configured budgets are not silently raised to 500 tokens', async () => {
+  const result = await assembleContext(inventoryPort(3), { instruction: 'symbol_0002', mode: 'agent', budgetTokens: 10 });
+  assert.equal(result.report.budgetTokens, 10);
+  assert.ok(result.report.estimatedTokens <= 10);
+});
 
 const CLI = [
   'import click',

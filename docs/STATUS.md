@@ -1,7 +1,8 @@
 # Project status
 
-Updated: 2026-11-19 ~11:45 IST (final for today). The repository is submission-ready except for the
-human steps at the end of this file (models and keys, a real-model rehearsal, push, video, PDF, form).
+Updated: 2026-11-19. The implementation has mock-model test evidence; submission readiness is
+not established until real-model rehearsal evidence and the final artifacts are complete.
+Run `node scripts/check-submission.mjs`; see `docs/harness/CONTEXT-READINESS.md`.
 
 ## MVP checklist
 

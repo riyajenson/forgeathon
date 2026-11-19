@@ -11,12 +11,17 @@ const until = async condition => {
 };
 exports.run = async () => {
   await require('./review.cjs').run();
+  const flagged = new AgentViewState();
+  flagged.update({t:'command_request',callId:'x',command:'rm -rf build',cwd:'.',unrestricted:true,warning:'Unrestricted command: it can change any file without hunk review and is not sandboxed.'});
+  assert.match(flagged.command.warning, /without hunk review/, 'the panel carries the unrestricted warning');
+  flagged.update({t:'command_request',callId:'y',command:'pytest -q',cwd:'.'});
+  assert.equal(flagged.command.warning, undefined, 'listed commands carry no warning');
   const state = new AgentViewState();
   const folder = vscode.workspace.workspaceFolders[0];
   const selected = {path:'src/a',source:'automatic',rank:1,rationale:'entry point',estimatedTokens:6,truncated:false};
   const skipped = {path:'other/a',reason:'over budget',estimatedTokens:11};
   const report = {budgetTokens:10,estimatedTokens:6,selections:[selected],skipped:[skipped]};
-  const version = '0.4.0';
+  const version = require('forge-harness').PROTOCOL_VERSION;
   let releaseCommand; const commandAnswered=new Promise(resolve=>releaseCommand=resolve);
   let command, submitted = false, marked = false;
   const harness = {

@@ -14,7 +14,7 @@ export class AgentViewState {
   tools: {id: string; label: string; detail: string}[] = [];
   context?: ContextReport;
   edits: string[] = [];
-  command?: {command: string; cwd: string};
+  command?: {command: string; cwd: string; warning?: string};
 
   update(e: HarnessEvent) {
     switch (e.t) {
@@ -32,7 +32,7 @@ export class AgentViewState {
       }
       case 'context_report': this.context = e.report; break;
       case 'review_request': this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path; break;
-      case 'command_request': this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd}; break;
+      case 'command_request': this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);
@@ -58,6 +58,8 @@ export class AgentPanel implements vscode.Disposable {
   finish() { this.state.busy = this.state.reviewing = false; this.refresh(); }
   event(e: HarnessEvent) { this.state.update(e); this.refresh(); }
   notice(message: string) { this.state.status = message; this.refresh(); }
+  /** The command decision was given elsewhere (quick pick): retire the panel's Allow/Deny buttons. */
+  commandAnswered() { if (this.state.command) { this.state.command = undefined; this.refresh(); } }
   error(message: string) { this.state.banner = message; this.refresh(); }
   open() {
     if (this.panel) { this.panel.reveal(vscode.ViewColumn.Beside); return; }

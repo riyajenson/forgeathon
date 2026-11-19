@@ -23,7 +23,8 @@
     el('banner').hidden = !s.banner;
     el('trace').hidden = !s.trace;
     el('cmd').hidden = !s.command;
-    el('cmdText').textContent = s.command ? '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' : '';
+    el('cmdText').textContent = s.command
+      ? (s.command.warning ? '⚠ ' + s.command.warning + '\n' : '') + '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' : '';
     el('text').textContent = s.text;
     el('activity').hidden = !s.tools.length;
     list('tools',s.tools.map(t => t.label + ' | ' + t.detail));

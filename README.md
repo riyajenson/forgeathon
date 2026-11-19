@@ -56,11 +56,11 @@ flowchart LR
   end
   TF["TrueForge 0.185.1<br/>local mode · SQLite<br/>agent loop · sessions · approvals"]
   NV["NVIDIA API Catalog<br/>primary"]
-  GQ["Groq<br/>fallback"]
+  OR["OpenRouter (free tier)<br/>fallback"]
   H -- "TrueForge SDK over HTTP" --> TF
   TF -- "MCP tool calls (bearer token, session id)" --> MCP
   TF --> NV
-  TF --> GQ
+  TF --> OR
 ```
 
 How one turn runs:
@@ -108,29 +108,33 @@ npm --prefix src/harness ci && npm --prefix src/harness run build
 
 ### 3. Get free API keys
 
-You need the primary (NVIDIA) and the fallback (Groq). OpenRouter is an optional spare.
+You need the primary (NVIDIA) and the fallback (OpenRouter). Groq is an optional spare.
 
 1. **NVIDIA API Catalog** (primary):
    1. Open https://build.nvidia.com and sign in or create an NVIDIA account.
    2. Verify your phone number when asked. The free tier needs it.
    3. Open any model page, click **Get API Key** and copy the key. It starts with `nvapi-`.
    4. The free tier allows about 40 requests per minute.
-2. **Groq** (fallback):
-   1. Open https://console.groq.com and sign in.
-   2. Go to **API Keys → Create API Key** and copy the key. It starts with `gsk_`.
-   3. The free tier allows 1000 requests per day and 8000 tokens per minute for this model.
-3. **OpenRouter** (optional spare):
+2. **OpenRouter** (fallback):
    1. Open https://openrouter.ai and sign in.
    2. Go to **Keys → Create Key**. The key starts with `sk-or-`.
-   3. Free models (ids ending in `:free`) allow 50 requests per day.
+   3. Free models (ids ending in `:free`) cost nothing per request, but OpenRouter caps them per day: its
+      documentation says 50 requests a day on an account that never bought credit, 1,000 after a one-time
+      purchase of $10. One Task B takes about 40–70 model requests (`docs/STATUS.md`), so without credit the
+      fallback covers Tasks A and C and at most one Task B, possibly not a whole one.
+3. **Groq** (optional spare):
+   1. Open https://console.groq.com and sign in.
+   2. Go to **API Keys → Create API Key** and copy the key. It starts with `gsk_`.
+   3. The free tier allows about 7,000 input tokens per minute for this model: enough for Tasks A and C,
+      too few for Task B's ~11k-token requests (measured: HTTP 413).
 
 Store the keys in a file only you can read, and load it in each terminal you use:
 
 ```bash
 cat > ~/.forge-keys.env <<'EOF'
 export NVIDIA_API_KEY='nvapi-...'
-export GROQ_API_KEY='gsk_...'
-export OPENROUTER_API_KEY='sk-or-...'     # optional
+export OPENROUTER_API_KEY='sk-or-...'
+export GROQ_API_KEY='gsk_...'             # optional spare
 EOF
 chmod 600 ~/.forge-keys.env
 source ~/.forge-keys.env
@@ -141,16 +145,34 @@ Never commit this file or paste keys into `config/models.json`. The config names
 ### 4. Configure the models
 
 ```bash
-cp config/models.example.json config/models.json      # gitignored
+scripts/use-models.sh nvidia-free     # writes config/models.json (gitignored) and runs the setup of step 6
 ```
 
-The defaults:
+Before TrueForge runs (step 5), `cp config/models.example.json config/models.json` gives the same file; the
+script is for switching later. The defaults (profile `nvidia-free`):
 
 | Role | TrueForge model | Provider model id | Free tier |
 |---|---|---|---|
 | Primary | `nvidia/nemotron-3-ultra` | `nvidia/nemotron-3-ultra-550b-a55b` (NVIDIA API Catalog) | ≈ 40 requests/min |
-| Fallback | `groq/qwen3-8-27b` | `qwen/qwen3.8-27b` (Groq) | 1000 requests/day, 8000 tokens/min |
-| Spare (configured, unused) | `openrouter/nemotron-3-ultra-free` | `nvidia/nemotron-3-ultra-550b-a55b:free` (OpenRouter) | 50 requests/day |
+| Fallback | `openrouter/nemotron-3-ultra-free` | `nvidia/nemotron-3-ultra-550b-a55b:free` (OpenRouter) | 50 requests/day without credit (1,000 after buying $10) |
+| Spare (configured, unused) | `groq/qwen3-8-27b` | `qwen/qwen3.8-27b` (Groq) | ≈ 7,000 input tokens/min: not enough for Task B |
+
+The fallback is the same model through another provider: its own key, account and quota, and its context
+(1M tokens) and token rate carry Task B's requests, which Groq's free tier refuses; the daily cap above is its
+limit. OpenRouter currently serves this free model from
+NVIDIA's own endpoint, so it covers NVIDIA rate limits and key problems, not an outage of NVIDIA's service.
+
+**Profiles** (no code change to switch; `scripts/use-models.sh --list`):
+
+| Profile | Primary | Fallback | When |
+|---|---|---|---|
+| `nvidia-free` (default) | NVIDIA free tier | OpenRouter free tier | Normally |
+| `openrouter-free` | OpenRouter free tier | NVIDIA free tier | If NVIDIA throttles (429) on recording day. Without OpenRouter credit, 50 requests/day may not finish one Task B |
+| `openrouter-paid` | `qwen/qwen3-coder-next` on OpenRouter (**paid**) | NVIDIA free tier | Only after adding OpenRouter credit; refused without `--paid-ok` |
+
+`scripts/use-models.sh <profile>` rewrites `config/models.json` from the example with that pair (the previous
+file is kept as `config/models.json.bak`) and reruns the setup. `node scripts/preflight-model.mjs` sends one
+tiny request to the primary model and recommends a profile if it gets a 429.
 
 Free model lists change. To pick another model:
 
@@ -165,20 +187,24 @@ Free model lists change. To pick another model:
 
 Which models were used for what:
 
-- **Used for the tasks and the video:** the primary and fallback above.
+- **Used for the tasks and the video:** the primary and fallback above. Until 2026-11-19 the fallback was
+  Groq `qwen/qwen3.8-27b` (Task C runs and the rehearsal in `docs/STATUS.md`); it is now the spare.
 - **Probed only** (one request each, not used for the tasks): on NVIDIA, Kimi K3.1 Pro, GLM-5.3 Flash, Step-5,
-  Mistral Large 4 and MiniMax M3.1 Flash; on OpenRouter, the spare above (`docs/STATUS.md`, "Models").
+  Mistral Large 4 and MiniMax M3.1 Flash (`docs/STATUS.md`, "Models").
 - **Examples only, never run:** Gemini, Anthropic, OpenAI and `groq/gpt-oss-120b` in `config/models.example.json`.
 
 ### 5. Start TrueForge (keep this terminal open)
 
 ```bash
-OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=4 \
+OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1","integrate.api.nvidia.com","openrouter.ai","api.groq.com"]' \
+  MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=4 \
   SQLITE_PATH=$HOME/forge-data/trueforge.sqlite npx -y @truefoundry/trueforge@0.185.1
 ```
 
 `OUTBOUND_URL_ALLOWED_HOSTS` lets TrueForge reach the editor's MCP server on 127.0.0.1; its SSRF guard blocks
-loopback otherwise.
+loopback otherwise. The three provider hosts are listed because some networks (for example WSL behind NAT64)
+resolve them to `64:ff9b::…` addresses, which the guard treats as private and refuses
+(`Outbound URL blocked for host "integrate.api.nvidia.com"`); listed hosts skip that address check.
 
 `MODEL_HTTP_MAX_RETRIES=4` is the rate-limit cushion. TrueForge 0.185.1 resends a model request that gets 429,
 408, 409, 502, 503 or a 52x/530 gateway error up to that many times, before any output is streamed. It honours a
@@ -204,7 +230,8 @@ The setup:
 - creates four agents from `agent/*.json`: `forge-coder` and `forge-inline` on the primary model, and
   `forge-coder-fallback` and `forge-inline-fallback` on the fallback model.
 
-It ends with `models available: nvidia/nemotron-3-ultra (primary), groq/qwen3-8-27b (fallback)`.
+It ends with `models available: nvidia/nemotron-3-ultra (primary), openrouter/nemotron-3-ultra-free (fallback)`.
+`scripts/use-models.sh <profile>` runs this same setup after writing the profile's config.
 
 ### 7. Open the TrueForge UI
 
@@ -300,14 +327,15 @@ cd ~/flask-demo
 2. Break the primary model's key in TrueForge. In the setup terminal, inside `forgeathon`:
 
    ```bash
-   NVIDIA_API_KEY=invalid node scripts/setup-trueforge.mjs
+   scripts/use-models.sh nvidia-free --break-primary      # = NVIDIA_API_KEY=invalid node scripts/setup-trueforge.mjs
    ```
 
 3. Repeat Task A.
 
-**What you'll see:** within a few seconds, the banner
-"Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to groq/qwen3-8-27b"
-(also shown as a VS Code notification). Then the fallback model's diff appears; the editor stays responsive.
+**What you'll see:** at once, the banner
+"Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to openrouter/nemotron-3-ultra-free"
+(also shown as a VS Code notification). Then the fallback model's diff appears, about 8 s after the instruction
+(measured 2026-11-19: 1 NVIDIA 401, then 3 OpenRouter requests); the editor stays responsive.
 
 **Click:** **Reject All**.
 
@@ -321,7 +349,7 @@ git status --short
 **Restore the primary:**
 
 ```bash
-source ~/.forge-keys.env && node scripts/setup-trueforge.mjs
+source ~/.forge-keys.env && scripts/use-models.sh nvidia-free
 ```
 
 ## How context is selected
@@ -420,7 +448,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
 | `forge.commandBudget.agent` | `3` | Most commands per agent turn |
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
-| `NVIDIA_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` | (none) | Provider keys, read by the setup script; only those your config uses are needed |
+| `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY` | (none) | Provider keys, read by the setup script; only those your config uses are needed (default: NVIDIA and OpenRouter) |
 | `OUTBOUND_URL_ALLOWED_HOSTS` | (none) | TrueForge: must include `127.0.0.1` so it can call the editor's MCP server |
 | `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults (5000, 2) | We use `3000` and `4`: a short connect timeout, and TrueForge resends a rate-limited (429) model request up to 4 times (about 15 s) before the turn sees the error |
 | `SQLITE_PATH` | TrueForge default | TrueForge's database; a new path starts fresh |
@@ -450,7 +478,7 @@ real model solves the tasks; real-model results are recorded in `docs/STATUS.md`
 | Command | What it proves | Needs |
 |---|---|---|
 | `npm --prefix src/harness test` | Harness unit tests, and turn races against an in-memory TrueForge stand-in (late writes against retry and fallback; a silent server against Stop) | Nothing. The Flask ranking test needs `FORGE_FLASK_DIR`, otherwise it is skipped |
-| `npm --prefix src/harness run test:integration` | Turns through a real TrueForge 0.185.1: approvals, partial accept, deny, cancel races, 401/429/watchdog → retry or fallback, run_command, setup | TrueForge on :8790 (`scripts/dev-mock.sh --background`) |
+| `npm --prefix src/harness run test:integration` | Turns through a real TrueForge 0.185.1: approvals, partial accept, deny, cancel races, 401/429/watchdog → retry or fallback, two 429s per model call absorbed by TrueForge's own retries (no harness retry, no duplicate tool call), run_command, setup | TrueForge on :8790 (`scripts/dev-mock.sh --background`) |
 | `scripts/e2e-mock.sh` | Tasks A, B, C and G (guardrails) through the harness on a copy of Flask 3.1.3, with the verification commands: 21 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
 | `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
 | `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, panel, settings | A display (WSLg). Fetches 3 libraries without sudo |
@@ -460,6 +488,7 @@ real model solves the tasks; real-model results are recorded in `docs/STATUS.md`
 | `src/harness/node_modules/.bin/tsc -p contracts/tsconfig.json` | The shared protocol types compile | `npm ci` in `src/harness` |
 | `node scripts/smoke-real-model.mjs --tasks A,B,C` | The `e2e-mock.sh` checks with your real models (costs real requests) | Keys, `config/models.json`, TrueForge |
 | `node --test scripts/submission-readiness.test.mjs` | Tests of the submission-evidence checker | Nothing |
+| `node --test scripts/use-models.test.mjs scripts/preflight-model.test.mjs` | Profile switching (paid profile refused without `--paid-ok`, keys never printed) and the pre-flight (one request; 429 → profile advice) against a local fake provider | Built `src/harness` |
 | `node scripts/check-submission.mjs` | Checks that the write-up has no placeholders and that `docs/writeup/rehearsal.json` (copied from `config/rehearsal.example.json`) records real A/B/C evidence. It fails until those are filled in; it checks completeness, not truth | The filled-in evidence file |
 
 The unit tests cover:
@@ -482,11 +511,12 @@ The smoke script also accepts these options:
 |---|---|
 | `Verification requires Linux/WSL with bubblewrap and user namespaces enabled` (in a command result) | Install bubblewrap in WSL/Linux (`sudo apt install bubblewrap`) and check it with `bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true`. Commands are refused until this works |
 | `Read-only file system` in a command's output | Expected: commands cannot write to the checkout. Edits go through reviewed diffs; tests may write under `/tmp` |
-| `Outbound URL blocked for host "127.0.0.1"` (TrueForge, at setup or on the first tool call) | Start TrueForge with `OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]'`, exactly as in step 5 |
+| `Outbound URL blocked for host "127.0.0.1"` (TrueForge, at setup or on the first tool call) | Start TrueForge with `OUTBOUND_URL_ALLOWED_HOSTS` including `127.0.0.1`, exactly as in step 5 |
+| `Outbound URL blocked for host "integrate.api.nvidia.com"` (or `openrouter.ai`) at setup | Your DNS returns NAT64/private addresses for the provider. Start TrueForge with the provider hosts in `OUTBOUND_URL_ALLOWED_HOSTS`, exactly as in step 5 |
 | Port in use (`EADDRINUSE` on 8790 or 47615) | Find the process with `ss -ltnp \| grep -E '8790\|47615'` and stop it, often an earlier TrueForge or `scripts/dev-mock.sh stop`. Or change the port: add `--port N` to the TrueForge command and set `forge.trueforgeUrl`; for the MCP server, change `forge.mcpPort` |
 | `Request failed (401): Unauthorized` and an immediate fallback, when you did not intend Task C | The key TrueForge has is wrong. `source ~/.forge-keys.env` in the same terminal, then rerun `node scripts/setup-trueforge.mjs` |
 | `provider "nvidia" is used by the agents but NVIDIA_API_KEY is not set` | The key is not exported in that terminal; `source ~/.forge-keys.env` |
-| 429 rate limit | The harness waits for `Retry-After` (capped at 30 s), retries once, then falls back. On NVIDIA's free tier (≈ 40 requests/min), wait a minute between long Task B runs |
+| 429 rate limit | TrueForge resends the request up to 4 times (about 15 s, step 5); if it still fails, the harness waits for the hint (capped at 30 s), retries once, then falls back to OpenRouter. If NVIDIA keeps answering 429, `scripts/use-models.sh openrouter-free` (check first with `node scripts/preflight-model.mjs`) |
 | A model is missing from the free list, or has a 404 or unknown model id | List the models (step 4), pick a tool-calling one, edit `config/models.json`, rerun the setup, then restart the Extension Development Host so it shows the new model name |
 | The extension does not load, or Node/npm is not found, under Windows | Open the folder from a **WSL** window (green "WSL: Ubuntu" in the corner), and install Node inside WSL, not only on Windows |
 | `TrueForge is not reachable at http://127.0.0.1:8790` | Start TrueForge (step 5) and check http://localhost:8790 opens. If you use another URL, set `forge.trueforgeUrl` |

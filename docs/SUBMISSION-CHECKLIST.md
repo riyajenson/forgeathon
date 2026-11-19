@@ -26,7 +26,7 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Inline edit with in-editor diff, accept/reject, no copy-paste | ✅ | UI e2e (`scripts/test-extension-e2e.sh`), manual test A |
 | Agent mode: one request, ≥ 3 files discovered and edited | ✅ | UI e2e + `scripts/e2e-mock.sh` (cli.py, test_cli.py, docs/cli.rst) — demo model; ✅ real models (STATUS.md) |
 | Context: `@file`, `@symbol`, automatic retrieval, budget, rationale visible | ✅ | Context engine tests (incl. Flask ranking), panel context block |
-| Diff safety: preview, per-hunk accept/reject, no silent writes, undo | ✅ | Extension suites in VS Code (all six apply outcomes asserted, partial approval, undo incl. a formatting save participant), harness tests. Limitation: an approved `run_command` can change files without review (flagged, reported, capped by the harness command budget; README "Safety model") |
+| Diff safety: preview, per-hunk accept/reject, no silent writes, undo | ✅ | Extension suites in VS Code (all six apply outcomes asserted, partial approval, undo incl. a formatting save participant), harness tests. Approved commands run in bubblewrap (read-only checkout, no network; refused if unavailable), flagged, reported and capped by the command budget (README "Safety model"). Limitation: commands can still read any file |
 | Streaming and cancellation, workspace consistent | ✅ | Integration cancel tests (paused, streaming, in-flight apply); unit races (Stop before a command spawns, silent TrueForge, late writes vs retry/fallback); UI e2e Stop. All with the scripted model |
 
 ## Fixed tasks (on Flask 3.1.3, `22d92470`)
@@ -53,3 +53,4 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Techfest Team ID | 🟡 | Keep available for the form; add to the write-up header |
 | Submission form https://forms.gle/htyWGFJRBgsg3qmx6 | 🟡 | Human |
 | Links public by the deadline (repo, video) | 🟡 | Check in a signed-out browser |
+| Evidence gate `node scripts/check-submission.mjs` | 🟡 | Fails until the write-up placeholders are filled and `docs/writeup/rehearsal.json` (from `config/rehearsal.example.json`) records the real A/B/C runs; `node --test scripts/submission-readiness.test.mjs` 6/6 |

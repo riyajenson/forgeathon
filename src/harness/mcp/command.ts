@@ -1,8 +1,9 @@
 // run_command: executes one approved shell command inside the workspace and reports what it changed.
-// It is not a sandbox: an approved command can change files without hunk review. Mitigations: exact
-// one-use approval, real-path cwd containment, a scrubbed environment, a timeout and an output cap, an
-// "unrestricted" warning for commands outside a small verification list, and a git status diff of what
-// the command changed.
+// Layers: exact one-use approval (and the per-turn command budget, in the turn), real-path cwd containment,
+// an "unrestricted" warning for commands outside a small verification list, and execution inside bubblewrap
+// (command-protection.ts): read-only host filesystem including the checkout, private /tmp, no network,
+// only PATH/VIRTUAL_ENV/locale passed. It fails closed when bubblewrap is unavailable. Also a timeout, an
+// output cap, and a git status diff as a backstop. Files stay readable: not a confidentiality boundary.
 import { execFile, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -10,6 +11,7 @@ import { sha256Hex } from '../review';
 import { normalizeWorkspacePath } from './paths';
 import type { ToolContext, ToolOutcome } from './tools';
 import { approvalKey } from './tools';
+import { checkProtection, confinedCwd, protectedArgs } from './command-protection';
 
 export interface RunCommandArgs {
   command: string;
@@ -119,7 +121,7 @@ export function isAutoApprovableCommand(command: string): boolean {
   return isListedCommand(c) && AUTO_APPROVABLE_COMMANDS.some((re) => re.test(c));
 }
 
-export const UNRESTRICTED_WARNING = 'Unrestricted command: it can change any file without hunk review and is not sandboxed.';
+export const UNRESTRICTED_WARNING = 'Unrestricted command: not on the verification list. It runs write-protected and offline, but can read any file you can and run any program.';
 
 function capped(buf: string): string {
   return buf.length <= COMMAND_OUTPUT_CAP ? buf : `${buf.slice(0, COMMAND_OUTPUT_CAP / 2)}\n[... ${buf.length - COMMAND_OUTPUT_CAP} characters omitted ...]\n${buf.slice(-COMMAND_OUTPUT_CAP / 2)}`;
@@ -127,7 +129,16 @@ function capped(buf: string): string {
 
 const cancelled = (): ToolOutcome => ({ ok: false, code: 'CANCELLED', message: 'the turn was cancelled before the command started; nothing was run' });
 
-export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs): Promise<ToolOutcome> {
+/** Injection points for tests (origin 13194bd); production uses the real implementations. */
+export interface CommandRuntime {
+  snapshot: typeof snapshot;
+  environment: typeof commandEnv;
+  checkProtection: typeof checkProtection;
+  spawn: typeof spawn;
+}
+const defaultRuntime: CommandRuntime = { snapshot, environment: commandEnv, checkProtection, spawn };
+
+export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs, runtime: CommandRuntime = defaultRuntime): Promise<ToolOutcome> {
   const scope = ctx.scope;
   if (!scope) return { ok: false, code: 'NO_REVIEW_DECISION', message: 'this call is not bound to an active turn; nothing was run' };
   if (scope.cancelled) return { ok: false, code: 'CANCELLED', message: 'the turn was cancelled; nothing was run' };
@@ -142,45 +153,61 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs): Pr
   // Registered before the first await, so a cancel at any point from here on is seen.
   const controller = new AbortController();
   scope.running.add(controller);
+  const stopped = () => scope.cancelled || controller.signal.aborted;
   try {
     let cwd: string;
     try {
-      const realRoot = await fs.realpath(root);
-      cwd = await fs.realpath(rel ? path.join(root, ...rel.split('/')) : root);
-      const inside = path.relative(realRoot, cwd);
-      if (inside.startsWith('..') || path.isAbsolute(inside)) {
-        return { ok: false, code: 'OUTSIDE_WORKSPACE', message: `cwd resolves outside the workspace (symlink?): ${args.cwd}; nothing was run` };
-      }
-      if (!(await fs.stat(cwd)).isDirectory()) return { ok: false, code: 'INVALID_ARGS', message: `cwd is not a directory: ${args.cwd}; nothing was run` };
-    } catch {
-      return { ok: false, code: 'INVALID_ARGS', message: `cwd does not exist: ${args.cwd}; nothing was run` };
+      cwd = await confinedCwd(root, rel);
+    } catch (e) {
+      return /leaves the workspace/.test((e as Error).message)
+        ? { ok: false, code: 'OUTSIDE_WORKSPACE', message: `cwd resolves outside the workspace (symlink?): ${args.cwd}; nothing was run` }
+        : { ok: false, code: 'INVALID_ARGS', message: `cwd is not an existing directory inside the workspace: ${args.cwd}; nothing was run` };
     }
-    const before = await snapshot(root);
-    const { env, removed } = await commandEnv(root);
+    // Cancellation is checked after every preparation step and immediately before spawn.
+    if (stopped()) return cancelled();
+    const before = await runtime.snapshot(root);
+    if (stopped()) return cancelled();
+    const { env, removed } = await runtime.environment(root);
+    if (stopped()) return cancelled();
+    // Fail closed: without bubblewrap and user namespaces nothing runs (there is no unprotected fallback).
+    try { await runtime.checkProtection(cwd, controller.signal); }
+    catch (error) {
+      if (stopped()) return cancelled();
+      return { ok: false, code: 'INVALID_ARGS', message: `${(error as Error).message} Nothing was run.` };
+    }
     commandTestHooks.beforeSpawn?.();
     // Last check, synchronously before spawn: nothing below awaits until the process exists and is killable.
-    if (scope.cancelled || controller.signal.aborted) return cancelled();
-    scope.writes++; // a shell command may change anything: never retry or fall back after one ran
+    if (stopped()) return cancelled();
+    scope.writes++; // conservatively: never retry or fall back after a command was admitted
 
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    const venv = env['VIRTUAL_ENV'];
     const exitCode = await new Promise<number | null>((resolve) => {
-      const child = spawn('bash', ['-c', args.command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      // Only these variables reach the command: no credentials, no editor IPC handles.
+      const child = runtime.spawn('bwrap', protectedArgs(cwd, args.command, root, venv ? [venv] : []), {
+        cwd, env: { PATH: env['PATH'], VIRTUAL_ENV: venv, HOME: '/tmp', TMPDIR: '/tmp',
+          LANG: env['LANG'] ?? 'C.UTF-8', PYTHONDONTWRITEBYTECODE: '1', PYTEST_ADDOPTS: '-p no:cacheprovider' },
+        detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      });
       const killGroup = (signal: NodeJS.Signals) => { try { if (child.pid) process.kill(-child.pid, signal); } catch { /* already gone */ } };
-      const stop = () => { killGroup('SIGTERM'); setTimeout(() => killGroup('SIGKILL'), 2000).unref(); };
+      let escalation: NodeJS.Timeout | undefined;
+      const stop = () => { if (escalation) return; killGroup('SIGTERM'); escalation = setTimeout(() => killGroup('SIGKILL'), 2000); escalation.unref(); };
       const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutSec * 1000);
-      controller.signal.addEventListener('abort', stop);
-      child.stdout.on('data', (c: Buffer) => { if (stdout.length < COMMAND_OUTPUT_CAP * 4) stdout += c.toString('utf8'); });
-      child.stderr.on('data', (c: Buffer) => { if (stderr.length < COMMAND_OUTPUT_CAP * 4) stderr += c.toString('utf8'); });
+      controller.signal.addEventListener('abort', stop, { once: true });
+      if (controller.signal.aborted) stop();
+      child.stdout!.on('data', (c: Buffer) => { if (stdout.length < COMMAND_OUTPUT_CAP * 4) stdout += c.toString('utf8'); });
+      child.stderr!.on('data', (c: Buffer) => { if (stderr.length < COMMAND_OUTPUT_CAP * 4) stderr += c.toString('utf8'); });
       child.on('error', (e) => { stderr += `\n${e.message}`; });
-      child.on('close', (code) => { clearTimeout(timer); controller.signal.removeEventListener('abort', stop); resolve(code); });
+      child.on('close', (code) => { clearTimeout(timer); clearTimeout(escalation); controller.signal.removeEventListener('abort', stop); resolve(code); });
     });
-    const after = await snapshot(root);
+    // Backstop: the checkout is mounted read-only, but anything that still changed is reported.
+    const after = await runtime.snapshot(root);
     const changedFiles = before && after ? diffSnapshots(before, after) : [];
     scope.onCommand?.({ callRef: approval.callRef, command: args.command, exitCode, changedFiles });
 
-    const stopped = controller.signal.aborted ? ' (killed: turn cancelled)' : timedOut ? ` (killed: exceeded ${timeoutSec} s)` : '';
+    const killed = controller.signal.aborted ? ' (killed: turn cancelled)' : timedOut ? ` (killed: exceeded ${timeoutSec} s)` : '';
     const changes = before && after
       ? changedFiles.length ? `Files changed by the command (outside review): ${changedFiles.join(', ')}` : 'Files changed by the command: none'
       : 'Files changed by the command: unknown (not a git repository)';
@@ -190,7 +217,7 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs): Pr
     const scrubbed = removed ? `\nenvironment: ${removed} credential-like variable(s) withheld` : '';
     return {
       ok: true,
-      text: `$ ${args.command}\ncwd: ${rel || '.'}\nexit code: ${exitCode ?? 'none'}${stopped}\n${changes}${unsaved}${scrubbed}\n--- stdout ---\n${capped(stdout)}\n--- stderr ---\n${capped(stderr)}`,
+      text: `$ ${args.command}\ncwd: ${rel || '.'}\nprotection: read-only host filesystem; private temporary files; no network\nexit code: ${exitCode ?? 'none'}${killed}\n${changes}${unsaved}${scrubbed}\n--- stdout ---\n${capped(stdout)}\n--- stderr ---\n${capped(stderr)}`,
     };
   } finally {
     scope.running.delete(controller);

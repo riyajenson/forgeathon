@@ -399,10 +399,10 @@ test('run_command: approval prompt, execution, changed-file report', async () =>
     assert.equal(doneOf(events).status, 'done');
     assert.equal(prompt?.command, 'echo made > made.txt && echo ran');
     assert.equal(prompt?.cwd, '.');
-    assert.equal(await fs.readFile(path.join(root, 'made.txt'), 'utf8'), 'made\n');
+    // The command runs in bubblewrap: the checkout is read-only, so the redirection fails and nothing changes.
+    await assert.rejects(fs.access(path.join(root, 'made.txt')));
     assert.equal(prompt?.unrestricted, true, 'a compound shell command is flagged unrestricted');
-    assert.ok(ofType(events, 'status').some((s) => /command exited 0; it changed files outside review: made\.txt/.test(s.detail ?? '')));
-    assert.ok(mock.requests.some((r) => /Files changed by the command \(outside review\): made\.txt/.test(lastToolMessage(r) ?? '')));
+    assert.ok(mock.requests.some((r) => /Read-only file system|Verification requires Linux/.test(lastToolMessage(r) ?? '')));
   });
 });
 

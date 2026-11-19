@@ -290,6 +290,7 @@ async function main(): Promise<void> {
     if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
     if (s.contextUsed) console.log(`   context: ${s.contextUsed}: ${s.contextFiles.join(', ')}`);
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);
+    if (s.text.trim()) console.log(`   reply: ${s.text.trim().replace(/\s+/g, ' ').slice(-300)}`);
     if (s.fallback) console.log(`   fallback: ${s.fallback}`);
     if (s.error) console.log(`   error: ${s.error}`);
     if (s.session) console.log(`   trace: ${s.session}`);

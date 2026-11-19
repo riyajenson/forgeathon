@@ -1,6 +1,12 @@
 # Project status
 
-Updated: 2026-11-19 (night), after the real-model validation of the guardrails. **Harness-enforced command
+Updated: 2026-11-19 (late night), after merging `origin/main` (PRs #3 and #4 by another contributor:
+bubblewrap command protection, hold-until-idle for unsettled tools, retrieval coverage reporting, submission
+evidence gate). See "Merge of origin/main" and `docs/review/merge-origin-main.md`. All automated checks are
+green on the mock. The real-model runs below **predate the sandbox**. Readiness is tracked by
+`node scripts/check-submission.mjs` (fails until the human evidence is filled in; `docs/harness/CONTEXT-READINESS.md`).
+
+Before that: the real-model validation of the guardrails. **Harness-enforced command
 budget, narrowed auto-approval and an argument-shape hint for repeated bad edits** are on main and **validated
 with the real models**: Task B with the video settings passed 6/6 with 3 commands (4 more refused by the
 budget) and `cli.py` in 3 reviews, which meets the targets, so no further fix or run was needed. A and C also
@@ -108,6 +114,26 @@ no real-model runs today (mock only). Protocol 0.4.4: `TurnRequest.commandBudget
 | `tsc -p contracts`, extension compile | clean (protocol 0.4.4) |
 | `scripts/render-writeup.sh` | 3 pages |
 | Fresh clone of `docs/readme-final` (README at `59fbcc6`), mock only, README commands as written | ✅ in 132 s with warm npm caches: build; Flask 3.1.3 workspace (quickstart step 8); `cp config/models.example.json` + `setup-trueforge.mjs --dry-run` (NVIDIA, Groq, OpenRouter, 4 agents on nemotron / qwen3.8); `e2e-mock.sh` 21/21 and 21/21 with `--auto-approve-safe-commands --deny-unrestricted`; 98/98 unit; 17/17 integration; `test-extension-e2e.sh` 4/4 (stands in for F5). Clone in `/tmp/forge-readme-*` |
+
+## Merge of origin/main (2026-11-19, late night, branch integrate/origin-main)
+
+Merged `origin/main` (`fe72740`) with `git merge` (no rebase, no force-push). Decisions taken with the user:
+
+- **Both layers for `run_command`:** origin's bubblewrap protection and fail-closed behaviour, plus our
+  approval, ⚠ Unrestricted label, command budget, auto-approval and change report.
+- **Hold until idle for unsettled tools:** origin's behaviour.
+
+Every resolution is listed in `docs/review/merge-origin-main.md`.
+
+| Check (on the merge) | Result |
+|---|---|
+| `npm --prefix src/harness test` | 115/115, none skipped (bwrap 0.11.1 present); new from origin: sandbox ×7, settlement ×3, context coverage ×5; new in the merge: venv under /tmp visible, outside-review backstop |
+| `npm --prefix src/harness run test:integration` | 17/17 (the compound command is flagged unrestricted and now fails read-only) |
+| `scripts/e2e-mock.sh` / `--auto-approve-safe-commands --deny-unrestricted` | 21/21 / 21/21; the agent's own `pytest` passes inside the sandbox (57 passed) |
+| `scripts/test-extension.sh` / `scripts/test-extension-e2e.sh` | 4/4 / 4/4 |
+| `node --test scripts/submission-readiness.test.mjs` | 6/6 |
+| `node scripts/check-submission.mjs` | fails as designed: write-up placeholders (team, URLs, `[mm:ss]`) and no `docs/writeup/rehearsal.json` yet |
+| `tsc -p contracts`, `scripts/render-writeup.sh`, secret scan | clean, 3 pages, clean |
 
 ## Real-model validation of the guardrails (2026-11-19, night)
 
@@ -245,6 +271,7 @@ merged into `main` with `--no-ff`.
 | harness/p8-model-config | provider examples (Gemini, Groq, OpenRouter, Anthropic, OpenAI), reasoning efforts |
 | docs/submission | README, LICENSE, notices, write-up + PDF script, demo script, manual test, checklist, `.gitignore` |
 | editor/e7-notifications, editor/e8-test-cache | fallback/error notifications; shared VS Code test download |
+| integrate/origin-main | merge of origin/main (PRs #3, #4): bubblewrap protection, hold-until-idle, coverage reporting, submission evidence gate; resolutions in `docs/review/merge-origin-main.md` |
 | harness/p11-command-budget | command budget (protocol 0.4.4), narrowed auto-approval, argument-shape hint, mock e2e Task G, editor settings and panel line |
 | docs/readme-final | README reconciled with the submission spec (real models first, eligibility table, Mermaid architecture, beginner key steps, tasks, safety model, troubleshooting, mock mode last), `docs/images/README.md`, mock Task G with an ⚠ Unrestricted command, write-up, demo script with measured numbers, checklist, this file |
 | harness/p10-task-b-tuning | forge-coder instructions (two rounds), `forge.autoApproveSafeCommands` (protocol 0.4.3), `edits`-as-string fix, approvals per task in the smoke run, demo script timings |
@@ -280,6 +307,11 @@ merged into `main` with `--no-ff`.
     (no ⚠) but always ask. Supersedes the `python -c` caveat of decision 14.
 18. The argument-shape hint is added from the second argument-error refusal on the same file in a turn (the first
     refusal stays short); keyed by the path string the model sent.
+19. `run_command` runs in bubblewrap (origin) in addition to our approval layers; fail closed without it (decided with
+    the user during the merge). A virtualenv outside the workspace is bound read-only so it stays visible.
+20. An unsettled tool holds the session until it finishes (origin), instead of our bounded settle-then-end.
+21. Retrieval keeps our shared ignore policy and 20,000-file listing; origin's coverage reporting and fail-closed
+    unreadable `.gitignore` are ported onto it.
 
 ## Known issues and risks
 
@@ -291,8 +323,10 @@ merged into `main` with `--no-ff`.
   8000 tokens/min limit is small for Task B's ≈ 33k-token requests).
 - Compaction is configured but never triggered by the demo tasks.
 - A fallback starts a new TrueForge session (no earlier panel history).
-- `run_command` is not sandboxed: an approved command can change files outside review. Mitigated (approval of the exact
-  command, unrestricted warning, confined cwd, scrubbed env, timeout, git status diff); residual risk in README.
+- `run_command` runs in bubblewrap (read-only checkout and host, private /tmp, no network, no keys) on top of
+  approval, the ⚠ label and the budget; it needs Linux/WSL with bubblewrap (otherwise commands are refused). Reads are
+  not restricted (not a confidentiality boundary). The real-model Task B numbers were measured before the sandbox.
+- An unsettled tool now holds the session until it ends (bounded by the command timeout, at most 600 s, or Stop).
 - Fallback on an invalid key is matched by status code and wording; verified with NVIDIA (401 "Unauthorized") and
   the demo model. Other providers' wordings are covered by tests only.
 - Not fixed from the review: event/receipt retention for the editor's lifetime and cached model names after rerunning
@@ -309,7 +343,9 @@ merged into `main` with `--no-ff`.
    start TrueForge (README step 2) on a fresh database, `source ~/.forge-keys.env`, `node scripts/setup-trueforge.mjs`.
    Video settings decided: `forge.autoApproveSafeCommands` on (narrowed list), budget 3, Deny ⚠ Unrestricted
    (see `docs/DEMO-SCRIPT.md`, "Task B: what to expect").
-   ~~Real Task B validation with those settings~~: done 2026-11-19 night (6/6; numbers in DEMO-SCRIPT).
+   ~~Real Task B validation with those settings~~: done 2026-11-19 night (6/6; numbers in DEMO-SCRIPT), but
+   **before** the sandbox merge: one real Task B rerun with bubblewrap is recommended (needs your authorisation).
+   Check `bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true` before recording.
 3. **Manual VS Code checklist:** `docs/MANUAL-TEST.md` (≈ 20 min).
 4. **Push:**
    ```bash
@@ -317,7 +353,9 @@ merged into `main` with `--no-ff`.
    ```
    Then confirm the repository is public (open it signed out).
 5. **Record** per `docs/DEMO-SCRIPT.md` (≤ 4:00; Tasks A, B, C in order; no cut between instruction and diff).
-6. **Write-up:** fill team, Team ID, repo/video URLs, final models + cost, `[mm:ss]` timestamps and the
+6. **Evidence gate:** copy `config/rehearsal.example.json` to `docs/writeup/rehearsal.json`, fill in the real
+   A/B/C runs (session URLs, tokens, video timestamps), and run `node scripts/check-submission.mjs` until it passes.
+6b. **Write-up:** fill team, Team ID, repo/video URLs, final models + cost, `[mm:ss]` timestamps and the
    real-model limitation line in `docs/writeup/WRITEUP.md`; `scripts/render-writeup.sh` (must say 1–3 pages).
    Commit the text changes, push.
 7. **Submit** https://forms.gle/htyWGFJRBgsg3qmx6 (repo link, PDF, video link, Team ID); check every link signed out.

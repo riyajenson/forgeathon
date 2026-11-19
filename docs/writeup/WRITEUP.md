@@ -34,8 +34,10 @@ compaction is on (60k input tokens); iteration limits 8 (inline) and 60 (agent).
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
 the prompt): a per-turn command budget (3 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached"), and a second argument error on the same file
-gets the exact `propose_edit` argument shape in its refusal.
+without prompting and the panel shows "command budget reached"), approved commands run in **bubblewrap** (read-only
+checkout and host, private `/tmp`, no network, no keys; refused if unavailable), a tool still running after a
+turn holds the session (no retry or fallback until it ends), and a second argument error on the same file gets
+the exact `propose_edit` argument shape in its refusal.
 
 **Editor tools are MCP tools** served by the harness inside the extension host (127.0.0.1, bearer token):
 `gather_context`, `read_file`, `search_workspace`, `propose_edit`, `run_command`, and the **deferred**
@@ -115,7 +117,7 @@ Automated checks use a **scripted model**, so they show that the plumbing works,
 solves the tasks. Without a GUI or keys: `scripts/e2e-mock.sh` (21/21 checks: Task A one-liner and docstring,
 `pytest tests/test_cli.py -q` 57 passed, `flask --help` lists `config`, masked JSON, the command budget,
 argument hint and a denied ⚠ Unrestricted command, Task C fallback + clean status); in a real VS Code window: `scripts/test-extension-e2e.sh` (Tasks A, B, Stop, C through the extension
-code) and 4 extension suites. Harness: 98 unit tests (including cancel and retry races against an in-memory
+code) and 4 extension suites. Harness: 115 unit tests (including cancel and retry races against an in-memory
 TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
 
 ## 7. Tools used
@@ -136,14 +138,13 @@ file over several reviews even with instructions against both, hence the harness
 in the measured run; `cli.py` still took 3 reviews); each step resends the whole conversation, so token use grows with the number of
 steps. An optional setting auto-approves bare `pytest`/`git status|diff` only. Retrieval is lexical (no embeddings) and
 the symbol index covers Python only; ranking weights were tuned on Flask. A fallback starts a new TrueForge
-session, so it does not see earlier panel turns. **`run_command` is not sandboxed:** an approved command can
-change any file you can, without hunk review. Mitigations: one-use approval of the exact command, an
-"Unrestricted" warning for anything beyond pytest/`python -c`/`flask`/`git status|diff`, workspace-confined
-cwd, credential-like variables withheld, timeout and output cap, and a `git status` diff reported as "changed
-outside review" (it cannot see ignored files or paths outside the workspace). Compaction is configured but the
+session, so it does not see earlier panel turns. **`run_command` is write-protected, not confidential:** bubblewrap
+makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
+Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
+network fail by design. The real-model runs above predate the sandbox merge. Compaction is configured but the
 demo tasks never reach the threshold. Hunk review uses a picker rather than per-hunk CodeLens. One workspace
 folder; tested on WSL only.
 
 **With another month:** embeddings and language-server symbols for retrieval, evaluated on a task suite
 across several repositories and models; per-hunk CodeLens and streaming diff previews; resuming conversation
-history after fallback; a sandboxed `run_command`; cost-aware model routing; packaging for the Marketplace.
+history after fallback; a confidentiality boundary for `run_command` (read access limited to the workspace); cost-aware model routing; packaging for the Marketplace.

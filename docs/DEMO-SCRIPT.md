@@ -18,6 +18,9 @@ cd ~/projects/forgeathon && source ~/.forge-keys.env     # NVIDIA_API_KEY, GROQ_
 OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MODEL_HTTP_MAX_RETRIES=1 \
   SQLITE_PATH=$HOME/forge-demo-$(date +%Y%m%d-%H%M).sqlite npx -y @truefoundry/trueforge@0.185.1   # terminal 1
 node scripts/setup-trueforge.mjs                                                                  # terminal 2
+
+# 3. Command protection: approved commands run in bubblewrap (read-only checkout, no network). Must succeed:
+bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protection-ok
 ```
 
 3. VS Code: **WSL: Connect to WSL** → open `~/projects/forgeathon/extension` → **F5** → in the Extension
@@ -42,6 +45,11 @@ Models: NVIDIA `nemotron-3-ultra-550b-a55b` (primary), Groq `qwen3.8-27b` (fallb
 **Measured with the recording settings** (2026-11-19, run 4, fresh TrueForge database). The settings were
 auto-approval on, budget 3 and Deny on ⚠ Unrestricted, as in `smoke-real-model.mjs
 --auto-approve-safe-commands --deny-unrestricted`. All 6 checks passed.
+
+This run was **before** origin's bubblewrap protection was merged. With it, commands cannot write to the
+checkout or reach the network. The same `pytest` and `python -c` checks pass inside it (verified on the
+mock), but a real-model rerun is needed to confirm the numbers. If the model tries to write a file, the
+command output will show `Read-only file system`, and the model has to use a reviewed diff instead.
 
 | | Run 4 (guardrails) |
 |---|---|

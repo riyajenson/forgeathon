@@ -99,6 +99,8 @@ export class GitIgnore {
 /** Every .gitignore in the workspace, applied like git: deeper files override shallower ones, last rule wins. */
 export class IgnorePolicy {
   private readonly layers: Array<[string, GitIgnore]>;
+  /** .gitignore files that exist but could not be read: exclusions they hold are unknown. */
+  unreadable: string[] = [];
 
   constructor(byDir: Map<string, GitIgnore>) {
     this.layers = [...byDir.entries()].sort((a, b) => (a[0] ? a[0].split('/').length : 0) - (b[0] ? b[0].split('/').length : 0));
@@ -106,12 +108,17 @@ export class IgnorePolicy {
 
   static async load(port: EditorPort, paths: readonly string[]): Promise<IgnorePolicy> {
     const byDir = new Map<string, GitIgnore>();
-    for (const p of paths) {
-      if (p !== '.gitignore' && !p.endsWith('/.gitignore')) continue;
-      const text = (await port.readText(p).catch(() => null))?.text;
+    const unreadable: string[] = [];
+    // The root .gitignore is always tried, even if the listing left it out (origin 2395e27).
+    const ignoreFiles = new Set(['.gitignore', ...paths.filter((p) => p.endsWith('/.gitignore'))]);
+    for (const p of ignoreFiles) {
+      let text: string | undefined;
+      try { text = (await port.readText(p))?.text; } catch { unreadable.push(p); continue; }
       if (text !== undefined) byDir.set(p === '.gitignore' ? '' : p.slice(0, -'/.gitignore'.length), new GitIgnore(text));
     }
-    return new IgnorePolicy(byDir);
+    const policy = new IgnorePolicy(byDir);
+    policy.unreadable = unreadable;
+    return policy;
   }
 
   private matches(path: string, isDir: boolean): boolean {
@@ -137,6 +144,8 @@ export interface VisibleFiles {
   files: string[];
   /** The editor's listing stopped at LIST_LIMIT; files after it were not considered. */
   truncated: boolean;
+  /** .gitignore files that could not be read (their exclusions are unknown). */
+  unreadableIgnores: string[];
 }
 
 /** Workspace files the agent may see, optionally under `prefix` (a directory or path prefix). */
@@ -144,5 +153,5 @@ export async function visibleFiles(port: EditorPort, prefix?: string): Promise<V
   const all = await port.listFiles({ limit: LIST_LIMIT });
   const policy = await IgnorePolicy.load(port, all);
   const files = all.filter((p) => (!prefix || p.startsWith(prefix)) && !policy.ignores(p) && !isSecretPath(p));
-  return { files, truncated: all.length >= LIST_LIMIT };
+  return { files, truncated: all.length >= LIST_LIMIT, unreadableIgnores: policy.unreadable };
 }

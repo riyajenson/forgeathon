@@ -87,5 +87,5 @@ test('a listing cut at the editor limit is reported in the context report, not s
     }
   }
   const index = await buildIndex(new HugePort(root));
-  assert.ok(index.skipped.some((s) => s.path === '(workspace)' && /listing stopped at/.test(s.reason)));
+  assert.ok(index.skipped.some((s) => s.path === '.' && /listing stopped at/.test(s.reason)));
 });

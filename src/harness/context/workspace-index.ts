@@ -71,16 +71,28 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => 
   return out;
 }
 
+/** Origin's name for the inventory limit; the shared listing limit (LIST_LIMIT, 20000) applies. */
+export const INDEX_FILE_LIMIT = LIST_LIMIT;
+
 export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
   const visible = await visibleFiles(port);
   const skipped: Array<{ path: string; reason: string }> = [];
-  if (visible.truncated) skipped.push({ path: '(workspace)', reason: `listing stopped at ${LIST_LIMIT} files; files after that were not considered` });
+  if (visible.truncated) skipped.push({ path: '.', reason: `workspace listing stopped at ${LIST_LIMIT} files; retrieval coverage may be incomplete (files after that were not considered)` });
+  if (visible.unreadableIgnores.length) {
+    // origin 2395e27: do not index files that an unreadable ignore policy might have excluded.
+    return { files: new Map(), chunks: [], df: new Map(), avgLength: 1, symbols: new Map(), modules: new Map(),
+      skipped: [...skipped, ...visible.unreadableIgnores.map((p) => ({ path: p, reason: 'cannot read ignore rules; automatic indexing refused until exclusions can be checked' }))] };
+  }
   const candidates = visible.files.filter(isIndexable);
   const files = new Map<string, IndexedFile>();
   const chunks: IndexedChunk[] = [];
-  const read = await mapLimit(candidates, 16, async (p) => ({ p, snap: await port.readText(p) }));
-  for (const { p, snap } of read) {
-    if (!snap) continue;
+  const read = await mapLimit(candidates, 16, async (p) => {
+    try { return { p, snap: await port.readText(p), unreadable: false }; }
+    catch { return { p, snap: null, unreadable: true }; }
+  });
+  for (const { p, snap, unreadable } of read) {
+    if (unreadable) { skipped.push({ path: p, reason: 'unreadable file; excluded from retrieval' }); continue; }
+    if (!snap) { skipped.push({ path: p, reason: 'file disappeared while indexing' }); continue; }
     if (snap.text.length > MAX_INDEX_CHARS) { skipped.push({ path: p, reason: `too large to index (${snap.text.length} chars)` }); continue; }
     if (snap.text.includes('\0')) { skipped.push({ path: p, reason: 'binary' }); continue; }
     const mod = moduleName(p);

@@ -260,7 +260,7 @@ test('unlisted commands are flagged unrestricted in the approval request; listed
     await run.start();
     const req = events(run).find((e) => e.t === 'command_request') as Extract<HarnessEvent, { t: 'command_request' }>;
     flagged.push(req.unrestricted);
-    if (req.unrestricted) assert.match(req.warning ?? '', /without hunk review/);
+    if (req.unrestricted) assert.match(req.warning ?? '', /not on the verification list.*write-protected/);
   }
   assert.deepEqual(flagged, [true, undefined]);
 });

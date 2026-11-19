@@ -93,6 +93,9 @@ All models below are **free tiers ($0)**. These are the models tested on Tasks A
 - **VS Code** with the **WSL** extension (Remote-WSL) on Windows.
 - **Node.js ≥ 22.14** (for example `nvm install 24`), npm, git.
 - **Python ≥ 3.10** with `venv`.
+- **bubblewrap** (`sudo apt install bubblewrap` on Ubuntu/WSL) for protected commands. Check it with
+  `bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true`. Without it, `run_command` refuses to run
+  anything (fail closed); editing and model calls still work. See `docs/harness/EXECUTION-SAFETY.md`.
 - Internet access: npm, TrueForge through `npx`, the model providers, GitHub (for Flask).
 
 ### 2. Install and build
@@ -356,10 +359,14 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
   - Each command needs your approval of that exact command and directory, used once.
   - Any command other than `pytest`, `python -m pytest`, `python -c`, `flask`, `git status` and `git diff`
     (without shell operators) is marked **⚠ Unrestricted** with a warning.
-  - The working directory must resolve inside the workspace, and the command gets your environment **minus**
-    credential-like variables.
+  - The working directory must resolve inside the workspace.
+  - **Protected execution (bubblewrap):**
+    - The host filesystem, including the checkout, is mounted read-only, so a command cannot edit source
+      files. `/tmp` and `/run` are private and disposable, and there is no network.
+    - Only `PATH`, `VIRTUAL_ENV` and the locale are passed: no API keys.
+    - Without bubblewrap the command is refused; there is no unprotected fallback.
   - A timeout (default 120 s, maximum 600 s) and an output cap apply.
-  - `git status` before and after reports files the command changed "outside review".
+  - As a backstop, `git status` before and after reports any file that still changed "outside review".
 - **Command budget:**
   - The harness, not the model's instructions, allows at most 3 commands per agent turn and 1 per inline turn,
     whether asked or auto-approved.
@@ -370,12 +377,12 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
   - Only bare `pytest`, `python -m pytest`, `git status` and `git diff`, with no shell operators and no path or
     `NAME=value` prefix.
   - `python -c` and `flask` always ask. Edits are always reviewed.
-- **Residual risk:** `run_command` is **not a sandbox**. A command you approve runs as you, so it can:
-  - write files outside review, including git-ignored files and paths outside the workspace;
-  - reach the network;
-  - read files.
-
-  Deny commands you do not understand.
+- **Unsettled tools:** if a tool is still running when the model's turn ends, the session stays occupied until
+  it finishes (Stop or the command timeout ends it). No retry, fallback or next turn starts in the meantime.
+- **Residual risk:** the sandbox is write protection, not a confidentiality boundary. A command you approve
+  can still read any file you can read, and use CPU and memory until its timeout. Commands that need the
+  network or need to write into the checkout (installs, builds into the tree) fail by design. Deny commands
+  you do not understand.
 
 ## Settings and environment
 
@@ -423,12 +430,14 @@ real model solves the tasks; real-model results are recorded in `docs/STATUS.md`
 | `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, panel, settings | A display (WSLg). Fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A, B, Stop and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |
 | `node scripts/smoke-real-model.mjs --tasks A,B,C` | The `e2e-mock.sh` checks with your real models (costs real requests) | Keys, `config/models.json`, TrueForge |
+| `node --test scripts/submission-readiness.test.mjs` | Tests of the submission-evidence checker | Nothing |
+| `node scripts/check-submission.mjs` | Checks that the write-up has no placeholders and that `docs/writeup/rehearsal.json` (copied from `config/rehearsal.example.json`) records real A/B/C evidence. It fails until those are filled in; it checks completeness, not truth | The filled-in evidence file |
 
 The unit tests cover:
 
 - the review core and the MCP tools;
-- run_command, including the command budget and auto-approval;
-- the context engine;
+- run_command, including the bubblewrap protection, cancel races, the command budget and auto-approval;
+- the context engine, including coverage limits and unreadable files;
 - setup and errors;
 - the model meter.
 
@@ -442,6 +451,8 @@ The smoke script also accepts these options:
 
 | Symptom | Fix |
 |---|---|
+| `Verification requires Linux/WSL with bubblewrap and user namespaces enabled` (in a command result) | Install bubblewrap in WSL/Linux (`sudo apt install bubblewrap`) and check it with `bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true`. Commands are refused until this works |
+| `Read-only file system` in a command's output | Expected: commands cannot write to the checkout. Edits go through reviewed diffs; tests may write under `/tmp` |
 | `Outbound URL blocked for host "127.0.0.1"` (TrueForge, at setup or on the first tool call) | Start TrueForge with `OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]'`, exactly as in step 5 |
 | Port in use (`EADDRINUSE` on 8790 or 47615) | Find the process with `ss -ltnp \| grep -E '8790\|47615'` and stop it, often an earlier TrueForge or `scripts/dev-mock.sh stop`. Or change the port: add `--port N` to the TrueForge command and set `forge.trueforgeUrl`; for the MCP server, change `forge.mcpPort` |
 | `Request failed (401): Unauthorized` and an immediate fallback, when you did not intend Task C | The key TrueForge has is wrong. `source ~/.forge-keys.env` in the same terminal, then rerun `node scripts/setup-trueforge.mjs` |

@@ -228,8 +228,17 @@ export class TurnRun {
       const unexecuted = scope.closeApprovals();
       if (result.status !== 'done') scope.cancel();
       if (!settled) {
-        this.deps.port.log('warn', `tool calls still running ${this.deps.settleMs} ms after the turn ended`);
-        emit({ t: 'status', state: 'running', detail: `${scope.inFlightCount} tool call(s) still running ${Math.round(this.deps.settleMs / 1000)} s after the turn ended; their effect on the workspace is unknown` });
+        // origin 45b3b9b: do not release the app session, reset approval state, or start another model while
+        // an earlier operation can still complete. Cancellation closes tool admission first. The wait ends when
+        // the tool does (a command is killed by its timeout, at most 600 s, or by Stop).
+        this.deps.port.log('warn', `tool calls still running ${this.deps.settleMs} ms after the turn ended; holding the session until they finish`);
+        scope.cancel();
+        this.record(agent, model, runtimeSessionId, result, attemptStart, 'TOOLS_UNSETTLED');
+        emit({ t: 'error', error: { code: 'unavailable', message: 'A tool is still running. Recovery is blocked until it finishes (no retry or fallback); inspect the workspace afterward.', retryable: false, workspaceEffect: 'unknown' } });
+        emit({ t: 'status', state: 'cancelling', detail: `${scope.inFlightCount} tool call(s) still running after the turn ended; waiting for them. No retry or fallback will start.` });
+        await scope.waitForIdle();
+        if (this.cancelRequested) return this.finishCancelled(result);
+        return void emit({ t: 'done', status: 'error' });
       }
       const wrote = scope.writes > 0;
       // An approved write or command that had not finished counts as a write: no retry, no fallback.

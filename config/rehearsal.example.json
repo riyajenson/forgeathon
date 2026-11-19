@@ -1,0 +1,15 @@
+{
+  "repositoryCommit": "<full tested repository SHA>",
+  "flaskCommit": "22d92470",
+  "repositoryUrl": "https://github.com/riyajenson/forgeathon",
+  "videoUrl": "<public video URL>",
+  "models": [
+    { "role": "primary", "name": "<provider/model>", "hosting": "<provider API or local endpoint>", "approximateCostUsd": null },
+    { "role": "fallback", "name": "<provider/model>", "hosting": "<provider API or local endpoint>", "approximateCostUsd": null }
+  ],
+  "tasks": [
+    { "task": "A", "mode": "real", "model": "<provider/model>", "passed": false, "sessionUrl": "<TrueForge session URL>", "verification": "<diff accepted and FLASK_DEBUG=off returned False>", "recordedAt": "<ISO date/time>", "videoTimestamp": "[mm:ss]", "inputTokens": null, "outputTokens": null },
+    { "task": "B", "mode": "real", "model": "<provider/model>", "passed": false, "sessionUrl": "<TrueForge session URL>", "verification": "<3+ discovered files, pytest result, help output and masked JSON>", "recordedAt": "<ISO date/time>", "videoTimestamp": "[mm:ss]", "inputTokens": null, "outputTokens": null },
+    { "task": "C", "mode": "real", "model": "<fallback provider/model>", "passed": false, "sessionUrl": "<TrueForge fallback session URL>", "verification": "<invalid primary, automatic fallback, responsive editor and clean git status>", "recordedAt": "<ISO date/time>", "videoTimestamp": "[mm:ss]", "inputTokens": null, "outputTokens": null }
+  ]
+}

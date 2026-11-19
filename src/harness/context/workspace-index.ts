@@ -71,6 +71,21 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => 
   return out;
 }
 
+/** Per-file analysis, reused while the file's sha256 is unchanged (indexing runs for every context request). */
+interface FileAnalysis { sha256: string; chunks: Array<Omit<IndexedChunk, 'id'>>; pathTerms: Set<string> }
+const analyses = new WeakMap<EditorPort, Map<string, FileAnalysis>>();
+
+/** Yields to the event loop after ~SLICE_MS of synchronous work: the harness shares the editor's thread. */
+const SLICE_MS = 8;
+function slicer() {
+  let start = Date.now();
+  return async () => {
+    if (Date.now() - start < SLICE_MS) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    start = Date.now();
+  };
+}
+
 /** Origin's name for the inventory limit; the shared listing limit (LIST_LIMIT, 20000) applies. */
 export const INDEX_FILE_LIMIT = LIST_LIMIT;
 
@@ -86,6 +101,9 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
   const candidates = visible.files.filter(isIndexable);
   const files = new Map<string, IndexedFile>();
   const chunks: IndexedChunk[] = [];
+  let cache = analyses.get(port);
+  if (!cache) analyses.set(port, cache = new Map());
+  const yieldNow = slicer();
   const read = await mapLimit(candidates, 16, async (p) => {
     try { return { p, snap: await port.readText(p), unreadable: false }; }
     catch { return { p, snap: null, unreadable: true }; }
@@ -96,19 +114,32 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
     if (snap.text.length > MAX_INDEX_CHARS) { skipped.push({ path: p, reason: `too large to index (${snap.text.length} chars)` }); continue; }
     if (snap.text.includes('\0')) { skipped.push({ path: p, reason: 'binary' }); continue; }
     const mod = moduleName(p);
+    let analysis = cache.get(p);
+    if (analysis?.sha256 !== snap.sha256) {
+      analysis = {
+        sha256: snap.sha256,
+        pathTerms: new Set(p.split('/').flatMap((seg) => splitIdentifier(seg.replace(/\.[^.]+$/, '')).map(normalise))),
+        chunks: chunkFile(p, snap.text).map((c) => {
+          const tokens = terms(`${c.text}`);
+          return { ...c, tf: countTerms(tokens), length: tokens.length, nameParts: c.name ? splitIdentifier(c.name).map(normalise) : [] };
+        }),
+      };
+      cache.set(p, analysis);
+    }
     const file: IndexedFile = {
       path: p, text: snap.text, sha256: snap.sha256, chunks: [], imports: [],
       ...(mod ? { module: mod } : {}),
-      pathTerms: new Set(p.split('/').flatMap((seg) => splitIdentifier(seg.replace(/\.[^.]+$/, '')).map(normalise))),
+      pathTerms: analysis.pathTerms,
     };
-    for (const c of chunkFile(p, snap.text)) {
-      const tokens = terms(`${c.text}`);
-      const ic: IndexedChunk = { ...c, id: chunks.length, tf: countTerms(tokens), length: tokens.length, nameParts: c.name ? splitIdentifier(c.name).map(normalise) : [] };
+    for (const c of analysis.chunks) {
+      const ic: IndexedChunk = { ...c, id: chunks.length };
       chunks.push(ic);
       file.chunks.push(ic);
     }
     files.set(p, file);
+    await yieldNow();
   }
+  for (const p of cache.keys()) if (!files.has(p)) cache.delete(p);
   const modules = new Map<string, string>();
   for (const f of files.values()) if (f.module) modules.set(f.module, f.path);
   for (const f of files.values()) {
@@ -119,6 +150,7 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
       if (hit && hit !== f.path) targets.add(hit);
     }
     f.imports = [...targets];
+    await yieldNow();
   }
   const df = new Map<string, number>();
   for (const c of chunks) for (const t of c.tf.keys()) df.set(t, (df.get(t) ?? 0) + 1);

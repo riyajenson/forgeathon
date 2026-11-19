@@ -12,6 +12,7 @@ const { configuredHarness } = require('../out/connect');
 
 const run = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const { until } = require('./driver.cjs');
 const TASK_A = "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.";
 const TASK_B = 'Add a new built-in CLI command flask config that prints the loaded application\'s configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "***". It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.';
 
@@ -62,7 +63,13 @@ exports.run = async () => {
     assert.ok(ui.panel.state.context && ui.panel.state.context.selections.some((s) => s.source === 'selection'), 'context report with the pinned selection');
     await ui.undo();
     assert.equal(await git(root, 'status', '--porcelain'), '', 'undo restores helpers.py');
-    console.log('PASS Task A: inline review, accept, saved, session link, context report, undo');
+    // The video's re-apply step: the editor's own Undo (Ctrl+Z) reverts the Forge undo, then Ctrl+S saves.
+    await vscode.window.showTextDocument(doc);
+    await vscode.commands.executeCommand('undo');
+    await doc.save();
+    assert.equal(await fs.readFile(helpers.fsPath, 'utf8'), afterA, 'Ctrl+Z after Forge undo re-applies the accepted change');
+    await git(root, 'checkout', '--', '.');
+    console.log('PASS Task A: inline review, accept, saved, session link, context report, undo, re-apply with Ctrl+Z');
 
     // ---------------- Task B: agent panel, per-file reviews, command approval, three files
     const b = await withAnswers(ui, 'accept', () => ui.run('agent', TASK_B, {}));
@@ -80,12 +87,42 @@ exports.run = async () => {
     console.log('PASS Task B: panel streaming, context block, 3 files reviewed and saved, command approval');
     await git(root, 'checkout', '--', '.');
 
-    // ---------------- Stop: cancel while the first review is open → no edits
-    await withAnswers(ui, 'accept', () => ui.run('agent', TASK_B, {}).catch(() => undefined), { stopAtFirstReview: true });
-    await sleep(300);
-    assert.equal(await git(root, 'status', '--porcelain'), '', 'Stop during review leaves no edits');
+    // ---------------- Stop (1): a review is certainly pending, then Stop → cancelled, nothing applied, no prompt left
+    const previewTabs = () => vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) =>
+      t.input instanceof vscode.TabInputTextDiff && t.input.modified.scheme === 'forge-preview');
+    const helpersBefore = await fs.readFile(helpers.fsPath, 'utf8');
+    ui.newConversation();   // a fresh session: the scripted model starts its plan from the first step
+    const reviewTurn = ui.run('agent', 'stop check: pending review of src/flask/helpers.py', {}).catch((e) => e);
+    await until(() => ui.panel.state.reviewing, 'a pending review', 30000);
+    await until(() => previewTabs().length === 1, 'the review diff tab', 10000);
+    await until(() => ui.reviewControlsOpen(), 'the review prompt showing before Stop', 5000);
+    await ui.stop();
+    await reviewTurn;
+    assert.equal(ui.panel.state.outcome, 'cancelled', 'the turn ended cancelled');
     assert.ok(!ui.panel.state.busy && !ui.panel.state.reviewing, 'panel idle after Stop');
-    console.log('PASS Stop: review closed, turn cancelled, workspace unchanged');
+    await until(() => previewTabs().length === 0, 'diff tab closed', 5000);
+    assert.ok(!ui.reviewControlsOpen(), 'no review prompt or Accept All control left after Stop');
+    assert.equal(await fs.readFile(helpers.fsPath, 'utf8'), helpersBefore, 'helpers.py unchanged');
+    assert.equal(await git(root, 'status', '--porcelain'), '', 'Stop during review leaves no edits');
+    console.log('PASS Stop during a pending review: turn cancelled, diff tab and review prompt closed, file unchanged');
+
+    // ---------------- Stop (2): an approved command is certainly running, then Stop → cancelled, process gone
+    const running = async () => (await run('pgrep', ['-f', 'forge-stop-check']).catch(() => ({ stdout: '' }))).stdout.trim().split('\n').filter(Boolean).length;
+    assert.equal(await running(), 0, 'no stop-check process before the test');
+    ui.newConversation();
+    const commandTurn = ui.run('agent', 'stop check: running command', {}).catch((e) => e);
+    await until(() => ui.panel.state.command, 'the command approval prompt', 30000);
+    ui.commandAnswer(true);
+    await until(async () => (await running()) > 0, 'the approved command running', 15000);
+    const t0 = Date.now();
+    await ui.stop();
+    await commandTurn;
+    assert.ok(Date.now() - t0 < 10000, `Stop ended the turn in ${Date.now() - t0} ms, not after the 60 s command`);
+    assert.equal(ui.panel.state.outcome, 'cancelled', 'the turn ended cancelled');
+    await until(async () => (await running()) === 0, 'the command process killed', 5000);
+    assert.ok(!ui.panel.state.busy && !ui.panel.state.command, 'panel idle, no command prompt left');
+    assert.equal(await git(root, 'status', '--porcelain'), '', 'workspace unchanged');
+    console.log('PASS Stop during a running command: turn cancelled within ' + (Date.now() - t0) + ' ms, process killed, workspace unchanged');
 
     // ---------------- Task C: invalid primary key → fallback banner → reject → workspace unchanged
     const devMock = path.resolve(__dirname, '..', '..', 'scripts', 'dev-mock.sh');

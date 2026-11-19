@@ -1,7 +1,7 @@
 // MCP tool handlers. Transport-free so they can be tested directly and reused by the turn controller.
 import { Worker } from 'node:worker_threads';
 import type { ApplyTextResult } from '../contract-types';
-import { isSecretPath, LIST_LIMIT, visibleFiles } from '../context/files';
+import { capLine, isBinaryText, LIST_LIMIT, modelPathRefusal, visibleFiles } from '../context/files';
 import { applyAccepted, canonicalArgsKey, computeProposal, normalizeEdits, sha256Hex, type ProposalHunk, type SearchReplaceEdit } from '../review';
 import { normalizeWorkspacePath } from './paths';
 import type { EditorPort } from './port';
@@ -11,6 +11,8 @@ export type ToolErrorCode =
   | 'INVALID_ARGS'
   | 'OUTSIDE_WORKSPACE'
   | 'SECRET_FILE'
+  | 'BINARY_FILE'
+  | 'POLICY_UNAVAILABLE'
   | 'TIMEOUT'
   | 'FILE_NOT_FOUND'
   | 'STALE_BASE'
@@ -66,6 +68,8 @@ export function approvalKey(tool: 'propose_edit' | 'run_command', args: unknown)
 // ---------------------------------------------------------------- read_file
 
 export const READ_FILE_MAX_LINES = 600;
+/** Characters of file content per read_file call; the rest is offered with start_line. */
+export const READ_FILE_MAX_CHARS = 60_000;
 
 export interface ReadFileArgs {
   path: string;
@@ -76,21 +80,34 @@ export interface ReadFileArgs {
 export async function readFileTool(ctx: ToolContext, args: ReadFileArgs): Promise<ToolOutcome> {
   const path = normalizeWorkspacePath(args.path);
   if (!path) return fail('OUTSIDE_WORKSPACE', `path must be workspace-relative: ${String(args.path)}`);
-  if (isSecretPath(path)) return fail('SECRET_FILE', `${path} looks like a credentials file; it is not sent to the model`);
+  const refusal = modelPathRefusal(path);
+  if (refusal) return fail('SECRET_FILE', refusal);
   const snap = await ctx.port.readText(path);
   if (!snap) return fail('FILE_NOT_FOUND', `${path} does not exist`);
+  if (isBinaryText(snap.text)) return fail('BINARY_FILE', `${path} contains NUL bytes (binary); it is not sent to the model`);
 
   const lines = snap.text.split(/\r?\n/);
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
   const total = lines.length;
   const start = Math.max(1, Math.floor(args.start_line ?? 1));
   const requestedEnd = Math.floor(args.end_line ?? total);
-  const end = Math.min(total, requestedEnd, start + READ_FILE_MAX_LINES - 1);
+  let end = Math.min(total, requestedEnd, start + READ_FILE_MAX_LINES - 1);
   const width = String(end).length;
-  const body = start > total ? '' : lines.slice(start - 1, end).map((l, i) => `${String(start + i).padStart(width)}\t${l}`).join('\n');
-  const more = end < Math.min(total, requestedEnd) || (args.end_line === undefined && end < total)
-    ? `\n[truncated: call read_file with start_line=${end + 1} for more]`
-    : '';
+  const shown: string[] = [];
+  let chars = 0;
+  let charCut = false;
+  for (let n = start; n <= end; n++) {
+    const line = `${String(n).padStart(width)}\t${capLine(lines[n - 1]!)}`;
+    if (shown.length && chars + line.length + 1 > READ_FILE_MAX_CHARS) { end = n - 1; charCut = true; break; }
+    shown.push(line);
+    chars += line.length + 1;
+  }
+  const body = start > total ? '' : shown.join('\n');
+  const more = charCut
+    ? `\n[truncated at ${READ_FILE_MAX_CHARS} characters: call read_file with start_line=${end + 1} for more]`
+    : end < Math.min(total, requestedEnd) || (args.end_line === undefined && end < total)
+      ? `\n[truncated: call read_file with start_line=${end + 1} for more]`
+      : '';
   return {
     ok: true,
     text: `path: ${path}\nsha256: ${snap.sha256}\nlines: ${total} (showing ${start}-${end})\n---\n${body}${more}`,
@@ -100,6 +117,13 @@ export async function readFileTool(ctx: ToolContext, args: ReadFileArgs): Promis
 // ---------------------------------------------------------------- search_workspace
 
 export const SEARCH_MAX_FILE_CHARS = 1_000_000;
+/** Characters of search results per call. */
+export const SEARCH_MAX_OUTPUT_CHARS = 40_000;
+
+/** A .gitignore that exists but cannot be read: which files it excludes is unknown, so nothing is listed. */
+export function unreadableIgnores(paths: string[]): ToolOutcome {
+  return fail('POLICY_UNAVAILABLE', `cannot read ${paths.join(', ')}; files it may exclude are unknown, so nothing is listed or searched until it can be read`);
+}
 
 export interface SearchArgs {
   query: string;
@@ -128,23 +152,40 @@ export async function searchWorkspaceTool(ctx: ToolContext, args: SearchArgs): P
 
   const files: SearchFile[] = [];
   const visible = await visibleFiles(ctx.port, prefix);
+  if (visible.unreadableIgnores.length) return unreadableIgnores(visible.unreadableIgnores);
+  let notText = 0;
   for (const path of visible.files) {
-    const snap = await ctx.port.readText(path);
-    if (!snap || snap.text.length > SEARCH_MAX_FILE_CHARS || snap.text.includes('\0')) continue;
+    const snap = await ctx.port.readText(path).catch(() => null);
+    if (!snap) continue;
+    if (snap.text.length > SEARCH_MAX_FILE_CHARS || isBinaryText(snap.text)) { notText++; continue; }
     files.push({ path, text: snap.text });
   }
-  // A plain-text pattern is linear; a model-supplied regex can backtrack for minutes, so it runs in a
-  // worker thread that is terminated at the deadline and never blocks the editor's extension host.
-  const found = args.regex ? await matchInWorker(files, source, flags, max) : matchFiles(files, source, flags, max);
+  // A model-supplied regex can backtrack for minutes, so it runs in a worker thread that is terminated at the
+  // deadline. A plain-text pattern is linear, but over a large workspace it still takes long enough to stall
+  // the editor's extension host, so it also moves to the worker above SEARCH_INLINE_MAX_CHARS.
+  const totalChars = files.reduce((n, f) => n + f.text.length, 0);
+  const found = args.regex || totalChars > SEARCH_INLINE_MAX_CHARS
+    ? await matchInWorker(files, source, flags, max)
+    : matchFiles(files, source, flags, max);
   if (!found) {
     return fail('TIMEOUT', `regex search stopped after ${SEARCH_REGEX_TIMEOUT_MS / 1000} s (the pattern backtracks too much); use a simpler pattern or regex=false`);
   }
   const header = `${found.hits.length} match(es) in ${found.filesWithHits} file(s) for ${args.regex ? 'regex' : 'text'} ${JSON.stringify(args.query)}${prefix ? ` under ${prefix}` : ''}`;
   const partial = visible.truncated ? ` [only the first ${LIST_LIMIT} workspace files were searched]` : '';
-  return { ok: true, text: `${header}${found.truncated ? ` [truncated at ${max}]` : ''}${partial}\n${found.hits.join('\n')}` };
+  const skippedNote = notText ? ` [${notText} binary or oversized file(s) not searched]` : '';
+  let body = '';
+  let cut = 0;
+  for (const [i, hit] of found.hits.entries()) {
+    if (body.length + hit.length + 1 > SEARCH_MAX_OUTPUT_CHARS) { cut = found.hits.length - i; break; }
+    body += `${body ? '\n' : ''}${hit}`;
+  }
+  const outputCut = cut ? `\n[output truncated at ${SEARCH_MAX_OUTPUT_CHARS} characters: ${cut} more match(es); narrow the query or use path_prefix]` : '';
+  return { ok: true, text: `${header}${found.truncated ? ` [truncated at ${max}]` : ''}${partial}${skippedNote}\n${body}${outputCut}` };
 }
 
 export const SEARCH_REGEX_TIMEOUT_MS = 2000;
+/** Plain-text searches over more text than this run in the worker instead of on the editor's thread. */
+export const SEARCH_INLINE_MAX_CHARS = 2_000_000;
 
 interface SearchFile { path: string; text: string }
 interface SearchResult { hits: string[]; filesWithHits: number; truncated: boolean }

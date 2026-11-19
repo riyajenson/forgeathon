@@ -30,6 +30,30 @@ export function isSecretPath(path: string): boolean {
     || ['.netrc', '.npmrc', '.pypirc', '.git-credentials', 'credentials.json', 'secrets.json', 'secrets.yaml', 'secrets.yml'].includes(name);
 }
 
+export const CREDENTIAL_REFUSAL = 'looks like a credentials file; its content is never sent to the model';
+
+/**
+ * The one rule for every source of model-bound text (automatic retrieval, @file, @symbol, the selection, the
+ * active file, read_file, search_workspace, list_files, find_symbol, gather_context): the reason a path is
+ * refused, or null. Credentials files are refused everywhere. Ignored and default-excluded paths are left out
+ * of automatic retrieval, listing and search, but an explicit read_file or @file may still read them.
+ */
+export function modelPathRefusal(path: string): string | null {
+  return isSecretPath(path) ? `${path} ${CREDENTIAL_REFUSAL}` : null;
+}
+
+/** Text that is not sent to the model as text: it contains NUL bytes. */
+export function isBinaryText(text: string): boolean {
+  return text.includes('\0');
+}
+
+/** Longest line sent to the model by read_file and search; longer lines are cut with a marker. */
+export const MAX_LINE_CHARS = 2000;
+
+export function capLine(line: string, max = MAX_LINE_CHARS): string {
+  return line.length <= max ? line : `${line.slice(0, max)} … [line truncated: ${line.length} characters]`;
+}
+
 export function isIndexable(path: string): boolean {
   const parts = path.split('/');
   if (parts.slice(0, -1).some(isExcludedDir)) return false;

@@ -7,11 +7,12 @@ stylesheet: writeup.css
 
 # Forge — a VS Code coding agent on TrueForge
 
-Repository: `<PUBLIC REPO URL>` · Video: `<PUBLIC VIDEO URL>` · Techfest Team ID: `<TEAM ID>`
+Repository: https://github.com/riyajenson/forgeathon · Video: `<PUBLIC VIDEO URL>` · Techfest Team ID: `<TEAM ID>`
 
 ## 1. Team
 
-`<Name 1>` (role) · `<Name 2>` (role) · `<Name 3>` (role)
+`<Name 1>` (role, `<affiliation>`, GitHub `<handle>`) · `<Name 2>` (role, `<affiliation>`, GitHub `<handle>`) ·
+`<Name 3>` (role, `<affiliation>`, GitHub `<handle>`)
 
 ## 2. Starting point
 
@@ -35,7 +36,8 @@ on `tool.approval_required` it computes the hunks, waits for the user's per-hunk
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
 the prompt): a per-turn command budget (3 agent, 1 inline; later `run_command` calls are refused to the model
 without prompting and the panel shows "command budget reached"), approved commands run in **bubblewrap** (read-only
-checkout and host, private `/tmp`, no network, no keys; refused if unavailable), a tool still running after a
+checkout and host, private `/tmp`, no network, no provider keys in its environment; refused if unavailable;
+it can still read files, see section 8), a tool still running after a
 turn holds the session (no retry or fallback until it ends), and a second argument error on the same file gets
 the exact `propose_edit` argument shape in its refusal.
 
@@ -53,8 +55,9 @@ guarded by the post-save hash and restores the exact original bytes (saved witho
 **Cancellation.** Stop closes the approval gate, cancels the TrueForge turn (confirmed in 10–25 ms in our
 spike), kills a running command's process group and closes the open review; an approved command never starts
 after Stop. `done` waits (bounded) for in-flight tool calls, because TrueForge 0.185.1 reports the turn
-cancelled before an MCP call returns. Every wait is bounded: if TrueForge stays silent, the harness stops
-observing after twice the cancel timeout and ends the turn exactly once. Retry and fallback happen only when
+cancelled before an MCP call returns. Waits on TrueForge are bounded: if it stays silent, the harness stops
+observing after twice the cancel timeout and ends the turn exactly once. A tool still running when the turn
+ends is waited for until it finishes (the command timeout, at most 600 s, or Stop). Retry and fallback happen only when
 every tool call of the failed attempt has settled and no approved edit or command is unfinished.
 
 ## 4. How context is selected
@@ -70,6 +73,11 @@ every tool call of the failed attempt has settled and no approved edit or comman
    functions and sections; anything that does not fit is listed as **skipped** with the reason.
 4. The **context report** (items, ranks, plain-English reasons, used/budget, skipped) is shown in the agent
    panel; the agent can ask for more with `gather_context`.
+5. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
+   `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
+   files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; files with NUL bytes
+   are refused; `read_file` returns at most 600 lines / 60,000 characters with lines cut at 2,000, each cut
+   marked. Detection is by file name only.
 
 Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s): for Task B, `src/flask/cli.py` ranks first and the
 packed context (7,456 of 8,000 tokens, 28 items, 7 skipped) includes `tests/test_cli.py` and `docs/cli.rst`.
@@ -86,13 +94,11 @@ Four unrelated Flask tasks also rank their source file first (regression test in
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
 **switching models is a config change plus rerunning setup**. The NVIDIA catalog offered no Qwen3 Coder or
-DeepSeek model; Nemotron-3 Ultra was the fastest candidate that made correct streamed tool calls in our
-probes. Real run on a fresh TrueForge database (2026-11-19, each task once, all checks passed, no 429s;
-requests counted by `scripts/model-meter.mjs`): **Task A** 3 requests, 11.4k input / 0.6k output tokens,
-8.5 s; **Task C** 401 from NVIDIA in 0.19 s → Groq, 3 requests, 6.8k / 0.4k tokens, 2.6 s; **Task B** (three
-runs before the command budget, all checks passed) 49–71 requests, 1.6–2.5M / 7.5–18.6k tokens, 133–259 s,
-7–17 command approvals and 7–12 reviews; **with the guardrails** (video settings) 47 requests (peak 28/min),
-1.44M / 9.3k tokens, 204.5 s, 3 commands (4 more refused by the budget) and 6 reviews, all checks passed. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
+DeepSeek model. Probed only (one request each, free tier): Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral
+Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the fastest with correct streamed tool calls. Gemini,
+Anthropic and OpenAI appear in the example config only and were never run. Earlier real runs (before the
+command budget and sandbox): Task B 133–259 s, 7–17 commands, 7–12 reviews; with the budget, 204.5 s, 3
+commands, 6 reviews. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and then fall back to the
 `-fallback` agent in a new TrueForge session; nothing is retried after the turn changed the workspace. A
 watchdog stops a turn that streams nothing for 45 s. Every turn is logged (model, attempts, tokens, timing; no
@@ -105,20 +111,20 @@ refused connection 0.1–0.2 s; unreachable host 7.6 s (connect timeout 3 s, one
 |---|---|---|
 | Inline edit (10) | Task A: selection → instruction → in-editor diff → Accept All / per-hunk → saved → verification `False` | `[mm:ss]` |
 | Agent mode (10) | Task B: no files named; agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst` | `[mm:ss]` |
-| Streaming / cancellation (10) | Streamed text and tool calls; Stop during review → turn cancelled, no edits | `[mm:ss]` |
+| Streaming / cancellation (10) | Streamed text and tool calls; Stop → turn cancelled, no edits (Stop during a pending review and during a running command: UI e2e) | `[mm:ss]` |
 | Context assembly (15) | Context block: used/budget, ranked files with reasons, skipped items | `[mm:ss]` |
-| Diff safety (10) | Per-hunk review, partial accept, undo | `[mm:ss]` |
+| Diff safety (10) | Per-hunk picker, Undo restores the file, re-apply; partial accept (exactly the chosen hunk saved) in the native UI test | `[mm:ss]` |
 | Resilience (10) | Task C: invalid primary key → fallback banner → `git status` clean | `[mm:ss]` |
 | TrueForge depth (10) | Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` when the model uses them) | `[mm:ss]` |
-| Demo video (10) | Tasks A, B, C in order, each verified on screen | — |
-| PDF write-up (15) | This document | — |
+| Demo video (10) | Tasks A, B, C in order, each verified on screen | A `[mm:ss]` · B `[mm:ss]` · C `[mm:ss]` |
+| PDF write-up (15) | This document; the video's closing frame links the repository | `[mm:ss]` |
 
-Automated checks use a **scripted model**, so they show that the plumbing works, not that a real model
-solves the tasks. Without a GUI or keys: `scripts/e2e-mock.sh` (21/21 checks: Task A one-liner and docstring,
-`pytest tests/test_cli.py -q` 57 passed, `flask --help` lists `config`, masked JSON, the command budget,
-argument hint and a denied ⚠ Unrestricted command, Task C fallback + clean status); in a real VS Code window: `scripts/test-extension-e2e.sh` (Tasks A, B, Stop, C through the extension
-code) and 4 extension suites. Harness: 115 unit tests (including cancel and retry races against an in-memory
-TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
+Automated checks use a **scripted model**: they show that the plumbing works, not that a real model solves
+the tasks. `scripts/e2e-mock.sh` runs A, B, C and the guardrails through the harness with every verification
+(21 checks); `scripts/test-extension-e2e.sh` drives A (with undo), B, Stop (during a pending review and during a
+running command) and C through the extension in a real VS Code window; a native-UI test checks that the hunk
+picker saves exactly the chosen hunk; the extension host is never blocked over 150 ms during Task B. Harness:
+126 unit tests and 17 integration tests against TrueForge 0.185.1.
 
 ## 7. Tools used
 
@@ -128,7 +134,9 @@ TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
   TrueForge spike, harness architecture and implementation, context engine, tests, and, after the hand-over,
   the editor workstream, documentation and this write-up draft. **OpenAI Codex (via ChatGPT)** — the initial
   VS Code extension scaffold, editor features (EditorPort, inline review, agent panel) and the shared
-  contracts. All code was reviewed and directed by the team.
+  contracts; PRs #3 and #4 (execution-safety sandbox for commands, tool-call settlement, retrieval coverage
+  reporting, the submission-evidence checker); and a QA review of the final build. All code was reviewed and
+  directed by the team.
 
 ## 8. Known limitations and what you would do with another month
 

@@ -557,3 +557,59 @@ test('content refusals (old_text not found) do not trigger the shape hint', asyn
     assert.ok(!(a.approval.reason ?? '').includes(PROPOSE_EDIT_SHAPE_HINT));
   }
 });
+
+test('a dropped connection while creating the session is retried once; a second failure is reported as unreachable', async () => {
+  const dropped = () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
+  for (const failures of [1, 2]) {
+    let calls = 0;
+    const tf = new FakeTrueForge({ onTurn: (ch, k) => ch.push(ev('turn.created', { turnId: `rt-${k}` }), done('done')) });
+    const run = makeRun(tf, {
+      runtimeSession: async () => { calls++; if (calls <= failures) throw dropped(); return `rs-${calls}`; },
+    });
+    await run.start();
+    await clickThrough(run);
+    const end = terminal(run);
+    assert.equal(end.length, 1, 'exactly one terminal event');
+    assert.ok(events(run).some((e) => e.t === 'status' && e.state === 'retrying' && /ECONNRESET/.test(e.detail ?? '')), 'retry is visible with its cause');
+    if (failures === 1) {
+      assert.equal(calls, 2);
+      assert.equal((end[0] as { status: string }).status, 'done');
+    } else {
+      assert.equal(calls, 2, 'retried once, not more');
+      assert.equal((end[0] as { status: string }).status, 'error');
+      assert.match(lastError(run)!.error.message, /TrueForge is not reachable/);
+    }
+  }
+});
+
+test('a non-network error creating the session is not retried', async () => {
+  let calls = 0;
+  const tf = new FakeTrueForge({ onTurn: (ch, k) => ch.push(ev('turn.created', { turnId: `rt-${k}` }), done('done')) });
+  const run = makeRun(tf, { runtimeSession: async () => { calls++; throw Object.assign(new Error('Not Found'), { statusCode: 404 }); } });
+  await run.start();
+  await clickThrough(run);
+  assert.equal(calls, 1);
+  assert.match(lastError(run)!.error.message, /agent "coder" not found/);
+});
+
+test('a repeated review decision is accepted whatever its property order; a different one is a conflict', async () => {
+  const tf = stepwise([['propose_edit', editArgs()]]);
+  const run = makeRun(tf);
+  const replies: unknown[] = [];
+  const answering = (async () => {
+    for await (const e of run.buffer.read(0)) {
+      if (e.t !== 'review_request') continue;
+      const p = e.proposal;
+      const hunks = Object.fromEntries(p.hunks.map((h) => [h.hunkId, 'accept' as const]));
+      replies.push(run.submitReview({ kind: 'edit', sessionId: p.sessionId, turnId: p.turnId, callId: p.callId, proposalId: p.proposalId, hunks }));
+      // The same decision, keys in another order (as a retried message from the editor could arrive).
+      replies.push(run.submitReview({ hunks, proposalId: p.proposalId, callId: p.callId, turnId: p.turnId, sessionId: p.sessionId, kind: 'edit' } as ReviewDecision));
+      replies.push(run.submitReview({ kind: 'edit', sessionId: p.sessionId, turnId: p.turnId, callId: p.callId, proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((h) => [h.hunkId, 'reject' as const])) }));
+    }
+  })();
+  await run.start();
+  await answering;
+  assert.deepEqual(replies[0], { ok: true });
+  assert.deepEqual(replies[1], { ok: true }, 'reordered duplicate accepted');
+  assert.equal((replies[2] as { error?: { code: string } }).error?.code, 'conflict');
+});

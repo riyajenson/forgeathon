@@ -4,6 +4,7 @@ import type { ContextReport, Reference, SourceRange } from '../contract-types';
 import type { EditorPort } from '../mcp/port';
 import { normalizeWorkspacePath } from '../mcp/paths';
 import { rankFiles, type RankedFile } from './rank';
+import { isBinaryText, modelPathRefusal } from './files';
 import { estimateTokens } from './text';
 import { buildIndex, type IndexedChunk, type IndexedFile, type WorkspaceIndex } from './workspace-index';
 
@@ -75,10 +76,12 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
   const pinnedPaths = new Set<string>();
   const includedChunks = new Set<string>();
 
+  let used = 0;
   const add = (sel: Omit<Selection, 'rank' | 'estimatedTokens'>, body: string, heading: string): boolean => {
     const tokens = estimateTokens(body) + estimateTokens(heading) + 4;
     if (tokens > remaining) return false;
     remaining -= tokens;
+    used += tokens;
     selections.push({ ...sel, rank: selections.length + 1, estimatedTokens: tokens });
     parts.push(`### ${heading}\n\`\`\`${fence(sel.path)}\n${body}\n\`\`\``);
     return true;
@@ -91,7 +94,10 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
   };
 
   // 1. Pinned: selection.
-  if (req.selection) {
+  const selectionRefusal = req.selection ? modelPathRefusal(normalizeWorkspacePath(req.selection.path) ?? req.selection.path) : null;
+  if (req.selection && selectionRefusal) {
+    skipped.push({ path: req.selection.path, reason: `selection not sent: ${selectionRefusal}`, estimatedTokens: 0 });
+  } else if (req.selection) {
     const s = req.selection;
     const path = normalizeWorkspacePath(s.path) ?? s.path;
     pinnedPaths.add(path);
@@ -99,7 +105,8 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
     const ok = add({ path, range, source: 'selection', rationale: 'selected by the user', truncated: false }, s.text, `${path} lines ${s.startLine}-${s.endLine} (selection)`);
     if (!ok) {
       const cut = truncateTo(s.text, Math.floor(remaining * 0.8));
-      add({ path, range, source: 'selection', rationale: 'selected by the user (truncated to fit the budget)', truncated: true }, cut, `${path} lines ${s.startLine}-${s.endLine} (selection, truncated)`);
+      const fitted = cut !== '' && add({ path, range, source: 'selection', rationale: 'selected by the user (truncated to fit the budget)', truncated: true }, cut, `${path} lines ${s.startLine}-${s.endLine} (selection, truncated)`);
+      if (!fitted) skipped.push({ path, reason: `selection does not fit the context budget (${budget} tokens)`, estimatedTokens: estimateTokens(s.text) });
     }
   }
 
@@ -121,15 +128,19 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
       }
     } else {
       const path = normalizeWorkspacePath(ref.path);
+      const refusal = path ? modelPathRefusal(path) : null;
+      if (refusal) { skipped.push({ path: ref.path, reason: `@file not sent: ${refusal}`, estimatedTokens: 0 }); continue; }
       const file = path ? index.files.get(path) : undefined;
-      const text = file?.text ?? (path ? (await port.readText(path))?.text : undefined);
+      const text = file?.text ?? (path ? (await port.readText(path).catch(() => null))?.text : undefined);
       if (!path || text === undefined) { skipped.push({ path: ref.path, reason: '@file not found in the workspace', estimatedTokens: 0 }); continue; }
+      if (isBinaryText(text)) { skipped.push({ path, reason: '@file not sent: binary (contains NUL bytes)', estimatedTokens: 0 }); continue; }
       pinnedPaths.add(path);
       const lines = text.split('\n').length;
       const cap = Math.floor(remaining * 0.5);
       const truncated = estimateTokens(text) > cap;
       const body = truncated ? truncateTo(text, cap) : text;
-      add({ path, range: { startLine: 1, endLine: truncated ? body.split('\n').length : lines }, source: 'explicit', rationale: `@file:${ref.path} requested by the user${truncated ? ' (truncated to fit the budget)' : ''}`, truncated }, body, `${path}${truncated ? ' (truncated)' : ''} (@file)`);
+      const fitted = body !== '' && add({ path, range: { startLine: 1, endLine: truncated ? body.split('\n').length : lines }, source: 'explicit', rationale: `@file:${ref.path} requested by the user${truncated ? ' (truncated to fit the budget)' : ''}`, truncated }, body, `${path}${truncated ? ' (truncated)' : ''} (@file)`);
+      if (!fitted) skipped.push({ path, reason: `@file:${ref.path} does not fit the remaining budget (${remaining} tokens left)`, estimatedTokens: estimateTokens(text) });
     }
   }
 
@@ -189,7 +200,6 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
     else skipped.push({ path: c.path, reason: `${label ?? `lines ${c.startLine}-${c.endLine}`} skipped: budget exhausted (needs ${tokens}, ${remaining} left)`, estimatedTokens: tokens });
   }
 
-  const used = budget - remaining;
   const visibleSkipped = skipped.slice(0, 20);
   if (skipped.length > 20) visibleSkipped.push({ path: '.', reason: `${skipped.length - 20} additional omissions are not displayed`, estimatedTokens: 0 });
   const report: ContextReport = { budgetTokens: budget, estimatedTokens: used, selections, skipped: visibleSkipped };

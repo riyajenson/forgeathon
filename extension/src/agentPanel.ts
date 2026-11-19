@@ -11,6 +11,8 @@ export class AgentViewState {
   usage = '';
   busy = false;
   reviewing = false;
+  /** How the last turn ended ('done', 'error' or 'cancelled'); empty while it runs. */
+  outcome = '';
   tools: {id: string; label: string; detail: string}[] = [];
   context?: ContextReport;
   edits: string[] = [];
@@ -52,7 +54,7 @@ export class AgentViewState {
       case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; break;
       case 'error': this.banner = e.error.message + '; workspace effect: ' + e.error.workspaceEffect; break;
       case 'done':
-        this.status = e.summary || e.status; this.busy = this.reviewing = false; this.command = undefined;
+        this.status = e.summary || e.status; this.outcome = e.status; this.busy = this.reviewing = false; this.command = undefined;
         if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
         break;
     }

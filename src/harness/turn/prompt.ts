@@ -1,6 +1,8 @@
 import { assembleContext, type ContextResult } from '../context';
 import type { TurnRequest } from '../contract-types';
 import type { EditorPort } from '../mcp/port';
+import { normalizeWorkspacePath } from '../mcp/paths';
+import { modelPathRefusal } from '../context/files';
 
 export interface TurnInput {
   input: string;
@@ -13,12 +15,17 @@ export interface TurnInput {
  */
 export async function buildTurnInput(req: TurnRequest, port: EditorPort, budgetTokens: number): Promise<TurnInput> {
   const parts: string[] = [req.instruction.trim()];
+  const refused = (p: string) => modelPathRefusal(normalizeWorkspacePath(p) ?? p);
+  const selectionRefusal = req.selection ? refused(req.selection.path) : null;
   if (req.selection) {
     const s = req.selection;
-    const snap = await port.readText(s.path);
-    parts.push(`Selected code: ${s.path} lines ${s.startLine}-${s.endLine}` + (snap ? ` (file sha256: ${snap.sha256})` : ''));
+    if (selectionRefusal) parts.push(`Selected code: ${s.path} lines ${s.startLine}-${s.endLine} (not sent: ${selectionRefusal})`);
+    else {
+      const snap = await port.readText(s.path);
+      parts.push(`Selected code: ${s.path} lines ${s.startLine}-${s.endLine}` + (snap ? ` (file sha256: ${snap.sha256})` : ''));
+    }
   } else if (req.activeFile) {
-    const snap = await port.readText(req.activeFile);
+    const snap = refused(req.activeFile) ? null : await port.readText(req.activeFile);
     parts.push(`Active file: ${req.activeFile}${snap ? ` (sha256: ${snap.sha256})` : ''}`);
   }
   let context: ContextResult | undefined;
@@ -34,7 +41,7 @@ export async function buildTurnInput(req: TurnRequest, port: EditorPort, budgetT
     parts.push(context.text);
   } catch (e) {
     port.log('warn', `context assembly failed: ${(e as Error).message}`);
-    if (req.selection) parts.push(`\`\`\`\n${req.selection.text}\n\`\`\``);
+    if (req.selection && !selectionRefusal) parts.push(`\`\`\`\n${req.selection.text}\n\`\`\``);
   }
   return { input: parts.join('\n\n'), context };
 }

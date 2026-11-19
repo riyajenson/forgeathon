@@ -14,7 +14,7 @@ verified · 🟡 ready, needs a human step · ❌ open.
 | Model configuration lives in TrueForge; not hard-coded to one provider | ✅ | `config/models.example.json` → `scripts/setup-trueforge.mjs`; NVIDIA, Groq, OpenRouter tested; Gemini, Anthropic, OpenAI as untested examples |
 | TrueForge in local mode | ✅ | `npx @truefoundry/trueforge@0.185.1`, SQLite |
 | Agent definition included in the repository | ✅ | `agent/forge-coder.json`, `agent/forge-inline.json` |
-| TrueForge session with turns and tool calls shown for Task B | 🟡 | **Eligibility gate.** `docs/DEMO-SCRIPT.md` shot 2:25–2:37: hold ~10 s on Task B's turn and its tool calls; note the timestamp |
+| TrueForge session with turns and tool calls shown for Task B | 🟡 | **Eligibility gate.** `docs/DEMO-SCRIPT.md` shot 2:48–2:56: hold ~8 s on Task B's turn and its tool calls; note the timestamp |
 | Fork disclosure (if any) | ✅ | Built from scratch — README "Starting point, versions and licence" |
 
 The README's "Eligibility at a glance" table maps each requirement to files.
@@ -41,13 +41,13 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 
 | Item | Status | Notes |
 |---|---|---|
-| Public GitHub repository | 🟡 | `origin` = github.com/riyajenson/forgeathon; push `main` (STATUS.md has the command); check it is public |
+| Public GitHub repository | ✅ | github.com/riyajenson/forgeathon is public; push the final `main` (a fast-forward) before submitting |
 | README supports a clean clone (setup, TrueForge start, agent loading, model config, licence) | ✅ | Real-model quickstart first; mock mode for testing. Followed in a fresh temp clone on the mock (see STATUS.md) |
 | No API keys committed | ✅ | Secret scan of full history (STATUS.md); keys only from env |
 | Licence and attribution | ✅ | `LICENSE` (MIT), `THIRD_PARTY_NOTICES.md` |
 | PDF, 1–3 pages, headings in exact order (Team, Starting point, Architecture on TrueForge, How context is selected, Model setup, Scorecard, Tools used, Known limitations and what you would do with another month) | 🟡 | Draft `docs/writeup/WRITEUP.md` renders to 3 pages; fill team, models, cost, timestamps; `scripts/render-writeup.sh` |
 | All models used, hosting, approx. cost, how to switch | ✅ | Write-up section 5: NVIDIA Nemotron-3 Ultra primary, Groq Qwen3.8-27B fallback, OpenRouter spare, all free ($0); switching = edit config + rerun setup |
-| AI tools declared truthfully | ✅ | Write-up section 7 (Claude: Claude Code CLI + chat; OpenAI Codex via ChatGPT) |
+| AI tools declared truthfully | ✅ | Write-up section 7 and README "AI tools used" (Claude: Claude Code CLI + chat; OpenAI Codex via ChatGPT, incl. PRs #3/#4 and QA) |
 | Demo video ≤ 4 min, public, A/B/C in order, each verified, TrueForge session for B, no cut between instruction and diff | 🟡 | `docs/DEMO-SCRIPT.md` (3:50 plan, measured Task B numbers). **Real models only**; record what the model actually does |
 | Scorecard with video timestamps | 🟡 | Fill `[mm:ss]` after recording; README `<VIDEO_URL>` and `docs/images/` screenshots too |
 | Techfest Team ID | 🟡 | Keep available for the form; add to the write-up header |

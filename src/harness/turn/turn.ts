@@ -7,7 +7,7 @@ import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
 import { Attempt, type AttemptResult, type CallDecision, type PendingCall } from '../trueforge/attempt';
-import { classifyTurnError, isRateLimited, isTrueForgeUnreachable, retryDelayMs, safeMessage } from '../trueforge/errors';
+import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, retryDelayMs, safeMessage } from '../trueforge/errors';
 import { appendTurnLog, type AttemptRecord } from './turn-log';
 import { traceUrl, type TrueForgeClient, type TrueForgeSdk } from '../trueforge/sdk';
 import { TurnEventBuffer } from './event-buffer';
@@ -130,7 +130,7 @@ export class TurnRun {
     if (d.sessionId !== this.req.sessionId || d.turnId !== this.req.turnId) return invalid('decision does not belong to this turn');
     const previous = this.decided.get(d.callId);
     if (previous) {
-      return JSON.stringify(previous) === JSON.stringify(d)
+      return canonicalArgsKey(previous) === canonicalArgsKey(d)
         ? { ok: true }
         : { ok: false, error: { code: 'conflict', message: 'a different decision was already recorded for this call', retryable: false, workspaceEffect: 'unchanged' } };
     }
@@ -201,7 +201,19 @@ export class TurnRun {
       try {
         runtimeSessionId = await this.deps.runtimeSession(agent, fresh);
       } catch (e) {
-        return this.fail(this.startError(e, agent));
+        // A connection-level failure creating the session (nothing has run yet) is retried once: a server that
+        // answered the previous request can drop one connection under load. A second failure is reported.
+        if (!isTrueForgeUnreachable(e) || this.cancelRequested) return this.fail(this.startError(e, agent));
+        this.deps.port.log('warn', `creating a TrueForge session failed (${connectionCause(e)}); retrying once`);
+        emit({ t: 'status', state: 'retrying', detail: `TrueForge connection failed (${connectionCause(e)}); retrying once in ${Math.round(this.deps.retryDelayMs / 100) / 10} s` });
+        await this.sleep(this.deps.retryDelayMs);
+        if (this.cancelRequested) return this.finishCancelled();
+        try {
+          runtimeSessionId = await this.deps.runtimeSession(agent, fresh);
+        } catch (again) {
+          this.deps.port.log('error', `creating a TrueForge session failed again (${connectionCause(again)})`);
+          return this.fail(this.startError(again, agent));
+        }
       }
       const model = await this.deps.agentModel(agent).catch(() => agent);
       emit({ t: 'session', agentName: agent, model, traceUrl: traceUrl(this.deps.trueforgeUrl, runtimeSessionId), runtimeSessionId });

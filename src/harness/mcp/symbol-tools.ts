@@ -2,7 +2,7 @@
 import { buildIndex } from '../context/workspace-index';
 import { normalizeWorkspacePath } from './paths';
 import { visibleFiles } from '../context/files';
-import type { ToolContext, ToolOutcome } from './tools';
+import { unreadableIgnores, type ToolContext, type ToolOutcome } from './tools';
 
 export interface FindSymbolArgs {
   name: string;
@@ -14,6 +14,8 @@ export async function findSymbolTool(ctx: ToolContext, args: FindSymbolArgs): Pr
   if (!name) return { ok: false, code: 'INVALID_ARGS', message: 'name must be a non-empty string' };
   const limit = Math.min(Math.max(1, Math.floor(args.limit ?? 20)), 100);
   const index = await buildIndex(ctx.port);
+  const policyGap = index.skipped.filter((s) => /cannot read ignore rules/.test(s.reason)).map((s) => s.path);
+  if (policyGap.length) return unreadableIgnores(policyGap);
   const last = name.split('.').pop()!;
   let hits = (index.symbols.get(last) ?? []).filter((c) => !name.includes('.') || c.qualname === name || (c.qualname ?? '').endsWith(`.${name}`));
   let note = '';
@@ -40,7 +42,8 @@ export async function listFilesTool(ctx: ToolContext, args: ListFilesArgs): Prom
     prefix = p;
   }
   const limit = Math.min(Math.max(1, Math.floor(args.limit ?? 200)), 1000);
-  const { files } = await visibleFiles(ctx.port, prefix);
+  const { files, unreadableIgnores: gaps } = await visibleFiles(ctx.port, prefix);
+  if (gaps.length) return unreadableIgnores(gaps);
   const shown = files.slice(0, limit);
   return { ok: true, text: `${shown.length}${files.length > limit ? '+' : ''} file(s)${prefix ? ` under ${prefix}` : ''}:\n${shown.join('\n')}` };
 }

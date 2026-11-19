@@ -121,6 +121,11 @@ const TASK_A_MARK = "'off' and 'n'";
 const TASK_B_MARK = 'flask config';
 /** Not a demo task: the mock e2e's guardrail check (command budget, repeated argument errors). */
 export const GUARD_MARK = 'guardrail check';
+/** Not demo tasks: the UI Stop test's turns (a pending review; a running command). */
+export const STOP_REVIEW_MARK = 'stop check: pending review';
+export const STOP_COMMAND_MARK = 'stop check: running command';
+/** Appears in the running command's arguments, so the test can see the process (pgrep -f). */
+export const STOP_COMMAND_TOKEN = 'forge-stop-check';
 
 function userText(req: MockRequest): string {
   return req.messages.filter((m) => m.role === 'user').map((m) => textOf(m.content)).join('\n');
@@ -198,6 +203,24 @@ export function demoScript(req: MockRequest): MockReply {
     const hint = results.filter((t) => t.includes('Expected arguments, exactly this shape')).length;
     const denied = results.filter((t) => t.includes('user refused to run the command')).length;
     return { text: `Guardrail check: ${refused} command(s) refused by the budget; shape hint in ${hint} refusal(s); ${denied} command(s) denied by the user.` };
+  }
+
+  if (user.includes(STOP_REVIEW_MARK)) {
+    // The UI Stop test: a turn that is certainly waiting on a review when Stop is pressed.
+    if (step === 0) return call('read_file', { path: 'src/flask/helpers.py', start_line: 1, end_line: 60 });
+    if (step === 1) {
+      return call('propose_edit', {
+        path: 'src/flask/helpers.py', base_sha256: shaOf(req, 'src/flask/helpers.py'),
+        summary: 'stop check: a change that must never be applied', edits: TASK_A_EDITS['src/flask/helpers.py'],
+      });
+    }
+    return { text: 'Stop check finished without being stopped.' };
+  }
+
+  if (user.includes(STOP_COMMAND_MARK)) {
+    // The UI Stop test: a command that is certainly still running when Stop is pressed.
+    if (step === 0) return call('run_command', { command: `python -c "import time; time.sleep(60)  # ${STOP_COMMAND_TOKEN}"` });
+    return { text: 'Stop check finished without being stopped.' };
   }
 
   return { text: 'This is the scripted demo model. It only knows the fixed Task A and Task B instructions; configure a real model in config/models.json for anything else.' };

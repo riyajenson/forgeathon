@@ -47,44 +47,85 @@ exports.run = async() => {
     await runSetup({client,cfg,templates,env:{TEST_KEY:MOCK_KEY},log:()=>{}});
     await vscode.workspace.getConfiguration('forge').update('trueforgeUrl',url,vscode.ConfigurationTarget.Global);
     await vscode.workspace.getConfiguration('forge').update('mcpPort',mcpPort,vscode.ConfigurationTarget.Global);
-    const file=path.join(root,'sample.py'), before='first = 1\nsecond = 2\n', after='first = 3\nsecond = 2\n';
+    const file=path.join(root,'sample.py'), before='first = 1\nsecond = 2\n';
+    // Exactly hunk N is written: hunk 1 changes `first`, hunk 2 changes `second`.
+    const expected={1:'first = 3\nsecond = 2\n', 2:'first = 1\nsecond = 4\n'};
     await fs.writeFile(file,before);
-    const doc=await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-    const editor=await vscode.window.showTextDocument(doc);
-    editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(before.length));
     model.handler=req=>{
       const last=req.messages.at(-1);
       if(last?.role==='tool') return {text:'The reviewed edit was processed.'};
       const user=req.messages.filter(m=>m.role==='user').map(m=>textOf(m.content)).join('\n');
-      const base=/file sha256: ([0-9a-f]{64})/.exec(user)?.[1];
+      const base=[...user.matchAll(/file sha256: ([0-9a-f]{64})/g)].at(-1)?.[1];
       return {toolCalls:[{name:'propose_edit',args:{path:'sample.py',base_sha256:base,summary:'Two sample edits',
         edits:[{old_text:'first = 1',new_text:'first = 3'},{old_text:'second = 2',new_text:'second = 4'}]}}]};
     };
     driver=await renderer();
-    const run=vscode.commands.executeCommand('forgeathon.inlineEdit');
-    await until(()=>driver.evaluate("document.activeElement?.closest('.quick-input-widget') !== null && document.activeElement?.tagName === 'INPUT'"),'inline instruction input');
-    await driver.send('Input.insertText',{text:'Update both sample assignments'});
-    await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-    await until(()=>vscode.window.tabGroups.all.flatMap(g=>g.tabs).some(tab=>
-      tab.input instanceof vscode.TabInputTextDiff && tab.input.original.scheme==='forge-preview'),'native diff',45000);
-    assert.equal(await fs.readFile(file,'utf8'),before,'Preview changed disk');
-    await until(()=>driver.evaluate("document.body.innerText.includes('Review hunks')"),'review control');
-    await vscode.commands.executeCommand('forgeathon.reviewHunks');
-    await until(()=>driver.evaluate("document.querySelector('.quick-input-widget')?.innerText.includes('Hunk 1')"),'hunk picker');
-    const row = ".quick-input-widget .quick-input-list .monaco-list-row";
-    const box = row + ' .monaco-checkbox';
-    assert.ok(await driver.evaluate(`(() => {const el=document.querySelector(${JSON.stringify(box)});if(!el)return false;el.click();return true;})()`),
-      'First hunk checkbox must be checked before submitting');
-    await until(()=>driver.evaluate("document.querySelectorAll('.quick-input-list .monaco-checkbox[aria-checked=true]').length === 1"),'one selected hunk');
-    await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-    await Promise.race([run,new Promise((_,reject)=>setTimeout(()=>reject(Error('Turn did not finish')),30000))]);
-    assert.equal(await fs.readFile(file,'utf8'),after,'Only the first hunk should be saved');
+    const rows=".quick-input-widget .quick-input-list .monaco-list-row";
+    const checkedRows=()=>driver.evaluate(`[...document.querySelectorAll(${JSON.stringify(rows)})]
+      .sort((a,b)=>Number(a.dataset.index)-Number(b.dataset.index))
+      .map(r=>r.querySelector('.monaco-checkbox')?.getAttribute('aria-checked')==='true')`);
+    // Leave exactly hunk n checked by clicking each checkbox whose state differs, then verify every row.
+    async function selectOnly(n){
+      await until(async()=>(await checkedRows()).length===2,'two hunk rows');
+      const state=await checkedRows();
+      for(let i=0;i<state.length;i++){
+        if(state[i]===(i===n-1)) continue;
+        assert.ok(await driver.evaluate(`(()=>{const r=[...document.querySelectorAll(${JSON.stringify(rows)})]
+          .find(r=>Number(r.dataset.index)===${i});const b=r?.querySelector('.monaco-checkbox');if(!b)return false;b.click();return true;})()`),
+          'checkbox of hunk '+(i+1));
+      }
+      await until(async()=>JSON.stringify(await checkedRows())===JSON.stringify([n===1,n===2]),'only hunk '+n+' checked');
+    }
+    const sessionIds=[];
+    for(const n of [1,2]){
+      const doc=await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      const editor=await vscode.window.showTextDocument(doc);
+      editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(doc.getText().length));
+      const run=vscode.commands.executeCommand('forgeathon.inlineEdit');
+      await until(()=>driver.evaluate("document.activeElement?.closest('.quick-input-widget') !== null && document.activeElement?.tagName === 'INPUT'"),'inline instruction input');
+      await driver.send('Input.insertText',{text:'Update both sample assignments'});
+      await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+      await until(()=>vscode.window.tabGroups.all.flatMap(g=>g.tabs).some(tab=>
+        tab.input instanceof vscode.TabInputTextDiff && tab.input.original.scheme==='forge-preview'),'native diff',45000);
+      assert.equal(await fs.readFile(file,'utf8'),before,'Preview changed disk');
+      await until(()=>driver.evaluate("document.body.innerText.includes('Review hunks')"),'review control');
+      await vscode.commands.executeCommand('forgeathon.reviewHunks');
+      await until(()=>driver.evaluate("document.querySelector('.quick-input-widget')?.innerText.includes('Hunk 1')"),'hunk picker');
+      await selectOnly(n);
+      await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+      await Promise.race([run,new Promise((_,reject)=>setTimeout(()=>reject(Error('Turn did not finish')),30000))]);
+      assert.equal(await fs.readFile(file,'utf8'),expected[n],'Exactly hunk '+n+' should be saved');
+      await vscode.commands.executeCommand('forgeathon.undo');
+      assert.equal(await fs.readFile(file,'utf8'),before,'Undo did not restore original after hunk '+n);
+    }
+    // Stop while the review is pending: the diff tab and every review control close; nothing actionable remains.
+    {
+      const visibleAcceptAll=`[...document.querySelectorAll('.notifications-toasts .notification-toast, .notifications-center .notification-list-item, .quick-input-widget')]
+        .filter(el=>el.offsetParent!==null && getComputedStyle(el).display!=='none').some(el=>el.innerText.includes('Accept All'))`;
+      assert.equal(await driver.evaluate(visibleAcceptAll),false,'no Accept All left on screen from the reviews already decided');
+      const doc=await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      const editor=await vscode.window.showTextDocument(doc);
+      editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(doc.getText().length));
+      const run=vscode.commands.executeCommand('forgeathon.inlineEdit');
+      await until(()=>driver.evaluate("document.activeElement?.closest('.quick-input-widget') !== null && document.activeElement?.tagName === 'INPUT'"),'inline instruction input');
+      await driver.send('Input.insertText',{text:'Update both sample assignments'});
+      await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+      const previews=()=>vscode.window.tabGroups.all.flatMap(g=>g.tabs).filter(tab=>tab.input instanceof vscode.TabInputTextDiff && tab.input.original.scheme==='forge-preview');
+      await until(()=>previews().length===1,'native diff before Stop',45000);
+      await until(()=>driver.evaluate("document.querySelector('.statusbar')?.innerText.includes('Review hunks')"),'review pending (status bar)');
+      await until(()=>driver.evaluate(visibleAcceptAll),'Accept All shown while the review is pending');
+      await vscode.commands.executeCommand('forgeathon.stop');
+      await Promise.race([run,new Promise((_,reject)=>setTimeout(()=>reject(Error('Turn did not stop')),15000))]);
+      await new Promise(r=>setTimeout(r,1000));
+      assert.equal(previews().length,0,'diff tab closed after Stop');
+      assert.equal(await driver.evaluate(visibleAcceptAll),false,'no Accept All left on screen one second after Stop');
+      assert.equal(await fs.readFile(file,'utf8'),before,'Stop left the file unchanged');
+    }
     assert.ok(model.requests.some(r=>r.messages.some(m=>m.role==='tool')),'Tool result returned to model');
     const sessions=await client.sessions.list();
     assert.ok(sessions.data.length,'TrueForge session persisted');
-    await vscode.commands.executeCommand('forgeathon.undo');
-    assert.equal(await fs.readFile(file,'utf8'),before,'Undo did not restore original');
-    console.log('PASS real TrueForge 0.185.1 + scripted model, inline command, native diff, per-hunk review, saved MCP edit, undo; session '+sessions.data[0].id);
+    sessionIds.push(sessions.data[0].id);
+    console.log('PASS real TrueForge 0.185.1 + scripted model, inline command, native diff, hunk picker (hunk 1 only, then hunk 2 only: exactly that hunk saved), undo after each, Stop with a pending review leaves no Accept All on screen; session '+sessionIds[0]);
     console.log('Extension host '+process.platform+' Node '+process.versions.node+' remoteName='+(vscode.env.remoteName||'local'));
   } finally {
     driver?.close(); await model.stop(); server.kill('SIGTERM');

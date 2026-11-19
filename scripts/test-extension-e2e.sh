@@ -18,4 +18,4 @@ python3 -m venv "$work/venv" && "$work/venv/bin/pip" install -q -e "$work/flask"
 trap '"$repo/scripts/dev-mock.sh" stop; rm -rf "$work"' EXIT
 
 export PATH="$work/venv/bin:$PATH" VIRTUAL_ENV="$work/venv" FORGE_EDH_WORKSPACE="$work/flask"
-"$repo/scripts/test-extension.sh" tasks.cjs
+"$repo/scripts/test-extension.sh" "${FORGE_E2E_TEST:-tasks.cjs}"

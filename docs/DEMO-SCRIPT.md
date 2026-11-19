@@ -23,16 +23,17 @@ node scripts/setup-trueforge.mjs                                                
 bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protection-ok
 ```
 
-3. VS Code: **WSL: Connect to WSL** → open `~/projects/forgeathon/extension` → **F5** → in the Extension
+4. VS Code: **WSL: Connect to WSL** → open `~/projects/forgeathon/extension` → **F5** → in the Extension
    Development Host open `~/flask-demo`. Do one throw-away inline edit to warm up, then
    `git -C ~/flask-demo checkout -- .`
-4. Layout: editor left, Forge agent panel right (Forge-a-thon: Open Agent Panel), integrated terminal
+5. Layout: editor left, Forge agent panel right (Forge-a-thon: Open Agent Panel), integrated terminal
    bottom (cwd `~/flask-demo`). Browser tab with http://localhost:8790 → Sessions, ready.
-5. Readability: `"editor.fontSize": 16`, `"terminal.integrated.fontSize": 15`, `"window.zoomLevel": 1`,
-   minimap off, close unrelated panels, OS notifications off (keep VS Code notifications on: the review
-   prompt is one). 1920×1080 recording.
-6. Have the three instructions in a text file to paste (exact wording below).
-7. Settings in the Extension Development Host for the recording:
+6. Readability: `"editor.fontSize": 16`, `"terminal.integrated.fontSize": 15`, `"window.zoomLevel": 1`,
+   minimap off, close unrelated panels, OS notifications off. The review prompt (Accept All / Reject All / Choose Hunks...) is a
+   quick pick at the top of the window and closes when the review is decided or the turn is stopped.
+   1920×1080 recording.
+7. Have the three instructions in a text file to paste (exact wording below).
+8. Settings in the Extension Development Host for the recording:
    - `"forge.autoApproveSafeCommands": true`. This auto-approves only `pytest`, `python -m pytest`,
      `git status` and `git diff`.
    - `forge.commandBudget.agent` at its default of `3`.
@@ -42,28 +43,20 @@ bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protec
 
 Models: NVIDIA `nemotron-3-ultra-550b-a55b` (primary), Groq `qwen3.8-27b` (fallback).
 
-**Measured with the recording settings** (2026-11-19, run 4, fresh TrueForge database). The settings were
-auto-approval on, budget 3 and Deny on ⚠ Unrestricted, as in `smoke-real-model.mjs
---auto-approve-safe-commands --deny-unrestricted`. All 6 checks passed.
+**Measured on the current code** (QA run on `37fb675`, 2026-11-19, with bubblewrap protection and the
+recording settings: auto-approval on, budget 3):
 
-This run was **before** origin's bubblewrap protection was merged. With it, commands cannot write to the
-checkout or reach the network. The same `pytest` and `python -c` checks pass inside it (verified on the
-mock), but a real-model rerun is needed to confirm the numbers. If the model tries to write a file, the
-command output will show `Read-only file system`, and the model has to use a reviewed diff instead.
+| | Task A | Task B | Task C |
+|---|---|---|---|
+| Instruction → first diff (uncut on video) | 11.2 s | **105.5 s** | 29.5 s (2.3–2.6 s in earlier runs) |
+| Whole turn | 14.2 s | 160.3 s | 35.0 s |
+| Reviews | 1 | 5: `cli.py` 2, `tests/test_cli.py` 2, `docs/cli.rst` 1 | 1 (rejected) |
+| Commands | 0 | 3 auto-approved `python -m pytest …`, 1 refused by the budget | 0 |
 
-| | Run 4 (guardrails) |
-|---|---|
-| First diff after sending | ≈ 53 s |
-| Whole turn | 204.5 s |
-| Reviews | 6: `src/flask/cli.py` 3, `tests/test_cli.py` 2, `docs/cli.rst` 1. One extra edit was refused by the harness (old text not found), with no click |
-| Commands | 3 shown: 1 auto-approved (`python -m pytest tests/test_cli.py::TestConfig -v`) and 2 prompts (`python -c …`, no warning) |
-| ⚠ Unrestricted | 0 this run. Deny any that appear |
-| Budget refusals | 4 "command budget reached" lines, with no click |
-| Model requests | 47 (peak 28/min), no 429s |
-| Tokens (input / output) | 1.44M / 9.3k |
+`docs/writeup/rehearsal.json` holds the latest rehearsal on the final `main`; use its numbers if they differ.
 
-**Your clicks in Task B:** 6 × **Accept All** and 2 × **Allow once** (the `python -c` checks). Deny any ⚠
-Unrestricted prompt. The model varies between runs, so expect 3–8 reviews and 0–3 command clicks.
+**Your clicks in Task B:** **Accept All** on each diff (expect 3–8) and **Allow once** on any command prompt
+without a warning (`python -c …`, `flask …`; 0–3). Deny any ⚠ Unrestricted prompt.
 
 | What appears | Click |
 |---|---|
@@ -72,34 +65,32 @@ Unrestricted prompt. The model varies between runs, so expect 3–8 reviews and 
 | Command prompt with **⚠ Unrestricted** (`cd …`, pipes, here-docs, `python -m flask …`) | **Deny**. The refusal goes back to the model; tested on the mock (`e2e-mock.sh --deny-unrestricted`) |
 | "auto-approved: …" and "command budget reached (3 per turn): …" lines | Nothing; they are shown only |
 
-Say once on screen: "Test runs are auto-approved; anything else asks; the harness caps commands at three per
-turn."
-
-**Before the guardrails** (same day, every prompt allowed, auto-approval off):
-
-| Run | First diff after | Whole turn | Reviews (per file) | Command prompts (of which ⚠ Unrestricted) |
-|---|---|---|---|---|
-| 1 (old instructions) | — | 133 s | 7 (`cli.py` 3, `test_cli.py` 2, `cli.rst` 1, `api.rst` 1) | 15 |
-| 2 (tuned instructions) | 39 s | 259 s | 12 (`cli.py` 7, `test_cli.py` 4, `cli.rst` 1) | 17 (5) |
-| 3 (tuned again) | 39 s | 240 s | 11 (`cli.py` 8, `test_cli.py` 2, `cli.rst` 1) | 7 (4) |
+Earlier runs (before the sandbox merge; STATUS.md): first diff 39–53 s, whole turn 133–259 s, 6–12 reviews.
 
 ## Shot list
 
+Total 3:50. **Never cut between an instruction and its diff** (A, B and C). Cuts are allowed only in model
+waiting *after* a diff has appeared; every such cut gets an on-screen caption **"model waiting time cut"**
+(added in the video editor, held ~2 s over the cut). Optional: a small "uncut" label during the B segment.
+
 | Time | Shot | Say / show |
 |---|---|---|
-| 0:00–0:10 | **Setup glimpse** — terminal 1 (TrueForge 0.185.1 running), terminal 2 (setup output: agents and models), `git -C ~/flask-demo log -1 --oneline` → `22d9247` | "VS Code extension; the whole agent loop runs on TrueForge in local mode; primary and fallback models from different providers." |
-| 0:10–0:38 | **Task A, uncut from instruction to diff** (measured 8.5–11.4 s, 3 requests; 9.4 s in the latest run) — open `src/flask/helpers.py`, select `get_debug_flag` (lines 28–33), `Ctrl+Alt+I`, paste instruction A, Enter → progress → diff editor + "Review N hunks" (the real model produced 1 hunk) → **Choose Hunks** (show the picker) → accept | Point at the per-hunk picker. |
-| 0:38–0:48 | **Task A verification** — terminal: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` → `False` | |
-| 0:48–1:45 | **Task B, uncut from instruction to the first diff** (≈ 53 s measured with the guardrails) — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: 7,456/8,000 tokens, `src/flask/cli.py` ranked first with its reason, 7 skipped) → tool calls (read_file, search_workspace, …) → first diff (`src/flask/cli.py`) → **Accept All** | "No file names in the request; the agent finds the files itself." |
-| 1:45–2:28 | **Task B, rest of the turn, model waiting cut** (≈ 150 s of real time; whole turn 204.5 s) — each further diff → **Accept All** (measured: 5 more: `cli.py` ×2, `tests/test_cli.py` ×2, `docs/cli.rst`); "auto-approved: python -m pytest …" line (no click); `python -c` prompts → **Allow once** (2 measured); any ⚠ Unrestricted prompt → **Deny**; "command budget reached" lines (4 measured, no click) → summary with the test result | "Test runs are auto-approved; anything else asks; the harness caps commands at three per turn." Keep each click on screen ~2 s; cut only the waiting between them. |
-| 2:28–2:40 | **TrueForge session (required for eligibility)** — panel button **Open TrueForge session** (or the Sessions tab): hold ~10 s on Task B's turn with its list of tool calls (read/search/propose_edit/run_command, and `call_tool` if the model used deferred tools) and the approvals | Brief; note the timestamp for the write-up. |
-| 2:40–2:58 | **Task B verification** — `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (shows `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | |
-| 2:58–3:10 | **Cancel** — panel: send any request (e.g. "Add type hints to every function in src/flask/cli.py"), press **Stop** while it streams or at the first review → status cancelled, review closed; `git diff --stat` unchanged from before | "Stop cancels the TrueForge turn; nothing half-applied." |
-| 3:10–3:44 | **Task C** — `git checkout -- .` (clean baseline, `git status` empty) → terminal 2: `NVIDIA_API_KEY=invalid node scripts/setup-trueforge.mjs` → repeat Task A → banner "Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to groq/qwen3-8-27b" (measured: 2.3–2.6 s for the whole turn) → fallback's diff → **Reject All** → `git status` (empty) | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." |
-| 3:44–3:50 | Closing card: repo URL | |
+| 0:00–0:04 | **Setup glimpse**: terminal 1 (TrueForge 0.185.1 running), `git -C ~/flask-demo log -1 --oneline` → `22d9247` | "VS Code extension; the agent loop runs on TrueForge in local mode." |
+| 0:04–0:24 | **Task A, uncut from instruction to diff** (11 s measured): `src/flask/helpers.py`, select `get_debug_flag`, `Ctrl+Alt+I`, paste instruction A, Enter → diff editor + "Review N hunk(s)" → **Choose Hunks...** (show the per-hunk picker, all ticked) → accept | Point at the per-hunk picker. |
+| 0:24–0:30 | **Task A verification**: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` → `False` | |
+| 0:30–0:42 | **Undo (12 s)**: `Ctrl+Shift+P` → **Forge-a-thon: Undo Last Reviewed Edit** → the editor shows the original function → terminal `git status --short` (empty: file restored) → editor `Ctrl+Z`, `Ctrl+S` (change back) → `git status --short` shows `M src/flask/helpers.py` | "Every reviewed edit can be undone exactly." (Tested: `scripts/test-extension-e2e.sh`, Task A.) |
+| 0:42–2:34 | **Task B, uncut from instruction to the first diff** (105 s measured) — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: used/budget tokens, `src/flask/cli.py` ranked with its reason, skipped items) → tool calls (read_file, search_workspace, …) → first diff → **Accept All** | "No file names in the request; the agent finds the files itself." Talk over the wait: context, tools. |
+| 2:34–2:48 | **Task B, rest of the turn, model waiting cut** (≈ 55 s of real time) — each further diff → **Accept All** (measured: 4 more over `cli.py`, `tests/test_cli.py`, `docs/cli.rst`); "auto-approved: python -m pytest …" lines; any `python -c` prompt → **Allow once**; any ⚠ Unrestricted → **Deny**; "command budget reached" line; summary | Caption **"model waiting time cut"** at every cut. "Test runs are auto-approved; anything else asks; at most three commands per turn." |
+| 2:48–2:56 | **TrueForge session (required for eligibility)**: panel **Open TrueForge session** → hold ~8 s on Task B's turn with its tool calls (read/search/propose_edit/run_command) and approvals | Note this timestamp for the write-up. |
+| 2:56–3:08 | **Task B verification**: `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (lists `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | |
+| 3:08–3:14 | **Stop**: panel, send "Add type hints to every function in src/flask/cli.py", press **Stop** while it streams → status cancelled, no edits listed | "Stop cancels the TrueForge turn; nothing half-applied." |
+| 3:14–3:50 | **Task C, uncut from instruction to diff**: `git checkout -- . && git status --short` (empty) → terminal 2 `NVIDIA_API_KEY=invalid node scripts/setup-trueforge.mjs` → repeat Task A → banner "Primary model failed: … 401 … → switched to groq/qwen3-8-27b" → fallback's diff → **Reject All** → `git status --short` (empty) | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." Repo URL on the last frame. |
 
-After recording: restore the primary key (`source ~/.forge-keys.env && node scripts/setup-trueforge.mjs`), note the
-timestamps of each shot for the write-up scorecard (`docs/writeup/WRITEUP.md`, section 6).
+Timing check: the C slot leaves ~22 s for instruction → diff. If the rehearsal's C wait is longer (QA measured
+29.5 s), take the difference from the 2:34–2:48 cut segment; never from an uncut segment. The hard limit is 4:00.
+
+After recording: restore the primary key (`source ~/.forge-keys.env && node scripts/setup-trueforge.mjs`) and
+write the real timestamps of each shot into the write-up scorecard (`docs/writeup/WRITEUP.md`, section 6).
 
 ## Exact instructions
 

@@ -6,6 +6,7 @@ import { sha256Hex } from '../review';
 import { normalizeWorkspacePath } from './paths';
 import type { ToolContext, ToolOutcome } from './tools';
 import { approvalKey } from './tools';
+import { checkProtection, confinedCwd, protectedArgs } from './command-protection';
 
 export interface RunCommandArgs {
   command: string;
@@ -67,7 +68,15 @@ function capped(buf: string): string {
   return buf.length <= COMMAND_OUTPUT_CAP ? buf : `${buf.slice(0, COMMAND_OUTPUT_CAP / 2)}\n[... ${buf.length - COMMAND_OUTPUT_CAP} characters omitted ...]\n${buf.slice(-COMMAND_OUTPUT_CAP / 2)}`;
 }
 
-export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs): Promise<ToolOutcome> {
+export interface CommandRuntime {
+  snapshot: typeof snapshot;
+  environment: typeof commandEnv;
+  checkProtection: typeof checkProtection;
+  spawn: typeof spawn;
+}
+const defaultRuntime: CommandRuntime = { snapshot, environment: commandEnv, checkProtection, spawn };
+
+export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs, runtime: CommandRuntime = defaultRuntime): Promise<ToolOutcome> {
   const scope = ctx.scope;
   if (!scope) return { ok: false, code: 'NO_REVIEW_DECISION', message: 'this call is not bound to an active turn; nothing was run' };
   if (scope.cancelled) return { ok: false, code: 'CANCELLED', message: 'the turn was cancelled; nothing was run' };
@@ -77,42 +86,62 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs): Pr
   if (!root) return { ok: false, code: 'INVALID_ARGS', message: 'no workspace root is known for this session' };
   const rel = args.cwd === undefined || args.cwd === '' || args.cwd === '.' ? '' : normalizeWorkspacePath(args.cwd);
   if (rel === null) return { ok: false, code: 'OUTSIDE_WORKSPACE', message: `cwd must be inside the workspace: ${args.cwd}` };
-  const cwd = rel ? path.join(root, ...rel.split('/')) : root;
+  let cwd: string;
+  try { cwd = await confinedCwd(root, rel); }
+  catch { return { ok: false, code: 'OUTSIDE_WORKSPACE', message: 'cwd must resolve to a directory inside the workspace' }; }
   const timeoutSec = Math.min(Math.max(1, Math.floor(args.timeout_sec ?? COMMAND_DEFAULT_TIMEOUT_SEC)), COMMAND_MAX_TIMEOUT_SEC);
 
-  const before = await snapshot(root);
-  scope.writes++; // a shell command may change anything: never retry or fall back after one ran
   const controller = new AbortController();
   scope.running.add(controller);
-  let stdout = '';
-  let stderr = '';
-  let timedOut = false;
-  const env = await commandEnv(root);
-  const exitCode = await new Promise<number | null>((resolve) => {
-    const child = spawn('bash', ['-c', args.command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const killGroup = (signal: NodeJS.Signals) => { try { if (child.pid) process.kill(-child.pid, signal); } catch { /* already gone */ } };
-    const stop = () => { killGroup('SIGTERM'); setTimeout(() => killGroup('SIGKILL'), 2000).unref(); };
-    const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutSec * 1000);
-    controller.signal.addEventListener('abort', stop);
-    child.stdout.on('data', (c: Buffer) => { if (stdout.length < COMMAND_OUTPUT_CAP * 4) stdout += c.toString('utf8'); });
-    child.stderr.on('data', (c: Buffer) => { if (stderr.length < COMMAND_OUTPUT_CAP * 4) stderr += c.toString('utf8'); });
-    child.on('error', (e) => { stderr += `\n${e.message}`; });
-    child.on('close', (code) => { clearTimeout(timer); resolve(code); });
-  });
-  scope.running.delete(controller);
-  const after = await snapshot(root);
-  const changedFiles = before && after ? diffSnapshots(before, after) : [];
-  scope.onCommand?.({ callRef: approval.callRef, command: args.command, exitCode, changedFiles });
+  const stoppedBeforeStart = (): ToolOutcome => ({ ok: false, code: 'CANCELLED', message: 'the turn was cancelled; nothing was run' });
+  try {
+    if (scope.cancelled) return stoppedBeforeStart();
+    const before = await runtime.snapshot(root);
+    if (scope.cancelled || controller.signal.aborted) return stoppedBeforeStart();
+    const env = await runtime.environment(root);
+    if (scope.cancelled || controller.signal.aborted) return stoppedBeforeStart();
+    try { await runtime.checkProtection(cwd, controller.signal); }
+    catch (error) {
+      if (scope.cancelled || controller.signal.aborted) return stoppedBeforeStart();
+      return { ok: false, code: 'INVALID_ARGS', message: (error as Error).message };
+    }
+    if (scope.cancelled || controller.signal.aborted) return stoppedBeforeStart();
+    scope.writes++; // conservatively suppress replay after any command was admitted
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const exitCode = await new Promise<number | null>((resolve) => {
+      // No await between the final cancellation check and spawn.
+      const child = runtime.spawn('bwrap', protectedArgs(cwd, args.command, root), {
+        cwd, env: { PATH: env['PATH'], VIRTUAL_ENV: env['VIRTUAL_ENV'], HOME: '/tmp', TMPDIR: '/tmp',
+          LANG: env['LANG'] ?? 'C.UTF-8', PYTHONDONTWRITEBYTECODE: '1', PYTEST_ADDOPTS: '-p no:cacheprovider' },
+        detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const killGroup = (signal: NodeJS.Signals) => { try { if (child.pid) process.kill(-child.pid, signal); } catch { /* already gone */ } };
+      let escalation: NodeJS.Timeout | undefined;
+      const stop = () => { if (escalation) return; killGroup('SIGTERM'); escalation = setTimeout(() => killGroup('SIGKILL'), 2000); escalation.unref(); };
+      const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutSec * 1000);
+      controller.signal.addEventListener('abort', stop, { once: true });
+      if (controller.signal.aborted) stop();
+      child.stdout!.on('data', (c: Buffer) => { if (stdout.length < COMMAND_OUTPUT_CAP * 4) stdout += c.toString('utf8'); });
+      child.stderr!.on('data', (c: Buffer) => { if (stderr.length < COMMAND_OUTPUT_CAP * 4) stderr += c.toString('utf8'); });
+      child.on('error', (e) => { stderr += `\n${e.message}`; });
+      child.on('close', (code) => { clearTimeout(timer); clearTimeout(escalation); controller.signal.removeEventListener('abort', stop); resolve(code); });
+    });
+    const after = await runtime.snapshot(root);
+    const changedFiles = before && after ? diffSnapshots(before, after) : [];
+    scope.onCommand?.({ callRef: approval.callRef, command: args.command, exitCode, changedFiles });
 
-  const stopped = controller.signal.aborted ? ' (killed: turn cancelled)' : timedOut ? ` (killed: exceeded ${timeoutSec} s)` : '';
-  const changes = before && after
-    ? changedFiles.length ? `Files changed by the command: ${changedFiles.join(', ')}` : 'Files changed by the command: none'
-    : 'Files changed by the command: unknown (not a git repository)';
-  const unsaved = scope.unsavedPaths.size
-    ? `\nWarning: unsaved editor changes are not visible to this command: ${[...scope.unsavedPaths].join(', ')}`
-    : '';
-  return {
-    ok: true,
-    text: `$ ${args.command}\ncwd: ${rel || '.'}\nexit code: ${exitCode ?? 'none'}${stopped}\n${changes}${unsaved}\n--- stdout ---\n${capped(stdout)}\n--- stderr ---\n${capped(stderr)}`,
-  };
+    const stopped = controller.signal.aborted ? ' (killed: turn cancelled)' : timedOut ? ` (killed: exceeded ${timeoutSec} s)` : '';
+    const changes = before && after
+      ? changedFiles.length ? `Files changed by the command: ${changedFiles.join(', ')}` : 'Files changed by the command: none'
+      : 'Files changed by the command: unknown (not a git repository)';
+    const unsaved = scope.unsavedPaths.size
+      ? `\nWarning: unsaved editor changes are not visible to this command: ${[...scope.unsavedPaths].join(', ')}`
+      : '';
+    return {
+      ok: true,
+      text: `$ ${args.command}\ncwd: ${rel || '.'}\nprotection: read-only host filesystem; private temporary files; no network\nexit code: ${exitCode ?? 'none'}${stopped}\n${changes}${unsaved}\n--- stdout ---\n${capped(stdout)}\n--- stderr ---\n${capped(stderr)}`,
+    };
+  } finally { scope.running.delete(controller); }
 }

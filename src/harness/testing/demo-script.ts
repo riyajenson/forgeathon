@@ -164,7 +164,9 @@ export function demoScript(req: MockRequest): MockReply {
 
   if (user.includes(TASK_B_MARK)) {
     const plan: Array<() => MockReply> = [
-      () => call('search_workspace', { query: 'self.add_command(routes_command)' }, 'Let me find where the built-in commands are registered.'),
+      // find_symbol is a deferred tool: it is reached through TrueForge's call_tool meta tool.
+      () => call('call_tool', { mcp_server: 'vscode', tool_name: 'find_symbol', input: { name: 'routes_command' } }, 'Let me find where the built-in commands are defined.'),
+      () => call('search_workspace', { query: 'self.add_command(routes_command)' }, 'And where they are registered.'),
       () => call('read_file', { path: 'src/flask/cli.py', start_line: 1050, end_line: 1130 }, 'The built-in commands live in src/flask/cli.py; reading the routes command.'),
       () => call('propose_edit', { path: 'src/flask/cli.py', base_sha256: shaOf(req, 'src/flask/cli.py'), summary: 'add the config command and register it', edits: TASK_B_EDITS['src/flask/cli.py'] },
         "I'll add config_command next to routes_command and register it in FlaskGroup."),

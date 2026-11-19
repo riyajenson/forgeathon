@@ -30,7 +30,7 @@ Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 | TrueForge in local mode | `npx @truefoundry/trueforge@0.185.1` with SQLite | [Quickstart](#quickstart-with-real-models) |
 | Agent definition in the repository | `forge-coder` (agent mode) and `forge-inline` (inline edit), plus `-fallback` variants created by the setup | `agent/forge-coder.json`, `agent/forge-inline.json` |
 | Inline edit with in-editor diff, accept/reject, no copy-paste | Diff editor, per-hunk picker, Accept/Reject All, undo | `extension/src/review.ts`, Task A |
-| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; one reviewed proposal per file | `agent/forge-coder.json`, Task B |
+| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; every proposed change is reviewed before it is written (a file can get several reviews; the measured Task B had 5 over 3 files) | `agent/forge-coder.json`, Task B |
 | Context: `@file`, `@symbol`, automatic retrieval, budget, visible rationale | Context engine and the panel's Context block | `src/harness/context/`, [How context is selected](#how-context-is-selected) |
 | Diff safety: preview, per-hunk accept/reject, no silent writes, undo | Review before write, stale-base refusal, guarded undo | [Safety model](#safety-model) |
 | Streaming and cancellation, workspace consistent | Streamed text and tool calls; Stop cancels the TrueForge turn and closes the review | `src/harness/turn/turn.ts`, `extension/src/agentPanel.ts` |
@@ -163,7 +163,12 @@ Free model lists change. To pick another model:
 4. Point `agents.primaryModel` or `agents.fallbackModel` at it. Keep the two on **different providers**.
 5. Rerun the setup (step 6).
 
-Gemini, Anthropic, OpenAI and `groq/gpt-oss-120b` are listed in the example as untested alternatives.
+Which models were used for what:
+
+- **Used for the tasks and the video:** the primary and fallback above.
+- **Probed only** (one request each, not used for the tasks): on NVIDIA, Kimi K3.1 Pro, GLM-5.3 Flash, Step-5,
+  Mistral Large 4 and MiniMax M3.1 Flash; on OpenRouter, the spare above (`docs/STATUS.md`, "Models").
+- **Examples only, never run:** Gemini, Anthropic, OpenAI and `groq/gpt-oss-120b` in `config/models.example.json`.
 
 ### 5. Start TrueForge (keep this terminal open)
 
@@ -441,7 +446,10 @@ real model solves the tasks; real-model results are recorded in `docs/STATUS.md`
 | `scripts/e2e-mock.sh` | Tasks A, B, C and G (guardrails) through the harness on a copy of Flask 3.1.3, with the verification commands: 21 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
 | `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
 | `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, panel, settings | A display (WSLg). Fetches 3 libraries without sudo |
-| `scripts/test-extension-e2e.sh` | Tasks A, B, Stop and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |
+| `scripts/test-extension-e2e.sh` | Tasks A (incl. undo and re-apply), B, Stop during a pending review and during a running command, and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |
+| `FORGE_E2E_TEST=responsiveness.cjs scripts/test-extension-e2e.sh` | The extension host is never blocked longer than 150 ms during Task B (event-loop delay, CPU profile summary) | As above |
+| `scripts/test-extension-live.sh` | The native UI driven through the DevTools port: inline command, diff tab, hunk picker (hunk 1 only, then hunk 2 only, exactly that hunk saved), undo, and no Accept All left on screen after a decision or Stop | As above, plus TrueForge 0.185.1 in the npx cache |
+| `src/harness/node_modules/.bin/tsc -p contracts/tsconfig.json` | The shared protocol types compile | `npm ci` in `src/harness` |
 | `node scripts/smoke-real-model.mjs --tasks A,B,C` | The `e2e-mock.sh` checks with your real models (costs real requests) | Keys, `config/models.json`, TrueForge |
 | `node --test scripts/submission-readiness.test.mjs` | Tests of the submission-evidence checker | Nothing |
 | `node scripts/check-submission.mjs` | Checks that the write-up has no placeholders and that `docs/writeup/rehearsal.json` (copied from `config/rehearsal.example.json`) records real A/B/C evidence. It fails until those are filled in; it checks completeness, not truth | The filled-in evidence file |
@@ -518,7 +526,9 @@ As declared in the write-up (`docs/writeup/WRITEUP.md`, "Tools used"):
   architecture and implementation, the context engine and tests. After the hand-over, also the editor
   workstream, the documentation and the write-up draft.
 - **OpenAI Codex (via ChatGPT):** the initial VS Code extension scaffold, the editor features (EditorPort,
-  inline review, agent panel) and the shared contracts.
+  inline review, agent panel) and the shared contracts; PRs #3 and #4 (the execution-safety sandbox for
+  commands, tool-call settlement, retrieval coverage reporting and the submission-evidence checker); and a QA
+  review of the final build.
 
 All code was reviewed and directed by the team.
 

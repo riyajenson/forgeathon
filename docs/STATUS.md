@@ -258,8 +258,8 @@ All automated checks use the scripted demo model: they prove the plumbing, not r
 
 ## Branch map
 
-`main` is ahead of `origin/main` (`1317300`) by today's merges; nothing pushed today. All branches below are
-merged into `main` with `--no-ff`.
+The repository is public. `origin/main` is `37fb675` (history without commit trailers); later work on `main`
+is a fast-forward from it. All branches below are merged into `main` with `--no-ff`.
 
 | Branch | Content |
 |---|---|
@@ -349,9 +349,9 @@ merged into `main` with `--no-ff`.
 3. **Manual VS Code checklist:** `docs/MANUAL-TEST.md` (≈ 20 min).
 4. **Push:**
    ```bash
-   cd ~/projects/forgeathon && git push origin --all     # main + every branch (nothing is force-pushed)
+   cd ~/projects/forgeathon && git push origin main      # a fast-forward from origin/main
    ```
-   Then confirm the repository is public (open it signed out).
+   The repository is public; confirm the new commits show up signed out.
 5. **Record** per `docs/DEMO-SCRIPT.md` (≤ 4:00; Tasks A, B, C in order; no cut between instruction and diff).
 6. **Evidence gate:** copy `config/rehearsal.example.json` to `docs/writeup/rehearsal.json`, fill in the real
    A/B/C runs (session URLs, tokens, video timestamps), and run `node scripts/check-submission.mjs` until it passes.

@@ -317,6 +317,7 @@ source ~/.forge-keys.env && node scripts/setup-trueforge.mjs
   and an outline of the active file.
 - **Chunking:** the workspace is split into functions and classes (with decorators) and doc sections,
   respecting every `.gitignore` and skipping dependencies, virtualenvs, build output and credentials files.
+  If a `.gitignore` exists but cannot be read, nothing is indexed, listed or searched, and the reason is shown.
 - **Scoring:** identifiers are split (`routes_command` → `routes`, `command`), and chunks are scored with BM25
   plus symbol-name, decorator and file-name boosts.
 - **File ranking:** a file's score sums its best chunks and its coverage of the task's terms. Code is weighted
@@ -377,6 +378,18 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
   - Only bare `pytest`, `python -m pytest`, `git status` and `git diff`, with no shell operators and no path or
     `NAME=value` prefix.
   - `python -c` and `flask` always ask. Edits are always reviewed.
+- **What the model can read:** one rule applies to every source of text: automatic retrieval, `@file`,
+  `@symbol`, the selection, the active file, `read_file`, `search_workspace`, `list_files`, `find_symbol` and
+  `gather_context`.
+  - Credentials-shaped files (`.env*` other than `.env.example`/`.sample`/`.template`; `*.pem`, `*.key`, `*.p12`,
+    `*.pfx`, keystores; `id_rsa`-style keys; `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`,
+    `credentials.json`, `secrets.json/.yaml`) are refused everywhere. A refused `@file` or selection appears under
+    **Skipped** with the reason, and a tool call gets a `SECRET_FILE` error.
+  - Files with NUL bytes are refused (`BINARY_FILE`) and are not searched. `read_file` returns at most 600
+    lines and 60,000 characters, cuts lines longer than 2,000 characters, and marks every cut.
+  - Ignored and default-excluded files are left out of automatic retrieval, listing and search, but an
+    explicit `read_file` or `@file` can still read them.
+  - The rule is name-based: a secret stored in an ordinary source file is not detected.
 - **Unsettled tools:** if a tool is still running when the model's turn ends, the session stays occupied until
   it finishes (Stop or the command timeout ends it). No retry, fallback or next turn starts in the meantime.
 - **Residual risk:** the sandbox is write protection, not a confidentiality boundary. A command you approve

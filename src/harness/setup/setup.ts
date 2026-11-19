@@ -25,10 +25,20 @@ export interface ProviderConfig {
   models: ModelConfig[];
 }
 
+export interface ModelProfile {
+  primaryModel: string;
+  fallbackModel: string;
+  /** Uses a paid model: scripts/use-models.sh refuses it without --paid-ok. */
+  paid?: boolean;
+  note?: string;
+}
+
 export interface ModelsConfig {
   providers: ProviderConfig[];
   agents: { primaryModel: string; fallbackModel: string };
   connector?: { name?: string; url?: string };
+  /** Named primary/fallback pairs that scripts/use-models.sh copies into `agents`. */
+  profiles?: Record<string, ModelProfile>;
 }
 
 export interface AgentTemplate {
@@ -74,12 +84,17 @@ export function validateConfig(cfg: ModelsConfig): string[] {
       known.add(`${name}/${m.name}`);
     }
   }
-  const { primaryModel, fallbackModel } = cfg.agents ?? ({} as ModelsConfig['agents']);
-  if (!primaryModel || !fallbackModel) problems.push('agents.primaryModel and agents.fallbackModel are required');
-  else {
-    if (!known.has(primaryModel)) problems.push(`agents.primaryModel "${primaryModel}" is not a configured <provider>/<model>`);
-    if (!known.has(fallbackModel)) problems.push(`agents.fallbackModel "${fallbackModel}" is not a configured <provider>/<model>`);
-    if (providerOf(primaryModel) === providerOf(fallbackModel)) problems.push('the fallback model must use a different provider than the primary');
+  const checkPair = (where: string, pair: { primaryModel?: string; fallbackModel?: string } | undefined) => {
+    const { primaryModel, fallbackModel } = pair ?? {};
+    if (!primaryModel || !fallbackModel) { problems.push(`${where}.primaryModel and ${where}.fallbackModel are required`); return; }
+    if (!known.has(primaryModel)) problems.push(`${where}.primaryModel "${primaryModel}" is not a configured <provider>/<model>`);
+    if (!known.has(fallbackModel)) problems.push(`${where}.fallbackModel "${fallbackModel}" is not a configured <provider>/<model>`);
+    if (providerOf(primaryModel) === providerOf(fallbackModel)) problems.push(`${where}: the fallback model must use a different provider than the primary`);
+  };
+  checkPair('agents', cfg.agents);
+  for (const [name, profile] of Object.entries(cfg.profiles ?? {})) {
+    if (!RESOURCE_NAME.test(name)) problems.push(`profile name "${name}" must be lowercase letters, digits and hyphens`);
+    checkPair(`profiles.${name}`, profile);
   }
   return problems;
 }

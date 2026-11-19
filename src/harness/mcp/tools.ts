@@ -2,7 +2,7 @@
 import { Worker } from 'node:worker_threads';
 import type { ApplyTextResult } from '../contract-types';
 import { isSecretPath, LIST_LIMIT, visibleFiles } from '../context/files';
-import { applyAccepted, canonicalArgsKey, computeProposal, sha256Hex, type ProposalHunk, type SearchReplaceEdit } from '../review';
+import { applyAccepted, canonicalArgsKey, computeProposal, normalizeEdits, sha256Hex, type ProposalHunk, type SearchReplaceEdit } from '../review';
 import { normalizeWorkspacePath } from './paths';
 import type { EditorPort } from './port';
 import type { SessionScope } from './scope';
@@ -51,12 +51,13 @@ export const hunkId = (proposalId: string, index: number): string => `${proposal
 export function approvalKey(tool: 'propose_edit' | 'run_command', args: unknown): string {
   const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
   if (tool === 'propose_edit') {
-    const edits = Array.isArray(a['edits'])
-      ? a['edits'].map((e) => {
+    const raw = normalizeEdits(a['edits']);
+    const edits = Array.isArray(raw)
+      ? raw.map((e) => {
         const x = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>;
         return { old_text: x['old_text'], new_text: x['new_text'] };
       })
-      : a['edits'];
+      : raw;
     return canonicalArgsKey({ path: a['path'], base_sha256: a['base_sha256'], edits, summary: a['summary'] });
   }
   return canonicalArgsKey({ command: a['command'], cwd: a['cwd'], timeout_sec: a['timeout_sec'] });

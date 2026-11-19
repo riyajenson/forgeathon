@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  normalizeEdits,
   ApplyError,
   applyAccepted,
   canonicalArgsKey,
@@ -159,4 +160,19 @@ test('ReviewRegistry: FIFO per key, each decision used once, clear drops all', (
   assert.equal(r.take('missing'), undefined);
   assert.equal(r.clear(), 1);
   assert.equal(r.take('k2'), undefined);
+});
+
+test('normalizeEdits: a JSON-encoded array string becomes the array; everything else is unchanged', () => {
+  const arr = [{ old_text: 'a', new_text: 'b' }];
+  assert.deepEqual(normalizeEdits(JSON.stringify(arr)), arr);
+  assert.deepEqual(normalizeEdits(`  ${JSON.stringify(arr)}\n`), arr);
+  assert.equal(normalizeEdits(arr), arr);
+  assert.equal(normalizeEdits('[not json'), '[not json');
+  assert.equal(normalizeEdits('{"old_text":"a"}'), '{"old_text":"a"}', 'only arrays');
+  assert.equal(normalizeEdits(undefined), undefined);
+  const p = computeProposal('x = 1\n', JSON.stringify([{ old_text: 'x = 1', new_text: 'x = 2' }]) as never);
+  assert.ok(p.ok);
+  const bad = computeProposal('x = 1\n', '[{"old_text": "x = 1", "new_text": ""\n}' as never);
+  assert.equal(bad.ok, false);
+  assert.match(!bad.ok ? bad.message : '', /not a string|Pass the array itself/);
 });

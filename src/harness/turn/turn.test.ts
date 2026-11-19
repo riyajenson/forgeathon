@@ -399,3 +399,24 @@ test('auto-approval is off unless the request sets autoApproveSafeCommands to tr
     assert.equal(asked.length, 1, `prompted with ${JSON.stringify(request)}`);
   }
 });
+
+test('a propose_edit whose edits arrive as a JSON string is reviewed and applied (not refused as "0 edits")', async () => {
+  const args = { ...editArgs(), edits: JSON.stringify(editArgs().edits) };
+  let result: Awaited<ReturnType<typeof proposeEditTool>> | undefined;
+  const tf = new FakeTrueForge({
+    onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'propose_edit', args)),
+    onApproval: (sub, sessionId) => {
+      // The MCP server's schema hands the tool the parsed array; the approval was recorded from the string.
+      void proposeEditTool({ port, scope: scopeOf(sessionId) }, editArgs()).then((r) => { result = r; sub.push(done('done')); });
+    },
+  });
+  const run = makeRun(tf);
+  void clickThrough(run);
+  await run.start();
+  const call = events(run).find((e) => e.t === 'tool_call') as Extract<HarnessEvent, { t: 'tool_call' }>;
+  assert.match(call.summary, /\(1 edit\)/, 'the panel summary counts the edits');
+  const review = events(run).find((e) => e.t === 'review_request') as Extract<HarnessEvent, { t: 'review_request' }>;
+  assert.equal(review.proposal.hunks.length, 1);
+  assert.ok(result?.ok, 'applied with the recorded approval');
+  assert.equal(await fs.readFile(path.join(root, FILE), 'utf8'), 'def alpha():\n    return 10\n');
+});

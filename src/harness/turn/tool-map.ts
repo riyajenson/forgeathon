@@ -1,5 +1,6 @@
 import type { ToolId } from '../contract-types';
 import { redactSecrets } from '../trueforge/errors';
+import { normalizeEdits } from '../review';
 
 /** MCP tool name → contract ToolId. Anything else (TrueForge system tools) is 'internal'. */
 const TOOL_IDS: Record<string, ToolId> = {
@@ -34,7 +35,8 @@ export function summarizeArgs(tool: string, args: unknown): string {
       s = `${a['regex'] ? 'regex ' : ''}"${str(a['query'])}"${a['path_prefix'] ? ` in ${str(a['path_prefix'])}` : ''}`;
       break;
     case 'propose_edit': {
-      const n = Array.isArray(a['edits']) ? a['edits'].length : 0;
+      const edits = normalizeEdits(a['edits']);
+      const n = Array.isArray(edits) ? edits.length : 0;
       s = `${str(a['path'])} (${n} edit${n === 1 ? '' : 's'})${a['summary'] ? `: ${str(a['summary'])}` : ''}`;
       break;
     }

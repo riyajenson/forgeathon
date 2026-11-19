@@ -331,3 +331,26 @@ test('normalizeWorkspacePath', () => {
   assert.equal(normalizeWorkspacePath(''), null);
   assert.equal(normalizeWorkspacePath(42), null);
 });
+
+test('propose_edit with edits sent as a JSON string (seen with a real model): reviewed, approved and applied like the array', async () => {
+  const args = twoHunkArgs();
+  const stringly = { ...args, edits: JSON.stringify(args.edits) };
+  assert.equal(approvalKey('propose_edit', stringly), approvalKey('propose_edit', args), 'review and execution agree on the key');
+  const built = await buildProposal(port, stringly as never);
+  assert.ok(built.ok, 'the review is built from the string');
+  if (!built.ok) return;
+  assert.equal(built.proposal.hunks.length, 2);
+  approve(stringly, 'call_s', [0, 1], built.proposal.baseSha256);   // the turn records the args as the model sent them
+  const r = await call('propose_edit', stringly);                    // TrueForge forwards the same string
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /Applied hunks \[0, ?1\] of 2/);
+});
+
+test('propose_edit with an unparseable edits string is refused with a message that says what to send', async () => {
+  const args = { ...twoHunkArgs(), edits: '[{"old_text": "x", "new_text": "y"' };   // cut off: not valid JSON
+  const built = await buildProposal(port, args as never);
+  assert.equal(built.ok, false);
+  if (built.ok) return;
+  assert.equal(built.code, 'INVALID_EDIT');
+  assert.match(built.message, /JSON array of \{"old_text".*not a string|Pass the array itself/);
+});

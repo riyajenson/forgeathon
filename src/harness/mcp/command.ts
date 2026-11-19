@@ -87,8 +87,9 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs): Pr
   let stdout = '';
   let stderr = '';
   let timedOut = false;
+  const env = await commandEnv(root);
   const exitCode = await new Promise<number | null>((resolve) => {
-    const child = spawn('bash', ['-c', args.command], { cwd, env: await commandEnv(root), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('bash', ['-c', args.command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const killGroup = (signal: NodeJS.Signals) => { try { if (child.pid) process.kill(-child.pid, signal); } catch { /* already gone */ } };
     const stop = () => { killGroup('SIGTERM'); setTimeout(() => killGroup('SIGKILL'), 2000).unref(); };
     const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutSec * 1000);

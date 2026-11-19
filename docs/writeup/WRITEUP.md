@@ -52,9 +52,8 @@ editor's `applyText`, which checks the buffer hash, applies one `WorkspaceEdit`,
 outcomes (stale, approval missing, failed before apply, applied but unsaved, save failed, saved); undo is
 guarded by the post-save hash and restores the exact original bytes (saved without save participants).
 
-**Cancellation.** Stop closes the approval gate, cancels the TrueForge turn (confirmed in 10–25 ms in our
-spike), kills a running command's process group and closes the open review; an approved command never starts
-after Stop. `done` waits (bounded) for in-flight tool calls, because TrueForge 0.185.1 reports the turn
+**Cancellation.** Stop closes the approval gate, cancels the TrueForge turn, kills a running command's
+process group and closes the open review; an approved command never starts after Stop. `done` waits (bounded) for in-flight tool calls, because TrueForge 0.185.1 reports the turn
 cancelled before an MCP call returns. Waits on TrueForge are bounded: if it stays silent, the harness stops
 observing after twice the cancel timeout and ends the turn exactly once. A tool still running when the turn
 ends is waited for until it finishes (the command timeout, at most 600 s, or Stop). Retry and fallback happen only when
@@ -90,20 +89,19 @@ Four unrelated Flask tasks also rank their source file first (regression test in
 | Primary | `nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA API Catalog, free tier | $0 |
 | Fallback | `qwen/qwen3.8-27b` (different provider) | Groq, free tier | $0 |
 | Spare (configured, unused) | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter, free model | $0 |
-| Development and tests | scripted demo model (`scripts/dev-mock.sh`) | local, no LLM | $0 |
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
 **switching models is a config change plus rerunning setup**. The NVIDIA catalog offered no Qwen3 Coder or
-DeepSeek model. Probed only (one request each, free tier): Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral
+DeepSeek model; tests use a local scripted model. Probed only (one request each): Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral
 Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the fastest with correct streamed tool calls. Gemini,
-Anthropic and OpenAI appear in the example config only and were never run. Earlier real runs (before the
-command budget and sandbox): Task B 133–259 s, 7–17 commands, 7–12 reviews; with the budget, 204.5 s, 3
-commands, 6 reviews. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
+Anthropic and OpenAI appear in the example config only and were never run. **Rehearsal on the final build**
+(`docs/writeup/rehearsal.json`, video settings): **A** passed, first diff 7.8 s, 3 requests, 11.3k / 0.7k
+tokens; **C** passed, NVIDIA 401 → Groq, first diff 2.0 s; **B did not pass**: NVIDIA answered 429 at 9–15
+requests/min (section 8); earlier B runs passed in 133–259 s. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and then fall back to the
 `-fallback` agent in a new TrueForge session; nothing is retried after the turn changed the workspace. A
 watchdog stops a turn that streams nothing for 45 s. Every turn is logged (model, attempts, tokens, timing; no
-content) to `~/.forge/turns.jsonl`. Measured with TrueForge 0.185.1: invalid key → error in 0.06–0.1 s;
-refused connection 0.1–0.2 s; unreachable host 7.6 s (connect timeout 3 s, one HTTP retry).
+content) to `~/.forge/turns.jsonl`.
 
 ## 6. Scorecard
 
@@ -124,7 +122,7 @@ the tasks. `scripts/e2e-mock.sh` runs A, B, C and the guardrails through the har
 (21 checks); `scripts/test-extension-e2e.sh` drives A (with undo), B, Stop (during a pending review and during a
 running command) and C through the extension in a real VS Code window; a native-UI test checks that the hunk
 picker saves exactly the chosen hunk; the extension host is never blocked over 150 ms during Task B. Harness:
-126 unit tests and 17 integration tests against TrueForge 0.185.1.
+130 unit tests and 17 integration tests against TrueForge 0.185.1.
 
 ## 7. Tools used
 
@@ -149,7 +147,9 @@ the symbol index covers Python only; ranking weights were tuned on Flask. A fall
 session, so it does not see earlier panel turns. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
-network fail by design. The real-model runs above predate the sandbox merge. Compaction is configured but the
+network fail by design. Free tiers limit Task B: in the final rehearsal NVIDIA throttled at 9–15 requests/min
+(no `Retry-After`), and Groq's free tier (7,000 input tokens/min) cannot take B's ~11k-token requests, so the
+fallback covers short turns like C but not B. Compaction is configured but the
 demo tasks never reach the threshold. Hunk review uses a picker rather than per-hunk CodeLens. One workspace
 folder; tested on WSL only.
 

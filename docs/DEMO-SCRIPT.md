@@ -53,7 +53,14 @@ recording settings: auto-approval on, budget 3):
 | Reviews | 1 | 5: `cli.py` 2, `tests/test_cli.py` 2, `docs/cli.rst` 1 | 1 (rejected) |
 | Commands | 0 | 3 auto-approved `python -m pytest …`, 1 refused by the budget | 0 |
 
-`docs/writeup/rehearsal.json` holds the latest rehearsal on the final `main`; use its numbers if they differ.
+**Final rehearsal on `main`** (`docs/writeup/rehearsal.json`, same settings, run A → C → B): A first diff 7.8 s
+(turn 9.1 s); C first diff 2.0 s (turn 2.5 s). B **did not finish**: first diff after 68 s, then NVIDIA
+returned 429 (no `Retry-After`) at 9–15 requests/min; a second attempt after 5 minutes hit 429s before any edit,
+and Groq's free tier refused the fallback (413: 7,000 input tokens/min, B needs ~11k).
+
+**Before recording B:** leave the NVIDIA key idle for some hours (no tests, no probes), and record B first in a
+session if the 429s persist. The fallback cannot carry Task B on Groq's free tier; if NVIDIA throttles during the
+take, stop and re-record later rather than cutting.
 
 **Your clicks in Task B:** **Accept All** on each diff (expect 3–8) and **Allow once** on any command prompt
 without a warning (`python -c …`, `flask …`; 0–3). Deny any ⚠ Unrestricted prompt.

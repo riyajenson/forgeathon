@@ -256,6 +256,22 @@ All automated checks use the scripted demo model: they prove the plumbing, not r
   demo tasks — documented honestly.
 - **run_command:** git status before/after, changed files reported, counts as a write; workspace `.venv` first on PATH.
 
+## Final rehearsal (2026-11-19, `main` at `e5afea6`)
+
+Real models, video settings, fresh TrueForge database, requests paced at ≥ 1.6 s per provider through
+`scripts/model-meter.mjs --min-interval-ms 1600`; run A, then C, then B (`docs/writeup/rehearsal.json`).
+
+| Task | Result | First diff | Turn | Requests | Tokens in / out |
+|---|---|---|---|---|---|
+| A | 6/6 passed | 7.8 s | 9.1 s | 3 NVIDIA | 11,274 / 675 |
+| C | 3/3 passed (NVIDIA 401 → Groq) | 2.0 s | 2.5 s | 1 NVIDIA (401) + 2 Groq | 6,835 / 393 |
+| B, attempt 1 | not passed: 429 after three saved `cli.py` edits (no retry or fallback by policy) | 68.0 s | 127.7 s | 30 NVIDIA (2 × 429) | 627,824 / 4,171 (meter) |
+| B, attempt 2 (after 5 min) | not passed: 429s before any edit → one retry → Groq fallback → 413 (7,000 input tokens/min) | — | 32.4 s | 15 NVIDIA (6 × 429) + 1 Groq | — |
+
+NVIDIA's 429s came at 9–15 requests in the preceding minute, without `Retry-After`: the account was throttled
+below the documented 40/min after the day's use. Groq's free tier cannot run Task B as the fallback. A passing
+real Task B on the sandboxed build exists from QA's run on `37fb675` (first diff 105.5 s, turn 160.3 s).
+
 ## Branch map
 
 The repository is public. `origin/main` is `37fb675` (history without commit trailers); later work on `main`

@@ -34,7 +34,7 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Task | Status | Evidence |
 |---|---|---|
 | A — inline edit + `FLASK_DEBUG=off` → `False` | ✅ demo model · ✅ real model | `scripts/e2e-mock.sh`; real runs in STATUS.md |
-| B — `flask config`, ≥ 3 files, `pytest tests/test_cli.py -q`, `flask --help`, masked JSON | ✅ demo model · ✅ real model | `scripts/e2e-mock.sh` |
+| B — `flask config`, ≥ 3 files, `pytest tests/test_cli.py -q`, `flask --help`, masked JSON | ✅ demo model · 🟡 real model | `scripts/e2e-mock.sh`; real passes earlier and in QA's run on `37fb675` (160 s); the final rehearsal did not pass (NVIDIA 429 at 9–15 requests/min; Groq fallback over its 7,000 tokens/min). Record B with a rested NVIDIA key (DEMO-SCRIPT) |
 | C — invalid key → fallback, editor responsive, `git status` clean | ✅ demo model · ✅ real model | `scripts/e2e-mock.sh`, UI e2e. Real run: NVIDIA 401 → Groq (STATUS.md). Fallback on auth errors is matched by status and wording (Google's 400 format untested live) |
 
 ## Deliverables

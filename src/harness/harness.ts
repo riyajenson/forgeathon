@@ -140,6 +140,9 @@ class ForgeHarnessImpl implements ForgeHarness {
       return refuse(req, err('invalid', 'turnId and a non-empty instruction are required'));
     }
     if (b.mode !== 'inline' && b.mode !== 'agent') return refuse(req, err('invalid', 'mode must be inline or agent'));
+    if (b.commandBudget !== undefined && !(Number.isInteger(b.commandBudget) && b.commandBudget >= 0)) {
+      return refuse(req, err('invalid', 'commandBudget must be a non-negative integer'));
+    }
     const session = this.sessions.get(b.sessionId);
     if (!session || session.state !== 'open') return refuse(req, err('invalid', 'unknown or closed session'));
     if (session.turns.has(b.turnId)) return refuse(req, err('conflict', 'turnId already exists in this session'));

@@ -100,9 +100,14 @@ export class Workbench implements vscode.Disposable {
     try {
       const controller = this.controller ?? await (this.starting ??= this.connect().finally(() => { this.starting = undefined; }));
       if (run.signal.aborted) { this.panel.notice('Stopped before submitting'); return; }
-      // Off by default. Only listed commands without shell operators qualify (decided by the harness); edits are always reviewed.
-      const autoApproveSafeCommands = vscode.workspace.getConfiguration('forge').get<unknown>('autoApproveSafeCommands', false) === true;
-      await controller.run(mode, instruction, context, {autoApproveSafeCommands});
+      // Off by default. Only pytest / python -m pytest / git status / git diff without shell operators qualify
+      // (decided by the harness); edits are always reviewed.
+      const cfg = vscode.workspace.getConfiguration('forge');
+      const autoApproveSafeCommands = cfg.get<unknown>('autoApproveSafeCommands', false) === true;
+      // Hard per-turn limit on commands, enforced by the harness (default 3 agent, 1 inline).
+      const budget = cfg.get<unknown>(`commandBudget.${mode}`);
+      const commandBudget = typeof budget === 'number' && Number.isInteger(budget) && budget >= 0 ? budget : undefined;
+      await controller.run(mode, instruction, context, {autoApproveSafeCommands, ...(commandBudget === undefined ? {} : {commandBudget})});
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Turn failed';
       this.panel.error(message); this.panel.notice('Failed'); throw error;

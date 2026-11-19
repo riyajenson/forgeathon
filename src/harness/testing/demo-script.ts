@@ -119,6 +119,8 @@ export const TASK_B_EDITS: Record<string, Edit[]> = {
 
 const TASK_A_MARK = "'off' and 'n'";
 const TASK_B_MARK = 'flask config';
+/** Not a demo task: the mock e2e's guardrail check (command budget, repeated argument errors). */
+export const GUARD_MARK = 'guardrail check';
 
 function userText(req: MockRequest): string {
   return req.messages.filter((m) => m.role === 'user').map((m) => textOf(m.content)).join('\n');
@@ -178,6 +180,22 @@ export function demoScript(req: MockRequest): MockReply {
     ];
     if (step < plan.length) return plan[step]!();
     return { text: `Added the \`flask config\` command (src/flask/cli.py), registered it with the other built-in commands so it appears in \`flask --help\`, covered it with tests in tests/test_cli.py, and documented it in docs/cli.rst. Test run: ${/(\d+ passed[^\n]*)/.exec(last)?.[1] ?? 'see the command output above'}.` };
+  }
+
+  if (user.includes(GUARD_MARK)) {
+    // A model that ignores its instructions: a malformed edit twice on one file, then five commands.
+    const malformed = () => call('propose_edit', { path: 'src/flask/cli.py', base_sha256: shaOf(req, 'src/flask/cli.py'), edits: '[{"old_text": "import' });
+    const plan: Array<() => MockReply> = [
+      () => call('read_file', { path: 'src/flask/cli.py', start_line: 1, end_line: 5 }),
+      malformed,
+      malformed,
+      ...['git status --short', 'git diff --stat', 'python -c "print(1)"', 'git status --short', 'git diff'].map((command) => () => call('run_command', { command })),
+    ];
+    if (step < plan.length) return plan[step]!();
+    const results = toolTexts(req);
+    const refused = results.filter((t) => t.includes('command budget for this turn exhausted')).length;
+    const hint = results.filter((t) => t.includes('Expected arguments, exactly this shape')).length;
+    return { text: `Guardrail check: ${refused} command(s) refused by the budget; shape hint in ${hint} refusal(s).` };
   }
 
   return { text: 'This is the scripted demo model. It only knows the fixed Task A and Task B instructions; configure a real model in config/models.json for anything else.' };

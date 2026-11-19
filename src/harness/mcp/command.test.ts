@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { approvalKey, commandTestHooks, FakePort, isListedCommand, runCommandTool, ScopeRegistry, type CommandRun, type SessionScope, type ToolContext } from './index';
+import { approvalKey, commandTestHooks, FakePort, isAutoApprovableCommand, isListedCommand, runCommandTool, ScopeRegistry, type CommandRun, type SessionScope, type ToolContext } from './index';
 
 let root: string;
 let scope: SessionScope;
@@ -187,6 +187,18 @@ test('verification commands are listed; anything else is unrestricted', () => {
     'pytest `rm -rf .`',
     'cd examples && flask --help',
   ]) assert.equal(isListedCommand(c), false, c);
+});
+
+test('auto-approvable: only bare pytest, python -m pytest, git status and git diff without shell operators', () => {
+  for (const c of ['pytest', 'pytest tests/test_cli.py -q', 'python -m pytest -q', 'python3 -m pytest tests', 'python3.12 -m pytest', 'git status --short', 'git diff --stat', '  git diff  ']) {
+    assert.equal(isAutoApprovableCommand(c), true, c);
+  }
+  for (const c of [
+    'python -c "print(1)"', 'flask routes', 'flask --app flaskr --help', // listed, but always prompt
+    '.venv/bin/pytest -q', './pytest', 'tools/python -m pytest', // a path could name any workspace script
+    'PYTHONPATH=src pytest', 'PYTEST_ADDOPTS=-p evil pytest', // environment prefixes change what runs
+    'pytest | tail -5', 'pytest && rm -rf x', 'git diff --output=src/x.py', 'git diff --ext-diff', 'git log', 'pytestx',
+  ]) assert.equal(isAutoApprovableCommand(c), false, c);
 });
 
 test('cancel kills a running command', async () => {

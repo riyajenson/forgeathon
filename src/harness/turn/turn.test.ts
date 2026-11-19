@@ -13,7 +13,7 @@ import { proposeEditTool } from '../mcp/tools';
 import { runCommandTool } from '../mcp/command';
 import { sha256Hex } from '../review';
 import type { TrueForgeClient, TrueForgeSdk } from '../trueforge/sdk';
-import { TurnRun, type TurnDeps } from './turn';
+import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, TurnRun, type TurnDeps } from './turn';
 
 /** An async event stream the test feeds by hand. Aborting the request signal ends it with an error. */
 class Channel implements AsyncIterable<unknown> {
@@ -70,6 +70,8 @@ interface Script {
 class FakeTrueForge {
   turns = 0;
   cancels = 0;
+  /** Every user.tool_approval sent back to TrueForge, in order. */
+  readonly approvals: Array<{ toolCallId: string; approval: { status: string; reason?: string } }> = [];
   private active: Channel | undefined;
   constructor(private readonly script: Script) {}
 
@@ -86,7 +88,8 @@ class FakeTrueForge {
         this.active = ch;
         return ch;
       },
-      createTurnEvents: async (sessionId: string) => {
+      createTurnEvents: async (sessionId: string, _turnId: string, body?: { events?: FakeTrueForge['approvals'] }) => {
+        this.approvals.push(...(body?.events ?? []));
         this.script.onApproval?.(this.active!, sessionId);
         return {};
       },
@@ -419,4 +422,138 @@ test('a propose_edit whose edits arrive as a JSON string is reviewed and applied
   assert.equal(review.proposal.hunks.length, 1);
   assert.ok(result?.ok, 'applied with the recorded approval');
   assert.equal(await fs.readFile(path.join(root, FILE), 'utf8'), 'def alpha():\n    return 10\n');
+});
+
+/** A model that makes the given tool calls one per step, each paused for approval, then finishes. */
+function stepwise(calls: Array<[string, unknown]>): FakeTrueForge {
+  let next = 0;
+  const pause = (ch: Channel) => {
+    const [tool, args] = calls[next]!;
+    const id = `c${++next}`;
+    const step = toolCallNeedingApproval(id, tool, args);
+    ch.push(...(next === 1 ? step : step.slice(1)));
+  };
+  return new FakeTrueForge({
+    onTurn: (ch) => pause(ch),
+    onApproval: (sub) => (next < calls.length ? pause(sub) : sub.push(done('done'))),
+  });
+}
+
+/** Answers prompts like userAnswers, but denies commands. */
+async function userDeniesCommands(run: TurnRun, asked: HarnessEvent[]): Promise<void> {
+  for await (const e of run.buffer.read(0)) {
+    if (e.t === 'command_request' && !e.autoApproved) {
+      asked.push(e);
+      run.submitReview({ kind: 'command', sessionId: e.sessionId, turnId: e.turnId, callId: e.callId, allow: false });
+    }
+  }
+}
+
+test('command budget: after 3 commands in an agent turn, run_command is refused without asking', async () => {
+  const commands = ['python -m pytest tests/a.py', 'git diff', 'flask routes', 'python -m pytest', 'ls'];
+  const tf = stepwise(commands.map((command) => ['run_command', { command }]));
+  const run = makeRun(tf);
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.deepEqual(asked.map((e) => e.t === 'command_request' && e.command), commands.slice(0, 3), 'only the first 3 were shown');
+  const reached = events(run).filter((e) => e.t === 'command_budget_reached') as Array<Extract<HarnessEvent, { t: 'command_budget_reached' }>>;
+  assert.deepEqual(reached.map((e) => [e.command, e.budget]), [['python -m pytest', 3], ['ls', 3]]);
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'allow', 'allow', 'deny', 'deny']);
+  for (const a of tf.approvals.slice(3)) assert.match(a.approval.reason ?? '', new RegExp(COMMAND_BUDGET_EXHAUSTED));
+  assert.equal(terminal(run)[0]!.t === 'done' && terminal(run)[0]!.status, 'done');
+});
+
+test('command budget: denied and unrestricted commands count; auto-approved ones count too', async () => {
+  // Denied by the user: still used the budget (the user was asked).
+  let tf = stepwise([['run_command', { command: 'rm -rf build' }], ['run_command', { command: 'pytest' }]]);
+  let run = makeRun(tf, {}, { commandBudget: 1 });
+  const asked: HarnessEvent[] = [];
+  void userDeniesCommands(run, asked);
+  await run.start();
+  assert.equal(asked.length, 1);
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'deny']);
+  assert.match(tf.approvals[1]!.approval.reason ?? '', /COMMAND_BUDGET_EXHAUSTED/);
+
+  // Auto-approved: counted as well, so auto-approval cannot exceed the budget.
+  tf = stepwise([['run_command', { command: 'git status' }], ['run_command', { command: 'git diff' }]]);
+  run = makeRun(tf, {}, { commandBudget: 1, autoApproveSafeCommands: true });
+  void userAnswers(run, []);
+  await run.start();
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'deny']);
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 1);
+});
+
+test('command budget: 0 refuses every command; edits are never limited', async () => {
+  const tf = stepwise([['run_command', { command: 'pytest' }], ['propose_edit', editArgs()]]);
+  const run = makeRun(tf, {}, { commandBudget: 0 });
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.deepEqual(asked.map((e) => e.t), ['review_request'], 'the edit was still reviewed; the command never asked');
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'allow']);
+});
+
+test('command budget defaults: 3 for agent, 1 for inline; invalid values use the default', () => {
+  assert.equal(commandBudgetOf({ mode: 'agent' }), 3);
+  assert.equal(commandBudgetOf({ mode: 'inline' }), 1);
+  assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: 0 }), 0);
+  assert.equal(commandBudgetOf({ mode: 'inline', commandBudget: 5 }), 5);
+  for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 3);
+});
+
+test('autoApproveSafeCommands is narrowed: python -c, flask and path- or env-prefixed pytest still ask (not as unrestricted)', async () => {
+  for (const command of ['python -c "print(1)"', 'flask routes', '.venv/bin/pytest -q', 'PYTHONPATH=src pytest']) {
+    const tf = stepwise([['run_command', { command }]]);
+    const run = makeRun(tf, {}, { autoApproveSafeCommands: true });
+    const asked: HarnessEvent[] = [];
+    void userAnswers(run, asked);
+    await run.start();
+    assert.equal(asked.length, 1, `${command} asked`);
+    const e = asked[0] as Extract<HarnessEvent, { t: 'command_request' }>;
+    assert.equal(e.unrestricted, undefined, `${command} is listed, so no unrestricted warning`);
+    assert.equal(e.autoApproved, undefined);
+  }
+  for (const command of ['pytest tests/test_cli.py -q', 'python3 -m pytest -q', 'git status --short', 'git diff']) {
+    const tf = stepwise([['run_command', { command }]]);
+    const run = makeRun(tf, {}, { autoApproveSafeCommands: true });
+    const asked: HarnessEvent[] = [];
+    void userAnswers(run, asked);
+    await run.start();
+    assert.equal(asked.length, 0, `${command} auto-approved`);
+  }
+});
+
+test('a repeated argument-error refusal for the same file includes the expected argument shape', async () => {
+  const bad = { ...editArgs(), edits: '[{"old_text": "def alpha' }; // a truncated JSON string
+  const other = { ...bad, path: 'src/other.py', base_sha256: '' };
+  const tf = stepwise([['propose_edit', bad], ['propose_edit', other], ['propose_edit', bad], ['propose_edit', bad]]);
+  const run = makeRun(tf);
+  void userAnswers(run, []);
+  await run.start();
+  const reasons = tf.approvals.map((a) => a.approval.reason ?? '');
+  assert.equal(reasons.length, 4);
+  assert.match(reasons[0]!, /^INVALID_EDIT/);
+  assert.ok(!reasons[0]!.includes(PROPOSE_EDIT_SHAPE_HINT), 'first refusal: the error only');
+  assert.ok(!reasons[1]!.includes(PROPOSE_EDIT_SHAPE_HINT), 'another file: its first refusal');
+  assert.ok(reasons[2]!.includes(PROPOSE_EDIT_SHAPE_HINT), 'same file again: the shape is spelled out');
+  assert.ok(reasons[3]!.includes(PROPOSE_EDIT_SHAPE_HINT));
+  // The example in the hint is itself a valid propose_edit argument object.
+  const h = PROPOSE_EDIT_SHAPE_HINT;
+  const example = JSON.parse(h.slice(h.indexOf('{'), h.indexOf('}. ') + 1)) as { path: string; edits: unknown[] };
+  assert.equal(typeof example.path, 'string');
+  assert.ok(Array.isArray(example.edits) && example.edits.length === 1);
+});
+
+test('content refusals (old_text not found) do not trigger the shape hint', async () => {
+  const missing = { ...editArgs(), edits: [{ old_text: 'not in the file', new_text: 'x' }] };
+  const tf = stepwise([['propose_edit', missing], ['propose_edit', missing]]);
+  const run = makeRun(tf);
+  void userAnswers(run, []);
+  await run.start();
+  assert.equal(tf.approvals.length, 2);
+  for (const a of tf.approvals) {
+    assert.match(a.approval.reason ?? '', /^OLD_TEXT_NOT_FOUND/);
+    assert.ok(!(a.approval.reason ?? '').includes(PROPOSE_EDIT_SHAPE_HINT));
+  }
 });

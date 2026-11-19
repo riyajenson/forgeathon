@@ -103,6 +103,22 @@ export function isListedCommand(command: string): boolean {
   return VERIFICATION_COMMANDS.some((re) => re.test(c));
 }
 
+/**
+ * The narrower set the opt-in auto-approval may allow without a prompt: bare pytest, python -m pytest (python,
+ * python3, python3.N), git status and git diff, with no NAME=value prefix, no path before the program and no
+ * shell operators. python -c and flask stay listed (no "unrestricted" warning) but always prompt.
+ */
+const AUTO_APPROVABLE_COMMANDS: RegExp[] = [
+  /^python3?(?:\.\d+)? -m pytest(?: |$)/,
+  /^pytest(?: |$)/,
+  /^git (?:status|diff)(?: |$)/,
+];
+
+export function isAutoApprovableCommand(command: string): boolean {
+  const c = command.trim();
+  return isListedCommand(c) && AUTO_APPROVABLE_COMMANDS.some((re) => re.test(c));
+}
+
 export const UNRESTRICTED_WARNING = 'Unrestricted command: it can change any file without hunk review and is not sandboxed.';
 
 function capped(buf: string): string {

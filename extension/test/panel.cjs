@@ -21,6 +21,11 @@ exports.run = async () => {
   assert.equal(auto.command, undefined, 'no Allow/Deny prompt for an auto-approved command');
   assert.deepEqual(auto.tools, [{id:'auto:z',label:'auto-approved: python -m pytest tests/test_x.py -q',detail:'cwd: .'}], 'shown in the activity list');
   assert.equal(auto.status, 'auto-approved: python -m pytest tests/test_x.py -q');
+  const budget = new AgentViewState();
+  budget.update({t:'command_budget_reached',callId:'b',command:'python -m pytest',budget:3});
+  assert.equal(budget.command, undefined, 'a command refused by the budget opens no prompt');
+  assert.equal(budget.status, 'command budget reached');
+  assert.deepEqual(budget.tools, [{id:'budget:b',label:'command budget reached (3 per turn): python -m pytest',detail:'not run'}]);
   const state = new AgentViewState();
   const folder = vscode.workspace.workspaceFolders[0];
   const selected = {path:'src/a',source:'automatic',rank:1,rationale:'entry point',estimatedTokens:6,truncated:false};
@@ -32,7 +37,7 @@ exports.run = async () => {
   const harness = {
     start:async port => {assert.equal(typeof port.applyText,'function')},
     createSession:async()=>({ok:true,body:{sessionId:'sim'}}),
-    submitTurn:async ({body})=>{submitted=true;assert.equal(body.instruction,'simulated task');assert.equal(body.autoApproveSafeCommands,undefined,'off by default');return {ok:true,body}},
+    submitTurn:async ({body})=>{submitted=true;assert.equal(body.instruction,'simulated task');assert.equal(body.autoApproveSafeCommands,undefined,'off by default');assert.equal(body.commandBudget,3,'agent budget defaults to 3');return {ok:true,body}},
     stream:async function*({body}) {
       const header = {version, sessionId:body.sessionId,turnId:body.turnId};
       let sequence = 0;
@@ -73,7 +78,10 @@ exports.run = async () => {
   // forge.autoApproveSafeCommands on: the request carries it; an auto-approved command opens no prompt and
   // sends no decision, while an unrestricted command in the same turn still asks.
   const forgeCfg = vscode.workspace.getConfiguration('forge');
+  assert.equal(forgeCfg.inspect('commandBudget.agent').defaultValue, 3);
+  assert.equal(forgeCfg.inspect('commandBudget.inline').defaultValue, 1);
   await forgeCfg.update('autoApproveSafeCommands', true, vscode.ConfigurationTarget.Global);
+  await forgeCfg.update('commandBudget.agent', 2, vscode.ConfigurationTarget.Global);
   try {
     let turnBody, decisions = [], releaseAsk; const askAnswered = new Promise(r => releaseAsk = r);
     const autoHarness = {...harness,
@@ -98,6 +106,7 @@ exports.run = async () => {
     try {
       await until(()=>seen2.some(e=>e.callId==='ask1'));
       assert.equal(turnBody.autoApproveSafeCommands, true, 'the setting reaches the harness');
+      assert.equal(turnBody.commandBudget, 2, 'forge.commandBudget.agent reaches the harness');
       assert.ok(state2.tools.some(t=>t.label==='auto-approved: python -m pytest tests/test_x.py -q'), 'visible in the panel');
       await delay(200);
       assert.equal(decisions.length, 0, 'nothing was sent for the auto-approved command');
@@ -105,7 +114,10 @@ exports.run = async () => {
       await Promise.race([run2,delay(5000).then(()=>{throw Error('auto-approve run timed out')})]);
       assert.deepEqual(decisions.map(d=>[d.callId,d.allow]), [['ask1',false]], 'only the unrestricted command was decided by the user');
     } finally { await wb2.shutdown(); }
-  } finally { await forgeCfg.update('autoApproveSafeCommands', undefined, vscode.ConfigurationTarget.Global); }
+  } finally {
+    await forgeCfg.update('autoApproveSafeCommands', undefined, vscode.ConfigurationTarget.Global);
+    await forgeCfg.update('commandBudget.agent', undefined, vscode.ConfigurationTarget.Global);
+  }
 
   const gate = new EditReview(folder);
   let cancelled=false, start, go;

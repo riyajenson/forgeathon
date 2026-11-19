@@ -79,7 +79,19 @@
         "forge.autoApproveSafeCommands": {
           "type": "boolean",
           "default": false,
-          "description": "Run the agent's verification commands without asking when they are on the safe list (pytest, python -m pytest, python -c, flask, git status, git diff) and contain no shell operators. Each one is shown in the panel as \"auto-approved\". Unrestricted commands always ask, and edits are always reviewed."
+          "description": "Run the agent's test and status commands without asking: only pytest, python -m pytest, git status and git diff, with no shell operators. Each one is shown in the panel as \"auto-approved\". Every other command (including python -c and flask) and every edit still asks."
+        },
+        "forge.commandBudget.agent": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 0,
+          "description": "Most commands the agent may run in one turn (asked or auto-approved). Further run_command calls are refused by the harness without asking, and the panel shows \"command budget reached\"."
+        },
+        "forge.commandBudget.inline": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 0,
+          "description": "Most commands an inline edit may run in one turn (the inline agent does not run commands today)."
         }
       }
     }

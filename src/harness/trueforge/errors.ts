@@ -63,6 +63,12 @@ export function safeMessage(message: string | undefined, fallback = 'unknown err
   return redactSecrets(first || fallback).slice(0, 300);
 }
 
+/** The low-level reason behind a network failure (e.g. ECONNRESET), for logs: fetch reports only "fetch failed". */
+export function connectionCause(error: unknown): string {
+  const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+  return safeMessage(cause?.code || cause?.message || (error as { message?: string })?.message, 'unknown network error').slice(0, 120);
+}
+
 /** True when an SDK/network exception means the TrueForge server itself could not be reached. */
 export function isTrueForgeUnreachable(error: unknown): boolean {
   const text = `${(error as { message?: string })?.message ?? ''} ${String((error as { cause?: unknown })?.cause ?? '')}`;

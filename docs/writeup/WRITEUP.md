@@ -87,17 +87,18 @@ Four unrelated Flask tasks also rank their source file first (regression test in
 | Role | Model | Hosting | Approx. cost for the demo |
 |---|---|---|---|
 | Primary | `nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA API Catalog, free tier | $0 |
-| Fallback | `qwen/qwen3.8-27b` (different provider) | Groq, free tier | $0 |
-| Spare (configured, unused) | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter, free model | $0 |
+| Fallback | `nvidia/nemotron-3-ultra-550b-a55b:free` (other provider) | OpenRouter, free model | $0 |
+| Spare (configured, unused) | `qwen/qwen3.8-27b` | Groq, free tier | $0 |
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
-**switching models is a config change plus rerunning setup**. The NVIDIA catalog offered no Qwen3 Coder or
+**switching models is a config change plus rerunning setup** (or `scripts/use-models.sh <profile>`). The NVIDIA catalog offered no Qwen3 Coder or
 DeepSeek model; tests use a local scripted model. Probed only (one request each): Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral
 Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the fastest with correct streamed tool calls. Gemini,
 Anthropic and OpenAI appear in the example config only and were never run. **Rehearsal on the final build**
 (`docs/writeup/rehearsal.json`, video settings): **A** passed, first diff 7.8 s, 3 requests, 11.3k / 0.7k
-tokens; **C** passed, NVIDIA 401 → Groq, first diff 2.0 s; **B did not pass**: NVIDIA answered 429 at 9–15
-requests/min (section 8); earlier B runs passed in 133–259 s. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
+tokens; **C** passed, NVIDIA 401 → Groq, first diff 2.0 s (then → OpenRouter, the new fallback, 8.0 s); **B did not
+pass**: NVIDIA answered 429 at 9–15 requests/min (section 8); earlier B runs passed in 133–259 s. TrueForge
+resends a 429'd model request up to 4 times (1–8 s backoff) below the turn. Then the harness's policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and then fall back to the
 `-fallback` agent in a new TrueForge session; nothing is retried after the turn changed the workspace. A
 watchdog stops a turn that streams nothing for 45 s. Every turn is logged (model, attempts, tokens, timing; no
@@ -148,8 +149,8 @@ session, so it does not see earlier panel turns. **`run_command` is write-protec
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
 network fail by design. Free tiers limit Task B: in the final rehearsal NVIDIA throttled at 9–15 requests/min
-(no `Retry-After`), and Groq's free tier (7,000 input tokens/min) cannot take B's ~11k-token requests, so the
-fallback covers short turns like C but not B. Compaction is configured but the
+(no `Retry-After`), and Groq's free tier (7,000 input tokens/min) could not take B's ~11k-token requests; the new
+OpenRouter fallback can, but allows 50 requests/day without credit (one B takes 40–70). Compaction is configured but the
 demo tasks never reach the threshold. Hunk review uses a picker rather than per-hunk CodeLens. One workspace
 folder; tested on WSL only.
 

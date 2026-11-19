@@ -93,7 +93,13 @@ class ForgeHarnessImpl implements ForgeHarness {
         ? `TrueForge is not reachable at ${this.url}. Start it first (see README).`
         : `TrueForge at ${this.url} did not answer correctly: ${safeMessage((e as Error).message)}`);
     }
-    this.mcp = await startMcpServer({ port: bridge, scopes: this.scopes, listenPort: this.options.mcpPort ?? 47615 });
+    const listenPort = this.options.mcpPort ?? 47615;
+    try {
+      this.mcp = await startMcpServer({ port: bridge, scopes: this.scopes, listenPort });
+    } catch (e) {
+      if ((e as { code?: string }).code !== 'EADDRINUSE') throw e;
+      throw new Error(`The editor-tools port 127.0.0.1:${listenPort} is in use (another VS Code window with Forge, or another program). Close it, or set "forge.mcpPort" to a free port.`);
+    }
     try {
       await client.settings.mcpServers.createOrUpdate({
         manifest: {

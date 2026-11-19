@@ -91,7 +91,7 @@ Four unrelated Flask tasks also rank their source file first (regression test in
 | Spare (configured, unused) | `qwen/qwen3.8-27b` | Groq, free tier | $0 |
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
-**switching models is a config change plus rerunning setup** (or `scripts/use-models.sh <profile>`). The NVIDIA catalog offered no Qwen3 Coder or
+**switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`, one of three named profiles). The NVIDIA catalog offered no Qwen3 Coder or
 DeepSeek model; tests use a local scripted model. Probed only (one request each): Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral
 Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the fastest with correct streamed tool calls. Gemini,
 Anthropic and OpenAI appear in the example config only and were never run. **Rehearsal on the final build**

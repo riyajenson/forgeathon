@@ -18,6 +18,7 @@
     el('stop').disabled = !s.busy;
     el('review').hidden = !s.reviewing;
     el('status').textContent = s.status;
+    el('model').textContent = s.model ? 'Model: ' + s.model + (s.usage ? ' | ' + s.usage : '') : '';
     el('banner').textContent = s.banner;
     el('banner').hidden = !s.banner;
     el('trace').hidden = !s.trace;

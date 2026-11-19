@@ -1,7 +1,7 @@
 // End-to-end check of the three fixed tasks: drives createHarness over a temporary copy of a pristine Flask
 // 3.1.3 checkout with a directory-backed editor port, answers every review, then runs the verifications.
 // Works with the scripted demo model (scripts/e2e-mock.sh) or real models (scripts/smoke-real-model.mjs).
-// Usage: node scripts/smoke-real-model.mjs [--flask DIR] [--tasks A,B,C] [--config config/models.json] [--meter-log FILE] [--keep]
+// Usage: node scripts/smoke-real-model.mjs [--flask DIR] [--tasks A,B,C] [--config config/models.json] [--meter-log FILE] [--json FILE] [--keep]
 // --auto-approve-safe-commands: Tasks B and G with TurnRequest.autoApproveSafeCommands (pytest, python -m pytest,
 // git status, git diff are not prompted).
 // --deny-unrestricted: deny commands flagged unrestricted instead of allowing them (as in the demo video).
@@ -65,6 +65,9 @@ interface TurnStats {
   session?: string;
   /** Upstream model requests during the turn, from the meter log (--meter-log). */
   requests?: RequestStats;
+  /** Milliseconds from sending the instruction to the first diff (review request). */
+  firstDiffMs?: number;
+  startedAt?: string;
 }
 
 async function sh(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}): Promise<{ ok: boolean; out: string }> {
@@ -87,7 +90,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [] };
+  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [] };
   for await (const r of h.stream(req({ sessionId, turnId, afterSequence: 0 }))) {
     if (!r.ok) { stats.error = r.error.message; break; }
     const e: HarnessEvent = r.body;
@@ -106,6 +109,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
       case 'review_request': {
         const p = e.proposal;
         stats.reviews++;
+        stats.firstDiffMs ??= Date.now() - t0;
         stats.reviewsByFile[p.path] = (stats.reviewsByFile[p.path] ?? 0) + 1;
         console.log(`  [${task}] review ${p.path}: ${p.hunks.length} hunk(s) → ${decide} all`);
         const d = await h.submitReview(req({ sessionId, turnId, callId: p.callId, kind: 'edit' as const, proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((x) => [x.hunkId, decide])) }));
@@ -287,6 +291,7 @@ async function main(): Promise<void> {
   console.log('\n=== turns');
   for (const s of results) {
     console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, ${s.budgetReached} refused by the budget, ${s.unrestrictedPrompts} unrestricted (${s.deniedCommands} denied), tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
+    if (s.firstDiffMs !== undefined) console.log(`   first diff after ${(s.firstDiffMs / 1000).toFixed(1)} s`);
     if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
     if (s.contextUsed) console.log(`   context: ${s.contextUsed}: ${s.contextFiles.join(', ')}`);
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);
@@ -300,6 +305,8 @@ async function main(): Promise<void> {
   const failed = checks.filter((c) => !c.ok).length;
   console.log(failed ? `\n${failed} check(s) FAILED` : `\nall ${checks.length} checks passed`);
   if (failed) process.exitCode = 1;
+  const jsonOut = arg('--json', '');
+  if (jsonOut) await fs.writeFile(jsonOut, JSON.stringify({ url, config: configPath, results, checks }, null, 2));
   if (process.argv.includes('--keep')) console.log(`workspace kept at ${ws}`);
   else await fs.rm(work, { recursive: true, force: true });
 }

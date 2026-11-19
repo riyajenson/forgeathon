@@ -1,0 +1,27 @@
+{
+  "$comment": "Demo-without-keys configuration used by scripts/dev-mock.sh and scripts/e2e-mock.sh. Both 'providers' are the local scripted demo model (no real model, no cost). The key variables hold a fixed dummy value set by the scripts; dev-mock.sh --break-primary re-registers the primary with an invalid key to demonstrate Task C.",
+  "providers": [
+    {
+      "type": "custom",
+      "name": "demo-primary",
+      "baseUrl": "http://127.0.0.1:47790/v1",
+      "apiKeyEnv": "FORGE_MOCK_PRIMARY_KEY",
+      "models": [
+        { "name": "scripted", "modelId": "demo-primary", "contextLength": 128000, "maxOutputTokens": 4096 }
+      ]
+    },
+    {
+      "type": "custom",
+      "name": "demo-fallback",
+      "baseUrl": "http://127.0.0.1:47790/v1",
+      "apiKeyEnv": "FORGE_MOCK_FALLBACK_KEY",
+      "models": [
+        { "name": "scripted", "modelId": "demo-fallback", "contextLength": 128000, "maxOutputTokens": 4096 }
+      ]
+    }
+  ],
+  "agents": {
+    "primaryModel": "demo-primary/scripted",
+    "fallbackModel": "demo-fallback/scripted"
+  }
+}

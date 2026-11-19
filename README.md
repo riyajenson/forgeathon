@@ -4,8 +4,8 @@ A VS Code extension whose entire agent loop runs on **[TrueForge](https://github
 0.185.1** in local mode. Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 
 - **Inline edit** — select code, `Ctrl+Alt+I`, type an instruction, review the diff hunk by hunk, accept, undo.
-- **Agent mode** — one request in the panel; the agent finds the relevant files itself, proposes one reviewed
-  diff per file, and runs the tests after asking you.
+- **Agent mode** — one request in the panel; the agent finds the relevant files itself, proposes reviewed
+  diffs file by file, and runs the tests after asking you.
 - **Context assembly** — `@file:`/`@symbol:` mentions, the selection and the active file, plus automatic
   retrieval (BM25 over code, symbol index, test/doc pairing) within a token budget, with the chosen files,
   reasons and skipped items shown in the panel.
@@ -63,13 +63,25 @@ knows the three fixed tasks. It costs nothing and needs no keys. Then open the e
 
 ## With real models
 
-1. Pick a primary and a fallback model from **different providers**:
+1. Pick a primary and a fallback model from **different providers**. The example's default is the setup we
+   tested on Tasks A, B and C (2026-11-19), using **free tiers only ($0)**:
+
+   | Role | Provider (TrueForge name) | Model | Free tier |
+   |---|---|---|---|
+   | Primary | NVIDIA API Catalog (`nvidia`) | `nvidia/nemotron-3-ultra-550b-a55b` | ≈ 40 requests/min, monthly allowance |
+   | Fallback | Groq (`groq`) | `qwen/qwen3.8-27b` | 1000 requests/day, 8000 tokens/min |
+   | Spare (configured, unused) | OpenRouter (`openrouter`) | `nvidia/nemotron-3-ultra-550b-a55b:free` | 50 requests/day |
 
    ```bash
    cp config/models.example.json config/models.json      # gitignored
-   # edit agents.primaryModel / agents.fallbackModel; examples: Gemini, Groq, OpenRouter, Anthropic, OpenAI
-   export GEMINI_API_KEY=...  GROQ_API_KEY=...            # only the variables your two providers use
+   # optional: change agents.primaryModel / agents.fallbackModel (Gemini, Anthropic, OpenAI and
+   # groq/gpt-oss-120b are listed as untested alternatives)
+   export NVIDIA_API_KEY=...  GROQ_API_KEY=...            # only the variables your providers use
    ```
+
+   Model ids change; list what your key can use with `GET <baseUrl>/models`. Before switching the primary,
+   check that the model returns proper `tool_calls` for tool definitions (a model without them cannot drive
+   the agent).
 
 2. Start TrueForge 0.185.1 in local mode (keep it running):
 
@@ -90,6 +102,12 @@ knows the three fixed tasks. It costs nothing and needs no keys. Then open the e
    This registers each provider whose key is set, the `vscode` MCP connector, and four agents built from
    `agent/*.json`: `forge-coder`, `forge-inline` (primary model) and `forge-coder-fallback`,
    `forge-inline-fallback` (fallback model). **Switching models = edit `config/models.json` and rerun setup.**
+
+4. Optional, to count model requests and 429s (TrueForge retries some requests internally, so the harness
+   cannot see them): run `scripts/model-meter.mjs`, a loopback pass-through proxy that logs status, duration,
+   `Retry-After` and tokens per request (never bodies, headers or keys). Point each `baseUrl` of a copy of
+   `config/models.json` at `http://127.0.0.1:47800/<route>`, run setup with `--config <copy>`, and pass
+   `--config <copy> --meter-log <log>` to `scripts/smoke-real-model.mjs` for per-task counts.
 
 ## Open the extension
 
@@ -120,12 +138,12 @@ knows the three fixed tasks. It costs nothing and needs no keys. Then open the e
 
 | Command | What it proves | Needs |
 |---|---|---|
-| `npm --prefix src/harness test` | Harness unit tests (review core, MCP tools, ignore policy, regex deadline, run_command cancel races, context engine incl. Flask ranking, setup, errors) and turn races against an in-memory TrueForge stand-in (late writes vs retry/fallback, silent server vs Stop/watchdog) | — (the Flask ranking test needs a Flask 3.1.3 checkout at `FORGE_FLASK_DIR` or `~/projects/flask-3.1.3`; otherwise it is skipped) |
+| `npm --prefix src/harness test` | Harness unit tests (review core, MCP tools, ignore policy, regex deadline, run_command cancel races, context engine incl. Flask ranking, setup, errors, model meter) and turn races against an in-memory TrueForge stand-in (late writes vs retry/fallback, silent server vs Stop/watchdog) | — (the Flask ranking test needs a Flask 3.1.3 checkout at `FORGE_FLASK_DIR` or `~/projects/flask-3.1.3`; otherwise it is skipped) |
 | `npm --prefix src/harness run test:integration` | Turns against real TrueForge with a scripted model: approvals, partial accept, deny, cancel races, 401/refused/429/watchdog → retry/fallback, run_command, setup | TrueForge on :8790 started as above |
 | `scripts/e2e-mock.sh` | Tasks A, B, C end to end through the harness on a copy of Flask 3.1.3, with the verification commands | Flask checkout: `--flask DIR`, default `~/flask-demo`, else `~/projects/flask-3.1.3` |
 | `scripts/test-extension.sh` | Extension suites inside a real VS Code window (EditorPort, review, panel) | A display (WSLg); fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A, B, Stop, C through the extension UI code against TrueForge + demo model | as above + Flask checkout |
-| `node scripts/smoke-real-model.mjs --tasks A,C` | Same checks as `e2e-mock.sh` with your real models | `config/models.json`, keys, TrueForge |
+| `node scripts/smoke-real-model.mjs --tasks A,C` | Same checks as `e2e-mock.sh` with your real models (`--meter-log` adds requests and 429s per task) | `config/models.json`, keys, TrueForge |
 
 ## run_command: what is and is not protected
 

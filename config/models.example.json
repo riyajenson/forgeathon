@@ -1,12 +1,14 @@
 {
-  "$comment": "Copy to config/models.json (gitignored), keep the providers you have keys for, and pick agents.primaryModel / agents.fallbackModel as '<provider name>/<model name>' from different providers. Keys are read from the environment variables named in apiKeyEnv and never stored in this file. Model ids below are from TrueForge 0.185.1's shipped catalog or the provider's documentation; check them against your account. Switching models is a config change plus `node scripts/setup-trueforge.mjs`.",
+  "$comment": "Copy to config/models.json (gitignored), keep the providers you have keys for, and pick agents.primaryModel / agents.fallbackModel as '<provider name>/<model name>' from different providers. Keys are read from the environment variables named in apiKeyEnv and never stored in this file. Default (tested 2026-11-19 on Tasks A, B, C, free tiers only, $0): primary NVIDIA API Catalog nvidia/nemotron-3-ultra-550b-a55b, fallback Groq qwen/qwen3.8-27b, spare OpenRouter nvidia/nemotron-3-ultra-550b-a55b:free (configured, unused). The other providers are untested alternatives; check model ids against your account (GET <baseUrl>/models). Switching models is a config change plus `node scripts/setup-trueforge.mjs`.",
   "providers": [
     {
-      "type": "google-gemini",
-      "apiKeyEnv": "GEMINI_API_KEY",
+      "type": "custom",
+      "name": "nvidia",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "apiKeyEnv": "NVIDIA_API_KEY",
       "optional": true,
       "models": [
-        { "name": "gemini-flash-latest", "modelId": "gemini-flash-latest", "contextLength": 1048576, "maxOutputTokens": 65536, "reasoningEfforts": ["low", "medium", "high"] }
+        { "name": "nemotron-3-ultra", "modelId": "nvidia/nemotron-3-ultra-550b-a55b", "contextLength": 262144, "maxOutputTokens": 16384 }
       ]
     },
     {
@@ -16,6 +18,7 @@
       "apiKeyEnv": "GROQ_API_KEY",
       "optional": true,
       "models": [
+        { "name": "qwen3-8-27b", "modelId": "qwen/qwen3.8-27b", "contextLength": 131072, "maxOutputTokens": 16384 },
         { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768, "reasoningEfforts": ["low", "medium", "high"] }
       ]
     },
@@ -26,7 +29,15 @@
       "apiKeyEnv": "OPENROUTER_API_KEY",
       "optional": true,
       "models": [
-        { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768, "reasoningEfforts": ["low", "medium", "high"] }
+        { "name": "nemotron-3-ultra-free", "modelId": "nvidia/nemotron-3-ultra-550b-a55b:free", "contextLength": 1000000, "maxOutputTokens": 65536 }
+      ]
+    },
+    {
+      "type": "google-gemini",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "optional": true,
+      "models": [
+        { "name": "gemini-flash-latest", "modelId": "gemini-flash-latest", "contextLength": 1048576, "maxOutputTokens": 65536, "reasoningEfforts": ["low", "medium", "high"] }
       ]
     },
     {
@@ -48,7 +59,7 @@
     }
   ],
   "agents": {
-    "primaryModel": "google-gemini/gemini-flash-latest",
-    "fallbackModel": "groq/gpt-oss-120b"
+    "primaryModel": "nvidia/nemotron-3-ultra",
+    "fallbackModel": "groq/qwen3-8-27b"
   }
 }

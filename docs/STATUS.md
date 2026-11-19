@@ -1,9 +1,10 @@
 # Project status
 
-Updated: 2026-11-19, after the independent review (`~/forge-review/CODEX-REVIEW.md`). Every finding was checked
-and triaged in `docs/review/codex-review-triage.md`; blockers B2-B4 and issues I1-I10 are fixed and merged. The
-repository is submission-ready except for the human steps at the end of this file (models and keys, a
-real-model rehearsal, push, video, PDF, form). **No real model has been used yet.**
+Updated: 2026-11-19, after the first real-model run (free tiers only, $0): **Tasks A, B and C passed with real
+models**, each on its first attempt (details below). Earlier the same day: the independent review
+(`~/forge-review/CODEX-REVIEW.md`), triaged in `docs/review/codex-review-triage.md`; blockers B2-B4 and issues
+I1-I10 are fixed and merged. Remaining human steps are at the end of this file (manual test, push, video, PDF,
+form).
 
 ## MVP checklist
 
@@ -12,7 +13,7 @@ Legend: ✅ verified (how) · 🟡 needs a human step · ❌ missing
 "UI e2e" = `scripts/test-extension-e2e.sh`: a real VS Code 1.146 window (WSLg) runs the extension's Workbench
 against TrueForge 0.185.1 + the scripted demo model on a copy of Flask 3.1.3.
 "Harness e2e" = `scripts/e2e-mock.sh`: the same tasks through `createHarness` without a GUI, plus the Flask
-verification commands. **No real model has been used yet (no keys were available).**
+verification commands. "Real run" = `scripts/smoke-real-model.mjs` (same checks) with the real models below.
 
 | Item | Status | Evidence |
 |---|---|---|
@@ -27,7 +28,56 @@ verification commands. **No real model has been used yet (no keys were available
 | Cancel: Stop ends the turn, review closes, no partial edits | ✅ | UI e2e + harness integration (cancel while paused / streaming / racing an apply) + unit races (Stop before a command spawns; silent TrueForge ends the turn once, bounded) |
 | TrueForge session link | ✅ | UI e2e (link present); opening it is manual |
 | Demo without keys | ✅ | `scripts/dev-mock.sh` |
-| Real model (Tasks A, B, C) | 🟡 | Needs keys → steps below |
+| Real model (Tasks A, B, C) | ✅ | Real run 2026-11-19: A 6/6, C 3/3, B 6/6 checks, one run each (see "Real-model run") |
+
+## Real-model run (2026-11-19)
+
+Models (all free tiers, $0; `config/models.json`, default of `config/models.example.json`):
+
+| Role | TrueForge model | Provider model id | Why |
+|---|---|---|---|
+| Primary | `nvidia/nemotron-3-ultra` | `nvidia/nemotron-3-ultra-550b-a55b` (NVIDIA API Catalog) | The catalog listed no Qwen3 Coder, Qwen3.x or DeepSeek. Probes (one request each): Kimi K3.1 Pro correct but 95 s/request; GLM-5.3 Flash and Step-5 timed out; Mistral Large 4, MiniMax M3.1 Flash and Nemotron-3 Ultra made correct tool calls, Nemotron fastest (0.9 s / 7 s) and the only one with a fully correct streamed `propose_edit` |
+| Fallback | `groq/qwen3-8-27b` | `qwen/qwen3.8-27b` (Groq) | Proposed the correct edit directly (gpt-oss-120b re-read the file); clean content (no `<think>`); same free limits (1000 req/day, 8000 tokens/min) |
+| Spare, unused | `openrouter/nemotron-3-ultra-free` | `nvidia/nemotron-3-ultra-550b-a55b:free` (OpenRouter) | `qwen/qwen3-coder:free` is not listed; this free model made correct tool calls (1 probe) |
+
+Tool-calling probe through TrueForge (throwaway agent calling the `get_current_datetime` system tool): NVIDIA 2
+requests, 6.2 s; Groq 2 requests, 0.7 s; both `done`. Then a fresh TrueForge 0.185.1 database
+(`~/forge-data/real-20261119-104034.sqlite`), setup, and each task once through `scripts/model-meter.mjs`:
+
+| Task | Result | Model | Requests | 429s | Tokens in / out | Time | Notes |
+|---|---|---|---|---|---|---|---|
+| A | ✅ 6/6 | nemotron-3-ultra | 3 | 0 | 11,441 / 635 | 8.5 s | `read_file` + one `propose_edit`; docstring lists all five values. Cosmetic: the added blank docstring line has trailing spaces |
+| C | ✅ 3/3 | nemotron-3-ultra → qwen3.8-27b | 3 (1 × 401 NVIDIA, 2 Groq) | 0 | 6,848 / 403 | 2.6 s | NVIDIA's invalid key: `[Model Error] Request failed (401): Unauthorized` in 0.19 s, recognised as auth → fallback at once; proposal rejected; `git status` clean; key restored |
+| B | ✅ 6/6 (first attempt) | nemotron-3-ultra | 49 | 0 | 1,616,316 / 7,503 | 133 s | 48 tool calls (21 `read_file`, 5 searches, 7 `propose_edit`, 15 `run_command`); 4 files (`cli.py`, `test_cli.py`, `docs/cli.rst`, `docs/api.rst`), 7 reviews; 57 passed |
+
+Totals of the three tasks: 55 model requests (53 NVIDIA incl. the one 401, 2 Groq), 1.63M input / 8.5k output
+tokens, no 429s and no TrueForge-internal retries (meter and TrueForge log agree; token sums match TrueForge's
+metrics). Outside the tasks: 13 NVIDIA chat requests for probes (+ 1 unauthenticated invalid-key check), 9 Groq
+(2 of them blocked by Cloudflare's client check before reaching the API), 1 OpenRouter, and one model-list call
+per provider.
+
+**Failures and causes.** No task failed. Observations from Task B (model behaviour, not harness faults):
+- It over-verified: 15 commands (each needs approval in the editor), including `make html` (Sphinx not
+  installed) and full-suite runs; two used `… | tail -20`, which hides pytest's exit code.
+- One command was `cd /workspace && …` (a guessed path); it failed harmlessly and the model retried without it.
+  Fixed generally: the `run_command` description now says commands start in the workspace root and to use
+  relative paths (mock-tested only).
+- It split `cli.py` into 3 reviews and `test_cli.py` into 2 although the instructions say one call per file.
+- Token use comes from 49 steps that each resend the growing conversation (largest tool result 6.5k chars;
+  compaction at 60k tokens was not reached).
+- Not changed: tightening the verification instructions (e.g. "run the relevant tests once") would need another
+  real Task B run to verify; left as a decision for you.
+
+### Verification after the real-model fixes (harness/p7-real-model, 2026-11-19)
+
+| Check | Result |
+|---|---|
+| `npm --prefix src/harness test` | 83/83 (new: model meter, NVIDIA 401 text, `run_command` description) |
+| `npm --prefix src/harness run test:integration` (fresh TrueForge 0.185.1) | 17/17 |
+| `scripts/e2e-mock.sh` | 15/15 |
+| Metered mock run (demo model → `model-meter` → TrueForge; `smoke-real-model.mjs --meter-log`, Tasks A, B, C) | 15/15; requests per task A 2, B 10, C 3 (1 × 401) |
+| `scripts/test-extension-e2e.sh` | 4/4 |
+| `scripts/render-writeup.sh` | 3 pages; fixed: it hung when stdin was not a terminal (md-to-pdf then reads stdin) |
 
 ### Final verification on main after the review fixes (2026-11-19)
 
@@ -84,6 +134,7 @@ merged into `main` with `--no-ff`.
 | harness/p8-model-config | provider examples (Gemini, Groq, OpenRouter, Anthropic, OpenAI), reasoning efforts |
 | docs/submission | README, LICENSE, notices, write-up + PDF script, demo script, manual test, checklist, `.gitignore` |
 | editor/e7-notifications, editor/e8-test-cache | fallback/error notifications; shared VS Code test download |
+| harness/p7-real-model | real-model setup (NVIDIA primary, Groq fallback, OpenRouter spare), `scripts/model-meter.mjs`, `--meter-log`, `run_command` description, NVIDIA 401 regression test, docs |
 | harness/p9-real-model-readiness | inline agent stops after a rejection |
 | docs/status | this dashboard |
 
@@ -100,18 +151,25 @@ merged into `main` with `--no-ff`.
 9. Licence MIT (all dependencies permissive); root `.gitignore` added; write-up PDF is a generated file (not committed).
 10. Fallback and errors also appear as VS Code notifications (the panel may be closed during an inline edit).
 11. The inline agent stops after the user rejects its change (avoids repeated proposals in Task C with a real model).
+12. Real models, free tiers only: NVIDIA `nemotron-3-ultra-550b-a55b` primary, Groq `qwen3.8-27b` fallback, OpenRouter
+    `nemotron-3-ultra-550b-a55b:free` spare (reasons in "Real-model run"). No `reasoningEfforts` configured for them
+    (TrueForge only warns), so no reasoning parameter is sent to the providers.
+13. Requests and 429s are counted by a loopback metering proxy (`scripts/model-meter.mjs`), because TrueForge's
+    internal HTTP retries are invisible to the harness. It records no bodies, headers or keys.
 
 ## Known issues and risks
 
-- **Real models untested.** Tool-calling quality, latency and cost are unknown until the rehearsal. Gemini goes
-  through TrueForge's Vercel AI SDK provider (`parametersJsonSchema`), which should accept our tool schemas;
-  if the primary errors on schemas, switch providers in `config/models.json` (config-only).
+- **Real models checked once per task.** One run each with one model pair; model output varies between runs.
+  Task B is long with this model (49 requests, 15 approvals, ≈ 2 min); in the video, expect to approve several
+  commands. NVIDIA's free tier is ≈ 40 requests/min account-wide: Task B peaked well below that, but two Task B
+  runs back to back could approach it (429s wait for `Retry-After`, then one retry, then fallback to Groq, whose
+  8000 tokens/min limit is small for Task B's ≈ 33k-token requests).
 - Compaction is configured but never triggered by the demo tasks.
 - A fallback starts a new TrueForge session (no earlier panel history).
 - `run_command` is not sandboxed: an approved command can change files outside review. Mitigated (approval of the exact
   command, unrestricted warning, confined cwd, scrubbed env, timeout, git status diff); residual risk in README.
-- Fallback on an invalid key is matched by status code and wording; the exact error text of your chosen primary is
-  untested until the rehearsal (Task C).
+- Fallback on an invalid key is matched by status code and wording; verified with NVIDIA (401 "Unauthorized") and
+  the demo model. Other providers' wordings are covered by tests only.
 - Not fixed from the review: event/receipt retention for the editor's lifetime and cached model names after rerunning
   setup while the editor runs (restart the Extension Development Host after setup).
 - Hunk review uses a picker, not per-hunk CodeLens.
@@ -121,14 +179,11 @@ merged into `main` with `--no-ff`.
 
 ## Needs human — steps for 20 Nov, in order
 
-1. **Choose models + export keys.** `cp config/models.example.json config/models.json`, set
-   `agents.primaryModel` / `agents.fallbackModel` (different providers), `export <PROVIDER>_API_KEY=…` for both.
-2. **Setup + one real-model rehearsal.** Start TrueForge (README step 2), then
-   `node scripts/setup-trueforge.mjs` → must end with "models available: … (primary), … (fallback)".
-   Then `node scripts/smoke-real-model.mjs --tasks A,C` and, if green, `--tasks B` once. Note tokens/time from
-   the summary and `~/.forge/turns.jsonl` for the write-up's cost line.
-   `--tasks C` must show the fallback: if the primary's invalid-key error is not recognised, send the error line
-   (from the panel banner) so the classification in `src/harness/trueforge/errors.ts` can be extended.
+1. ~~Choose models + export keys~~ — done (`config/models.json`; keys from `~/.forge-keys.env`).
+2. ~~Setup + one real-model rehearsal~~ — done 2026-11-19, A/B/C green (see "Real-model run"). For the video:
+   start TrueForge (README step 2) on a fresh database, `source ~/.forge-keys.env`, `node scripts/setup-trueforge.mjs`.
+   Optional decision: tighten the agent's verification instructions to cut Task B's 15 command approvals (needs one
+   more real Task B run to check).
 3. **Manual VS Code checklist:** `docs/MANUAL-TEST.md` (≈ 20 min).
 4. **Push:**
    ```bash

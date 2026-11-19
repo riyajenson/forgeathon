@@ -39,7 +39,7 @@ exports.run=async()=>{
   edits.end();
   let decision,result,recordDecision;
   const decisionReady = new Promise(resolve=>recordDecision=resolve);
-  const version='0.4.0', events=[];
+  const version=require('forge-harness').PROTOCOL_VERSION, events=[];
   const harness={
     createSession:async()=>({ok:true,body:{sessionId:'s'}}), submitTurn:async({body})=>({ok:true,body}),
     stream:async function*({body}) {
@@ -99,6 +99,65 @@ exports.run=async()=>{
   await fs.writeFile(path.join(dir,'clash.py'),'theirs');
   await check('stale',request(clash,{path:clash.path,text:'mine',textSha256:hash('mine')}));
   assert.equal(await fs.readFile(path.join(dir,'clash.py'),'utf8'),'theirs','a file that appeared after review is never overwritten');
+  // failed_before_apply: a second approved apply to the same document while the first is in progress.
+  const busyFile=path.join(dir,'busy.py'), busyLocal=path.basename(dir)+'/busy.py';
+  await fs.writeFile(busyFile,original);
+  const busyProposal=(id,newText)=>make({proposalId:id,callId:id,path:busyLocal,proposedText:newText+'\ntwo\n',
+    hunks:[{hunkId:'a',startOffset:0,endOffset:3,oldText:'one',newText}]});
+  const b1=busyProposal('b1','ONE'), b2=busyProposal('b2','UNO');
+  edits.begin(b1); edits.decide(b1,{a:'accept'}); edits.decide(b2,{a:'accept'});
+  const [first,second]=await Promise.all([
+    edits.applyText(request(b1,{path:busyLocal,text:'ONE\ntwo\n',textSha256:hash('ONE\ntwo\n')})),
+    edits.applyText(request(b2,{path:busyLocal,text:'UNO\ntwo\n',textSha256:hash('UNO\ntwo\n')}))]);
+  assert.equal(first.status,'saved');
+  assert.equal(second.status,'failed_before_apply');
+  assert.equal(await fs.readFile(busyFile,'utf8'),'ONE\ntwo\n','only the first apply changed the file');
+  edits.end();
+
+  // A save participant that strips trailing whitespace (stands in for format-on-save).
+  const fmtDir=path.basename(dir);
+  const formatter=vscode.workspace.onWillSaveTextDocument(e=>{
+    if (!e.document.uri.fsPath.startsWith(dir+path.sep+'fmt')) return;
+    const text=e.document.getText(), trimmed=text.replace(/[ \t]+$/gm,'');
+    if (trimmed!==text) e.waitUntil(Promise.resolve([vscode.TextEdit.replace(
+      new vscode.Range(e.document.positionAt(0),e.document.positionAt(text.length)),trimmed)]));
+  });
+  try {
+    // 1. The formatter changes the applied text: the receipt holds the post-save hash and undo still works.
+    const f1=path.join(dir,'fmt1.py'), f1Local=fmtDir+'/fmt1.py', f1Orig='a = 1\n', f1New='a = 2   \n';
+    await fs.writeFile(f1,f1Orig);
+    const p1=make({proposalId:'f1',callId:'f1',path:f1Local,baseSha256:hash(f1Orig),originalText:f1Orig,proposedText:f1New,
+      hunks:[{hunkId:'a',startOffset:0,endOffset:5,oldText:'a = 1',newText:'a = 2   '}]});
+    edits.begin(p1); edits.decide(p1,{a:'accept'});
+    const r1=await edits.applyText(request(p1,{path:f1Local,expectedSha256:hash(f1Orig),text:f1New,textSha256:hash(f1New)}));
+    assert.equal(r1.status,'saved');
+    assert.equal(await fs.readFile(f1,'utf8'),'a = 2\n','the save participant ran');
+    assert.equal(r1.savedTextSha256,hash('a = 2\n'));
+    assert.equal(r1.undo.expectedPostSha256,hash('a = 2\n'),'the receipt carries the post-save hash');
+    await edits.undo(r1.undo.undoId);
+    assert.equal(await fs.readFile(f1,'utf8'),f1Orig);
+    edits.end();
+    // 2. The formatter would also change the original: undo restores the exact original bytes anyway.
+    const f2=path.join(dir,'fmt2.py'), f2Local=fmtDir+'/fmt2.py', f2Orig='b = 1   \n', f2New='b = 2\n';
+    await fs.writeFile(f2,f2Orig);
+    const p2=make({proposalId:'f2',callId:'f2',path:f2Local,baseSha256:hash(f2Orig),originalText:f2Orig,proposedText:f2New,
+      hunks:[{hunkId:'a',startOffset:0,endOffset:8,oldText:'b = 1   ',newText:'b = 2'}]});
+    edits.begin(p2); edits.decide(p2,{a:'accept'});
+    const r2=await edits.applyText(request(p2,{path:f2Local,expectedSha256:hash(f2Orig),text:f2New,textSha256:hash(f2New)}));
+    assert.equal(r2.status,'saved');
+    await edits.undo(r2.undo.undoId);
+    assert.equal(await fs.readFile(f2,'utf8'),f2Orig,'undo saved without save participants');
+    edits.end();
+    // 3. A new file: expectedPostSha256 matches what is on disk.
+    const n3=make({proposalId:'n3',callId:'n3',path:fmtDir+'/fmt3.py',isNewFile:true,baseSha256:null,originalText:'',proposedText:'c = 3\n',
+      hunks:[{hunkId:'a',startOffset:0,endOffset:0,oldText:'',newText:'c = 3\n'}]});
+    edits.begin(n3); edits.decide(n3,{a:'accept'});
+    const r3=await edits.applyText(request(n3,{path:n3.path,expectedSha256:null,text:'c = 3\n',textSha256:hash('c = 3\n')}));
+    assert.equal(r3.status,'saved');
+    assert.equal(r3.undo.expectedPostSha256,hash(await fs.readFile(path.join(dir,'fmt3.py'),'utf8')));
+    await edits.undo(r3.undo.undoId);
+    await assert.rejects(fs.access(path.join(dir,'fmt3.py')));
+  } finally { formatter.dispose(); }
   edits.dispose(); failing.dispose();
-  console.log('PASS simulated turn, all six apply outcomes, partial approval, cancel gate, guarded undo, replay after save failure, safe new-file creation');
+  console.log('PASS simulated turn, all six apply outcomes (incl. failed_before_apply), partial approval, cancel gate, guarded undo, undo with a formatting save participant, replay after save failure, safe new-file creation');
 };

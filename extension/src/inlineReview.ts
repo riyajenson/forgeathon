@@ -24,6 +24,7 @@ export class InlineReview implements vscode.Disposable {
     const right = left.with({query: revision + '-proposed'});
     this.texts.set(left.toString(), p.originalText);
     this.texts.set(right.toString(), p.proposedText);
+    this.diff = right;
     try {
       await vscode.commands.executeCommand('vscode.diff', left, right, p.path + ' - proposed changes');
       if (!this.edits.isActive(p)) return undefined;
@@ -82,6 +83,19 @@ export class InlineReview implements vscode.Disposable {
     picker.onDidHide(() => { this.picker = undefined; picker.dispose(); });
     picker.show();
   }
-  cancel() { this.pending?.resolve(undefined); this.pending = undefined; this.picker?.hide(); this.status.hide(); }
+  // A cancelled review leaves nothing that looks actionable: its diff tab closes and the status bar says so.
+  cancel() {
+    const wasPending = !!this.pending;
+    this.pending?.resolve(undefined); this.pending = undefined; this.picker?.hide(); this.status.hide();
+    const diff = this.diff?.toString();
+    this.diff = undefined;
+    if (!diff || !wasPending) return;
+    const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs).filter(t =>
+      t.input instanceof vscode.TabInputTextDiff && t.input.modified.toString() === diff);
+    if (tabs.length) void vscode.window.tabGroups.close(tabs);
+    vscode.window.setStatusBarMessage('Forge: review cancelled; that change was not applied', 6000);
+  }
+  /** The proposed side of the review's diff tab, while it may still be open. */
+  private diff?: vscode.Uri;
   dispose() { this.cancel(); this.texts.clear(); this.registration.dispose(); this.status.dispose(); }
 }

@@ -3,7 +3,9 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
-const excluded = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', 'dist', 'build']);
+// Never walked: VCS data, dependencies, virtualenvs, caches, build output (the harness applies .gitignore on top).
+const excluded = new Set(['.git', '.hg', '.svn', 'node_modules', '.venv', 'venv', '__pycache__', '.tox', '.nox', '.mypy_cache',
+  '.pytest_cache', '.ruff_cache', '.eggs', 'site-packages', 'htmlcov', 'dist', 'build']);
 
 function relativePath(input: string): string {
   const parts = input.split('/');
@@ -67,7 +69,7 @@ export function createReader(folder: vscode.WorkspaceFolder) {
 export function createFileLister(folder: vscode.WorkspaceFolder) {
   return async function listFiles(options: { prefix?: string; limit?: number } = {}) {
     if (!vscode.workspace.isTrusted) throw new Error('Workspace trust required');
-    const limit = Math.min(options.limit ?? 500, 2000);
+    const limit = Math.min(options.limit ?? 500, 20000);
     if (!Number.isSafeInteger(limit) || limit < 0) throw new Error('Invalid file limit');
     const raw = options.prefix ?? '';
     const normalized = raw ? relativePath(raw) : '';
@@ -80,7 +82,7 @@ export function createFileLister(folder: vscode.WorkspaceFolder) {
       const entries = await fs.opendir(dir);
       for await (const entry of entries) {
         const rel = parent + entry.name;
-        if (entry.isDirectory() && !excluded.has(entry.name.toLowerCase()) &&
+        if (entry.isDirectory() && !excluded.has(entry.name.toLowerCase()) && !entry.name.endsWith('.egg-info') &&
             (prefix.startsWith(rel + '/') || rel.startsWith(prefix))) {
           await walk(path.join(dir, entry.name), rel + '/');
         } else if (entry.isFile() && rel.startsWith(prefix)) {

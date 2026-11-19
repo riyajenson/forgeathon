@@ -60,18 +60,21 @@ export class Workbench implements vscode.Disposable {
     this.panel.notice('Stopping...');
     await this.controller?.stop();
   }
-  private async command(command: string, cwd: string) {
+  private async command(command: string, cwd: string, warning?: string) {
     const picker = vscode.window.createQuickPick();
     this.commandPicker = picker;
-    picker.title = 'Allow this command in ' + cwd + '?';
-    picker.placeholder = command;
-    picker.items = [{label:'Deny'}, {label:'Allow once', detail:command}];
+    picker.title = (warning ? '⚠ Unrestricted command. ' : '') + 'Allow this command in ' + cwd + '?';
+    picker.placeholder = warning || command;
+    picker.items = [{label:'Deny'}, {label:'Allow once', detail:command, ...(warning ? {description: warning} : {})}];
     return new Promise<boolean>(resolve => {
       let allow = false;
       // The panel's Allow/Deny buttons and this quick pick answer the same single decision.
       this.commandAnswer = answer => { allow = answer; picker.hide(); };
       picker.onDidAccept(() => { allow = picker.selectedItems[0]?.label === 'Allow once'; picker.hide(); });
-      picker.onDidHide(() => { this.commandPicker = undefined; this.commandAnswer = undefined; picker.dispose(); resolve(allow); });
+      picker.onDidHide(() => {
+        this.commandPicker = undefined; this.commandAnswer = undefined; picker.dispose();
+        this.panel.commandAnswered(); resolve(allow);
+      });
       picker.show();
     });
   }
@@ -84,7 +87,7 @@ export class Workbench implements vscode.Disposable {
       await harness.start(this.port);
       if (this.closed) throw new Error('Workspace closed');
       return this.controller = new TurnController(harness, version, this.folder.uri.fsPath, this.edits, {
-        event: e => this.events(e), review: p => this.review.request(p), command: e => this.command(e.command,e.cwd),
+        event: e => this.events(e), review: p => this.review.request(p), command: e => this.command(e.command,e.cwd,e.unrestricted ? e.warning || 'Unrestricted command' : undefined),
         cancelReview: () => { this.review.cancel(); this.commandPicker?.hide(); }, notice: s => this.notice(s)
       });
     } catch (error) { await harness.dispose(); this.harness = undefined; throw error; }

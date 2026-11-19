@@ -35,7 +35,13 @@ export class EditReview implements vscode.Disposable {
   private active?: string;
   readonly readText: ReturnType<typeof createReader>;
   constructor(private readonly folder: vscode.WorkspaceFolder,
-    private readonly save = (doc: vscode.TextDocument) => doc.save()) { this.readText = createReader(folder); }
+    private readonly save = (doc: vscode.TextDocument) => doc.save(),
+    // Undo restores exact bytes: save without save participants (format on save would change them again).
+    private readonly saveExact = async (doc: vscode.TextDocument) => {
+      await vscode.window.showTextDocument(doc, { preview: false });
+      await vscode.commands.executeCommand('workbench.action.files.saveWithoutFormatting');
+      return !doc.isDirty;
+    }) { this.readText = createReader(folder); }
 
   begin(ref: TurnRef) { this.end(); this.active = refKey(ref); }
   end() { this.active = undefined; this.approvals.clear(); }
@@ -135,19 +141,23 @@ export class EditReview implements vscode.Disposable {
     const after = hash(doc.getText());
     const receipt: Receipt = { doc, before: '', after, saveOnUndo: false, created: true };
     this.receipts.set(undoId, receipt);
-    const details = { ...base, appliedHunkIds: [...a.ids], undo: { undoId, path: r.path, expectedPostSha256: after } };
+    // Built after any save, so expectedPostSha256 is the post-save hash (save participants included).
+    const details = () => ({ ...base, appliedHunkIds: [...a.ids], undo: { undoId, path: r.path, expectedPostSha256: receipt.after } });
     let result: ApplyTextResult;
     if (after !== digest) {
-      result = { ...details, status: 'buffer_applied', save: 'deferred', reason: 'Created file differs from the reviewed text' };
+      result = { ...details(), status: 'buffer_applied', save: 'deferred', reason: 'Created file differs from the reviewed text' };
     } else if (doc.isDirty) {
       let saved = false;
       try { saved = await this.save(doc); } catch { /* keep the created file and receipt */ }
-      result = saved && !doc.isDirty
-        ? { ...details, status: 'saved', savedTextSha256: (receipt.after = hash(doc.getText())) }
-        : { ...details, status: 'save_failed', message: 'Inspect the new file and retry Save', currentBufferSha256: hash(doc.getText()),
-            disk: 'unknown', recovery: 'inspect_buffer_then_retry_save' };
+      if (saved && !doc.isDirty) {
+        receipt.after = hash(doc.getText());
+        result = { ...details(), status: 'saved', savedTextSha256: receipt.after };
+      } else {
+        result = { ...details(), status: 'save_failed', message: 'Inspect the new file and retry Save', currentBufferSha256: hash(doc.getText()),
+          disk: 'unknown', recovery: 'inspect_buffer_then_retry_save' };
+      }
     } else {
-      result = { ...details, status: 'saved', savedTextSha256: after };
+      result = { ...details(), status: 'saved', savedTextSha256: after };
     }
     this.results.set(id, { fingerprint: fp, result });
     return result;
@@ -172,10 +182,20 @@ export class EditReview implements vscode.Disposable {
       const edit = new vscode.WorkspaceEdit();
       edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), r.before);
       if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code declined undo');
-      this.receipts.delete(id);
-      if (r.saveOnUndo && (hash(doc.getText()) !== hash(r.before) || !await this.save(doc))) {
+      if (hash(doc.getText()) !== hash(r.before)) {
+        r.after = hash(doc.getText()); // keep the receipt: Undo can be retried after inspection
         throw new Error('Undo applied to buffer; inspect before saving');
       }
+      if (r.saveOnUndo) {
+        let saved = false;
+        try { saved = await this.saveExact(doc); } catch { /* reported below */ }
+        // Verify after saving: the file must hold exactly the pre-edit text.
+        if (!saved || doc.isDirty || hash(doc.getText()) !== hash(r.before)) {
+          r.after = hash(doc.getText());
+          throw new Error('Undo restored the buffer but the file was not saved as the original; inspect it (Undo can be retried)');
+        }
+      }
+      this.receipts.delete(id);
     } finally { this.busy.delete(lock); }
   }
 }

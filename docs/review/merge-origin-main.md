@@ -3,7 +3,7 @@
 ## Setup
 
 - **Sides:**
-  - Our `main` was at `7bf9b38`.
+  - Our `main` was at `0921c91`.
   - `origin/main` was at `fe72740`, which is PR #3 (`harness/p10-execution-safety`: `13194bd`, `45b3b9b`)
     and PR #4 (`harness/p11-context-readiness`: `2395e27`, `286815c`), by another contributor.
   - The merge base was `db5d4d5`, the morning's status merge, from before our review fixes.

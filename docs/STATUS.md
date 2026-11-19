@@ -113,7 +113,7 @@ no real-model runs today (mock only). Protocol 0.4.4: `TurnRequest.commandBudget
 | `scripts/test-extension-e2e.sh` | 4/4 |
 | `tsc -p contracts`, extension compile | clean (protocol 0.4.4) |
 | `scripts/render-writeup.sh` | 3 pages |
-| Fresh clone of `docs/readme-final` (README at `59fbcc6`), mock only, README commands as written | ✅ in 132 s with warm npm caches: build; Flask 3.1.3 workspace (quickstart step 8); `cp config/models.example.json` + `setup-trueforge.mjs --dry-run` (NVIDIA, Groq, OpenRouter, 4 agents on nemotron / qwen3.8); `e2e-mock.sh` 21/21 and 21/21 with `--auto-approve-safe-commands --deny-unrestricted`; 98/98 unit; 17/17 integration; `test-extension-e2e.sh` 4/4 (stands in for F5). Clone in `/tmp/forge-readme-*` |
+| Fresh clone of `docs/readme-final` (README at `1d25966`), mock only, README commands as written | ✅ in 132 s with warm npm caches: build; Flask 3.1.3 workspace (quickstart step 8); `cp config/models.example.json` + `setup-trueforge.mjs --dry-run` (NVIDIA, Groq, OpenRouter, 4 agents on nemotron / qwen3.8); `e2e-mock.sh` 21/21 and 21/21 with `--auto-approve-safe-commands --deny-unrestricted`; 98/98 unit; 17/17 integration; `test-extension-e2e.sh` 4/4 (stands in for F5). Clone in `/tmp/forge-readme-*` |
 
 ## Merge of origin/main (2026-11-19, late night, branch integrate/origin-main)
 

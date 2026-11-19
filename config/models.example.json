@@ -1,37 +1,54 @@
 {
-  "$comment": "Copy to config/models.json (gitignored) and edit. API keys are read from the environment variables named in apiKeyEnv; never put keys in this file. Model names in 'agents' are '<provider name>/<model name>'. The fallback must use a different provider than the primary.",
+  "$comment": "Copy to config/models.json (gitignored), keep the providers you have keys for, and pick agents.primaryModel / agents.fallbackModel as '<provider name>/<model name>' from different providers. Keys are read from the environment variables named in apiKeyEnv and never stored in this file. Model ids below are from TrueForge 0.185.1's shipped catalog or the provider's documentation; check them against your account. Switching models is a config change plus `node scripts/setup-trueforge.mjs`.",
   "providers": [
+    {
+      "type": "google-gemini",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "optional": true,
+      "models": [
+        { "name": "gemini-flash-latest", "modelId": "gemini-flash-latest", "contextLength": 1048576, "maxOutputTokens": 65536, "reasoningEfforts": ["low", "medium", "high"] }
+      ]
+    },
+    {
+      "type": "custom",
+      "name": "groq",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "apiKeyEnv": "GROQ_API_KEY",
+      "optional": true,
+      "models": [
+        { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768 }
+      ]
+    },
+    {
+      "type": "custom",
+      "name": "openrouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "optional": true,
+      "models": [
+        { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768 }
+      ]
+    },
     {
       "type": "anthropic",
       "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "optional": true,
       "models": [
-        { "name": "claude-sonnet-5-5", "modelId": "claude-sonnet-5-5", "contextLength": 200000, "maxOutputTokens": 8192 }
+        { "name": "claude-sonnet-5-5", "modelId": "claude-sonnet-5-5", "contextLength": 1000000, "maxOutputTokens": 32000, "reasoningEfforts": ["low", "medium", "high"] },
+        { "name": "claude-haiku-5-5", "modelId": "claude-haiku-5-5", "contextLength": 1000000, "maxOutputTokens": 32000, "reasoningEfforts": ["low", "medium", "high"] }
       ]
     },
     {
       "type": "openai",
       "apiKeyEnv": "OPENAI_API_KEY",
-      "models": [
-        { "name": "gpt-5-2", "modelId": "gpt-5.2", "contextLength": 200000, "maxOutputTokens": 8192 }
-      ]
-    },
-    {
-      "type": "custom",
-      "name": "local-openai-compatible",
-      "baseUrl": "http://127.0.0.1:11434/v1",
-      "apiKeyEnv": "LOCAL_LLM_API_KEY",
       "optional": true,
       "models": [
-        { "name": "local-model", "modelId": "qwen2.5-coder:14b", "contextLength": 32768, "maxOutputTokens": 4096 }
+        { "name": "gpt-6-luna", "modelId": "gpt-6-luna", "contextLength": 1050000, "maxOutputTokens": 32000, "reasoningEfforts": ["low", "medium", "high"] }
       ]
     }
   ],
   "agents": {
-    "primaryModel": "anthropic/claude-sonnet-5-5",
-    "fallbackModel": "openai/gpt-5-2"
-  },
-  "connector": {
-    "name": "vscode",
-    "url": "http://127.0.0.1:47615/mcp"
+    "primaryModel": "google-gemini/gemini-flash-latest",
+    "fallbackModel": "groq/gpt-oss-120b"
   }
 }

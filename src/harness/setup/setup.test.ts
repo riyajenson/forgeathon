@@ -26,23 +26,32 @@ test('validateConfig catches unknown models, same-provider fallback and bad name
 });
 
 test('planProvider reads keys from env only, skips unused providers, refuses missing keys for used ones', () => {
-  const [anthropic, openai, local] = example.providers;
+  const byType = (t: string) => example.providers.find((p) => p.type === t)!;
+  const anthropic = byType('anthropic');
+  const openai = byType('openai');
+  const groq = example.providers.find((p) => p.name === 'groq')!;
   const used = new Set(['anthropic', 'openai']);
-  const plan = planProvider(anthropic!, { ANTHROPIC_API_KEY: 'sk-secret' }, used);
+  const plan = planProvider(anthropic, { ANTHROPIC_API_KEY: 'sk-secret' }, used);
   assert.equal(plan.action, 'upsert');
   assert.equal(plan.action === 'upsert' && (plan.manifest['auth'] as { apiKey: string }).apiKey, 'sk-secret');
   assert.doesNotMatch(JSON.stringify(redact(plan)), /sk-secret/);
-  assert.throws(() => planProvider(openai!, {}, used), /OPENAI_API_KEY is not set/);
-  assert.equal(planProvider(local!, {}, used).action, 'skip');
-  assert.equal(planProvider(openai!, {}, new Set(['anthropic'])).action, 'skip');
+  assert.throws(() => planProvider(openai, {}, used), /OPENAI_API_KEY is not set/);
+  assert.equal(planProvider(groq, {}, used).action, 'skip');
+  assert.equal(planProvider(openai, {}, new Set(['anthropic'])).action, 'skip');
+  const g = planProvider(groq, { GROQ_API_KEY: 'gsk' }, new Set(['groq']));
+  assert.ok(g.action === 'upsert' && g.manifest['type'] === 'custom' && g.manifest['baseUrl'] === 'https://api.groq.com/openai/v1');
+  const gem = planProvider(byType('google-gemini'), { GEMINI_API_KEY: 'g' }, new Set(['google-gemini']));
+  assert.ok(gem.action === 'upsert');
+  assert.deepEqual(gem.action === 'upsert' && (gem.manifest['models'] as Array<{ properties: unknown }>)[0]!.properties,
+    { contextLength: 1048576, maxOutputTokens: 65536, reasoningEfforts: ['low', 'medium', 'high'] });
 });
 
 test('buildAgents makes primary and -fallback variants from each template, with the right tools and limits', () => {
   const agents = buildAgents(templates, example, 'vscode');
   assert.deepEqual(agents.map((a) => a.name), ['forge-coder', 'forge-coder-fallback', 'forge-inline', 'forge-inline-fallback']);
   const byName = Object.fromEntries(agents.map((a) => [a.name, a.manifest as Record<string, any>]));
-  assert.equal(byName['forge-coder']!['model'].name, 'anthropic/claude-sonnet-5-5');
-  assert.equal(byName['forge-coder-fallback']!['model'].name, 'openai/gpt-5-2');
+  assert.equal(byName['forge-coder']!['model'].name, example.agents.primaryModel);
+  assert.equal(byName['forge-coder-fallback']!['model'].name, example.agents.fallbackModel);
   assert.equal(byName['forge-coder']!['model'].params.parallelToolCalls, false);
   for (const a of agents) {
     const m = a.manifest as Record<string, any>;
@@ -64,9 +73,10 @@ test('buildAgents makes primary and -fallback variants from each template, with 
 test('runSetup dry run touches nothing and never prints keys', async () => {
   const lines: string[] = [];
   const client = new Proxy({}, { get: () => { throw new Error('dry run must not call TrueForge'); } }) as never;
-  const report = await runSetup({ client, cfg: example, templates, env: { ANTHROPIC_API_KEY: 'sk-ant-xyz', OPENAI_API_KEY: 'sk-oai-xyz' }, log: (l) => lines.push(l), dryRun: true });
+  const report = await runSetup({ client, cfg: example, templates, env: { GEMINI_API_KEY: 'sk-gem-xyz', GROQ_API_KEY: 'gsk-xyz' }, log: (l) => lines.push(l), dryRun: true });
   assert.equal(report.agents.length, 4);
-  assert.doesNotMatch(lines.join('\n'), /sk-ant-xyz|sk-oai-xyz/);
+  assert.doesNotMatch(lines.join('\n'), /sk-gem-xyz|gsk-xyz/);
   assert.match(lines.join('\n'), /"apiKey":"\*\*\*"/);
-  assert.match(lines.join('\n'), /"maxOutputTokens":8192/, 'non-secret fields stay readable');
+  assert.match(lines.join('\n'), /"maxOutputTokens":65536/, 'non-secret fields stay readable');
+  assert.match(lines.join('\n'), /provider anthropic: skipped/, 'providers without a key that no agent uses are skipped');
 });

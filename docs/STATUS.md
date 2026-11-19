@@ -1,8 +1,10 @@
 # Project status
 
-Updated: 2026-11-19, after the first real-model run and a Task B tuning round (free tiers only, $0): **Tasks A,
-B and C passed with real models** (details below); the Task B tuning target (≤ 3 command approvals, 1 review per
-file) was **not** met. Earlier the same day: the independent review
+Updated: 2026-11-19 (evening), after the guardrails round. **Harness-enforced command budget, narrowed
+auto-approval and an argument-shape hint for repeated bad edits**: verified on the mock only (no real-model runs
+since the tuning round, by decision; one real Task B validation run is planned for 20 Nov). Earlier: the first
+real-model run and a Task B tuning round (free tiers only, $0). **Tasks A, B and C passed with real models**,
+but the Task B tuning target (≤ 3 command approvals, 1 review per file) was **not** met. Earlier the same day: the independent review
 (`~/forge-review/CODEX-REVIEW.md`), triaged in `docs/review/codex-review-triage.md`; blockers B2-B4 and issues
 I1-I10 are fixed and merged. Remaining human steps are at the end of this file (manual test, push, video, PDF,
 form).
@@ -30,7 +32,9 @@ verification commands. "Real run" = `scripts/smoke-real-model.mjs` (same checks)
 | TrueForge session link | ✅ | UI e2e (link present); opening it is manual |
 | Demo without keys | ✅ | `scripts/dev-mock.sh` |
 | Real model (Tasks A, B, C) | ✅ | Real runs 2026-11-19: A 6/6 (twice), C 3/3, B 6/6 (three times) (see "Real-model run", "Task B tuning round") |
-| Optional auto-approval of listed commands (`forge.autoApproveSafeCommands`, default off) | ✅ | Harness unit tests (listed → auto-approved and runs; unrestricted / pipes / `cd` / edits always ask; off unless `true`); extension suite (no prompt, "auto-approved: …" in the panel, unrestricted still asks); `e2e-mock.sh --auto-approve-safe-commands` 15/15 |
+| Optional auto-approval (`forge.autoApproveSafeCommands`, default off), narrowed to bare `pytest`, `python -m pytest`, `git status`, `git diff` | ✅ (mock) | Harness unit tests (these auto-approved and run; `python -c`, `flask`, path/env-prefixed pytest, pipes, `cd`, edits always ask; off unless `true`); extension suite; `e2e-mock.sh --auto-approve-safe-commands` 20/20 (Task G: `git status`/`git diff` auto-approved, `python -c` asked) |
+| Command budget per turn (`forge.commandBudget.agent` 3, `.inline` 1), enforced by the harness | ✅ (mock) | Unit tests (4th and 5th command refused without a prompt with the exact message; denied, unrestricted and auto-approved commands count; 0 refuses all, edits unaffected; defaults); extension suite ("command budget reached" in the panel, settings reach the harness); `e2e-mock.sh` Task G (3 shown, 2 refused, refusal reached the model). Not yet measured with a real model |
+| Repeated argument errors on one file → refusal includes the exact `propose_edit` shape | ✅ (mock) | Unit tests (2nd refusal for the same file has it, other files and content errors do not; the example is valid JSON); `e2e-mock.sh` Task G (the model received one hint) |
 
 ## Real-model run (2026-11-19)
 
@@ -69,6 +73,38 @@ per provider.
   compaction at 60k tokens was not reached).
 - Tightening the verification instructions: done in the tuning round below.
 
+## Guardrails round (2026-11-19, branches harness/p11-command-budget, docs/readme-final)
+
+Decided after the tuning round: build the budget in the harness, narrow auto-approval, add the argument hint,
+no real-model runs today (mock only). Protocol 0.4.4: `TurnRequest.commandBudget`, event
+`command_budget_reached`.
+
+- **Command budget:** every `run_command` the turn presents (prompted or auto-approved) counts; once the budget
+  is used, further calls are denied to the model with "command budget for this turn exhausted; stop running
+  commands, finish edits and summarize" (TrueForge prefixes "User denied tool call:"), without a prompt, and the
+  panel lists "command budget reached (N per turn): <command>". Edits are never limited.
+- **Auto-approval narrowed** to bare `pytest`, `python -m pytest` (python, python3, python3.N), `git status`,
+  `git diff`, with no shell operators, no `NAME=value` prefix and no path before the program (a path could name
+  any workspace script). `python -c` and `flask` stay listed (no ⚠) but always ask.
+- **Argument-shape hint:** a `propose_edit` refused for an argument error (`INVALID_ARGS`, `INVALID_EDIT`,
+  `OUTSIDE_WORKSPACE`) on a file that already had one in the turn gets the exact shape with a minimal example.
+  Content errors (`OLD_TEXT_NOT_FOUND`, `STALE_BASE`, …) do not.
+- **Mock e2e Task G** (`scripts/e2e-mock.sh`): the scripted model sends a malformed edit twice, then 5 commands;
+  checks 3 shown / 2 refused, the auto-approval split, the hint and the refusals reaching the model, no file
+  changed. The agent instructions are unchanged (still "2 run_command calls"), so tomorrow's run measures the
+  harness changes alone.
+
+| Check | Result |
+|---|---|
+| `npm --prefix src/harness test` | 98/98 (new: budget ×4, narrowed auto-approval ×2, argument hint ×2) |
+| `npm --prefix src/harness run test:integration` (fresh TrueForge 0.185.1) | 17/17 |
+| `scripts/e2e-mock.sh` / `--auto-approve-safe-commands` | 20/20 / 20/20 (new Task G, 5 checks) |
+| `scripts/test-extension.sh` | 4/4 (new: "command budget reached" panel state; `commandBudget` defaults 3/1 and reaches the harness) |
+| `scripts/test-extension-e2e.sh` | 4/4 |
+| `tsc -p contracts`, extension compile | clean (protocol 0.4.4) |
+| `scripts/render-writeup.sh` | 3 pages |
+| Fresh clone of `docs/readme-final` following the README literally (temp dir, mock only) | ✅ in 132 s after `npm ci` caches: build, Flask workspace from the README commands, `e2e-mock.sh` 20/20 and 20/20 with auto-approval, 98/98 unit, 17/17 integration, `test-extension-e2e.sh` 4/4 (stands in for F5); the clone is in `/tmp/forge-readme-*` |
+
 ## Task B tuning round (2026-11-19, branch harness/p10-task-b-tuning)
 
 Goal: ≤ 3 command approvals, 1 review per file, all 6 checks. Two real Task B runs (setting off) and one Task A
@@ -93,9 +129,8 @@ Causes:
   re-measured with a real Task B run: the two authorised runs were used and a third would exceed today's NVIDIA
   cap (203 of 250 used).
 - After its 2 test runs, B #3 still ran 5 more commands (4 Unrestricted: `cd …`, a here-doc, `python -m flask`),
-  so instructions alone do not enforce the budget with this model. Options for you: Deny Unrestricted prompts in
-  the video (DEMO-SCRIPT), turn on `forge.autoApproveSafeCommands` (listed pytest runs stop prompting), or have
-  the harness refuse `run_command` after N calls per turn (not built).
+  so instructions alone do not enforce the budget with this model. Decided afterwards: a harness-enforced
+  command budget, narrowed auto-approval ON for the video and Deny on ⚠ Unrestricted (see "Guardrails round").
 
 Model requests today: NVIDIA 203 (13 direct probes; 2 TrueForge probe + 53 tasks in the first real run; 61 + 71 + 3
 in this round); Groq 13 (9 direct probes, 2 TrueForge probe, 2 in Task C); OpenRouter 1 (probe). No 429s.
@@ -178,6 +213,8 @@ merged into `main` with `--no-ff`.
 | harness/p8-model-config | provider examples (Gemini, Groq, OpenRouter, Anthropic, OpenAI), reasoning efforts |
 | docs/submission | README, LICENSE, notices, write-up + PDF script, demo script, manual test, checklist, `.gitignore` |
 | editor/e7-notifications, editor/e8-test-cache | fallback/error notifications; shared VS Code test download |
+| harness/p11-command-budget | command budget (protocol 0.4.4), narrowed auto-approval, argument-shape hint, mock e2e Task G, editor settings and panel line |
+| docs/readme-final | README rewritten for a fresh clone (demo first), settings table, guardrails; write-up, demo script (auto-approve on), this file |
 | harness/p10-task-b-tuning | forge-coder instructions (two rounds), `forge.autoApproveSafeCommands` (protocol 0.4.3), `edits`-as-string fix, approvals per task in the smoke run, demo script timings |
 | harness/p7-real-model | real-model setup (NVIDIA primary, Groq fallback, OpenRouter spare), `scripts/model-meter.mjs`, `--meter-log`, `run_command` description, NVIDIA 401 regression test, docs |
 | harness/p9-real-model-readiness | inline agent stops after a rejection |
@@ -204,11 +241,19 @@ merged into `main` with `--no-ff`.
 14. Auto-approval of listed commands lives in the harness (it owns the list), opt-in per turn from the editor setting;
     protocol 0.4.3. `python -c` is on the list, so auto-approval can run arbitrary Python: documented, default off.
 15. Model quirks are handled in the harness when general (JSON-string `edits`), not with model-specific prompts.
+16. The command budget is enforced in the harness, not the prompt: every presented command counts (asked, denied or
+    auto-approved), so auto-approval cannot exceed it; default 3 for the agent, 1 inline (two settings,
+    `forge.commandBudget.agent` / `.inline`, because the defaults differ by mode).
+17. Auto-approval no longer covers `python -c` and `flask` (both run arbitrary code); they keep the "listed" label
+    (no ⚠) but always ask. Supersedes the `python -c` caveat of decision 14.
+18. The argument-shape hint is added from the second argument-error refusal on the same file in a turn (the first
+    refusal stays short); keyed by the path string the model sent.
 
 ## Known issues and risks
 
 - **Real models checked in a few runs.** Task B varies a lot between runs with this model (49–71 requests,
-  133–259 s, 7–17 command approvals, 7–12 reviews); in the video, expect several prompts (see DEMO-SCRIPT). NVIDIA's free tier is ≈ 40 requests/min account-wide: Task B peaked well below that, but two Task B
+  133–259 s, 7–17 command approvals, 7–12 reviews, all before the command budget). The budget caps commands at 3
+  per turn but does not limit reviews; its effect on a real run is not yet measured. NVIDIA's free tier is ≈ 40 requests/min account-wide: Task B peaked well below that, but two Task B
   runs back to back could approach it (429s wait for `Retry-After`, then one retry, then fallback to Groq, whose
   8000 tokens/min limit is small for Task B's ≈ 33k-token requests).
 - Compaction is configured but never triggered by the demo tasks.
@@ -229,9 +274,12 @@ merged into `main` with `--no-ff`.
 1. ~~Choose models + export keys~~ — done (`config/models.json`; keys from `~/.forge-keys.env`).
 2. ~~Setup + one real-model rehearsal~~ — done 2026-11-19, A/B/C green (see "Real-model run"). For the video:
    start TrueForge (README step 2) on a fresh database, `source ~/.forge-keys.env`, `node scripts/setup-trueforge.mjs`.
-   Decide for the video: Deny ⚠ Unrestricted prompts and/or turn on `forge.autoApproveSafeCommands` (see
-   `docs/DEMO-SCRIPT.md`, "Task B: what to expect"). Optional: one more real Task B run tomorrow to measure the
-   `edits`-string fix (≈ 50–70 NVIDIA requests).
+   Video settings decided: `forge.autoApproveSafeCommands` on (narrowed list), budget 3, Deny ⚠ Unrestricted
+   (see `docs/DEMO-SCRIPT.md`, "Task B: what to expect").
+   **Morning, once authorised: one real Task B validation run** with those settings
+   (`node scripts/smoke-real-model.mjs --tasks B --auto-approve-safe-commands --deny-unrestricted --meter-log …`, ≈ 30–70 NVIDIA
+   requests) to measure the budget, the `edits`-string fix and the hint; then fill the expected numbers in
+   DEMO-SCRIPT.
 3. **Manual VS Code checklist:** `docs/MANUAL-TEST.md` (≈ 20 min).
 4. **Push:**
    ```bash

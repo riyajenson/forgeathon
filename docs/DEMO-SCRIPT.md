@@ -29,14 +29,18 @@ node scripts/setup-trueforge.mjs                                                
    minimap off, close unrelated panels, OS notifications off (keep VS Code notifications on: the review
    prompt is one). 1920×1080 recording.
 6. Have the three instructions in a text file to paste (exact wording below).
-7. Decide the Task B command setting before recording (see "Task B: what to expect"). Default and measured:
-   `forge.autoApproveSafeCommands` **off**.
+7. Settings in the Extension Development Host for the recording:
+   - `"forge.autoApproveSafeCommands": true`. This auto-approves only `pytest`, `python -m pytest`,
+     `git status` and `git diff`.
+   - `forge.commandBudget.agent` at its default of `3`.
+   - Every diff is still reviewed. `python -c`, `flask` and ⚠ Unrestricted commands still ask.
 
-## Task B: what to expect (measured with the real models, 2026-11-19)
+## Task B: what to expect
 
-Models: NVIDIA `nemotron-3-ultra-550b-a55b` (primary), Groq `qwen3.8-27b` (fallback). Task B is long and
-varies between runs; all three real runs passed every check, but none met the ≤ 3 approvals / 1 review per
-file target:
+Models: NVIDIA `nemotron-3-ultra-550b-a55b` (primary), Groq `qwen3.8-27b` (fallback).
+
+**Measured on 2026-11-19, before the guardrails, with every prompt allowed and auto-approval off.** All
+three runs passed every check, but none met the target of ≤ 3 approvals and 1 review per file:
 
 | Run | First diff after | Whole turn | Reviews (per file) | Command prompts (of which ⚠ Unrestricted) |
 |---|---|---|---|---|
@@ -44,21 +48,37 @@ file target:
 | 2 (tuned instructions) | 39 s | 259 s | 12 (`cli.py` 7, `test_cli.py` 4, `cli.rst` 1) | 17 (5) |
 | 3 (tuned again) | 39 s | 240 s | 11 (`cli.py` 8, `test_cli.py` 2, `cli.rst` 1) | 7 (4) |
 
-Run 3's extra `cli.py` reviews came mostly from the model sending `edits` as a JSON string, which the harness
-then refused; that is fixed since (accepted as the array), but not yet re-measured on a real Task B run.
+Most of run 3's extra `cli.py` reviews came from the model sending `edits` as a JSON string, which the
+harness refused.
 
-**Clicks during Task B (setting off):**
-- Each diff: **Accept All** (expect about 4–12 reviews; most are `src/flask/cli.py`).
-- Command prompt **without** a warning (`python -m pytest tests/test_cli.py…`): **Allow once**.
-- Command prompt with **⚠ Unrestricted** (`cd …`, pipes, here-docs, `python -m flask …`): **Deny**. The agent's
-  instructions forbid these; the refusal reason goes back to the model. (Untested with the real model: the
-  measured runs allowed everything.)
-- Measured when allowing everything: 7–17 command prompts (4–5 of them ⚠ Unrestricted). Denying the Unrestricted
-  ones should leave fewer, but how many is not measured; record what happens.
+**Fixed since run 3, in the harness, on the mock model only.** Not yet measured on a real Task B run; one
+validation run is planned before recording.
 
-Optional, to shorten the shot: `"forge.autoApproveSafeCommands": true` in the Extension Development Host's
-settings. Listed commands then appear in the panel as **"auto-approved: python -m pytest …"** with no prompt;
-only ⚠ Unrestricted commands still ask (Deny them), and every diff is still reviewed. Say so on screen if used.
+- `edits` sent as a JSON string is now accepted.
+- A second argument error on the same file now spells out the exact argument shape.
+- A hard command budget of 3 per turn: further commands are refused without a prompt.
+- Narrowed auto-approval.
+
+**Expected with the recording settings:**
+
+- **At most 3 commands** in the turn, a ceiling set by the harness. Any further ones show as a **"command
+  budget reached (3 per turn): …"** line in the panel, with nothing to click.
+- **Test runs** (`python -m pytest tests/test_cli.py…`) show as **"auto-approved: …"**, with nothing to click.
+- **Command clicks: 0–3**, most likely 0–1.
+- **Reviews:** aim for 3 (`src/flask/cli.py`, `tests/test_cli.py`, `docs/cli.rst`), one per file. Up to about 8
+  if the model splits its edits.
+
+**Clicks during Task B:**
+
+| What appears | Click |
+|---|---|
+| Each diff | **Accept All** |
+| Command prompt **without** a warning (`python -c …`, `flask …`) | **Allow once** |
+| Command prompt with **⚠ Unrestricted** (`cd …`, pipes, here-docs, `python -m flask …`) | **Deny**. The refusal goes back to the model. This was not tested with the real model, because the measured runs allowed everything |
+| "auto-approved: …" and "command budget reached …" lines | Nothing; they are shown only |
+
+Say once on screen: "Test runs are auto-approved; anything else asks; the harness caps commands at three per
+turn."
 
 ## Shot list
 
@@ -68,7 +88,7 @@ only ⚠ Unrestricted commands still ask (Deny them), and every diff is still re
 | 0:12–0:45 | **Task A, uncut from instruction to diff** (measured 8.5–11.4 s, 3 requests) — open `src/flask/helpers.py`, select `get_debug_flag` (lines 28–33), `Ctrl+Alt+I`, paste instruction A, Enter → progress → diff editor + "Review N hunks" (the real model produced 1 hunk) → **Choose Hunks** (show the picker) → accept | Point at the per-hunk picker. |
 | 0:45–0:55 | **Task A verification** — terminal: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` → `False` | |
 | 0:55–1:40 | **Task B, uncut from instruction to the first diff** (≈ 40 s) — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: 7,456/8,000 tokens, `src/flask/cli.py` ranked first with its reason, 7 skipped) → tool calls (read_file, search_workspace, …) → first diff (`src/flask/cli.py`) → **Accept All** | "No file names in the request; the agent finds the files itself." |
-| 1:40–2:25 | **Task B, rest of the turn, model waiting cut** (real time ≈ 3–3.5 min) — each further diff → **Accept All** (`cli.py`, `tests/test_cli.py`, `docs/cli.rst`); pytest prompt → **Allow once** (or "auto-approved" line); ⚠ Unrestricted prompt → **Deny** → summary with the test result | Keep each click on screen ~2 s; cut only the waiting between them. |
+| 1:40–2:25 | **Task B, rest of the turn, model waiting cut** (real time was 2–4.5 min before the budget; expected shorter now, not measured) — each further diff → **Accept All** (`cli.py`, `tests/test_cli.py`, `docs/cli.rst`); "auto-approved: python -m pytest …" line (no click); any ⚠ Unrestricted prompt → **Deny**; a "command budget reached" line if one appears → summary with the test result | "Test runs are auto-approved; anything else asks; the harness caps commands at three per turn." Keep each click on screen ~2 s; cut only the waiting between them. |
 | 2:25–2:37 | **TrueForge session (required for eligibility)** — panel button **Open TrueForge session** (or the Sessions tab): hold ~10 s on Task B's turn with its list of tool calls (read/search/propose_edit/run_command, and `call_tool` if the model used deferred tools) and the approvals | Brief; note the timestamp for the write-up. |
 | 2:37–2:57 | **Task B verification** — `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (shows `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | |
 | 2:57–3:10 | **Cancel** — panel: send any request (e.g. "Add type hints to every function in src/flask/cli.py"), press **Stop** while it streams or at the first review → status cancelled, review closed; `git diff --stat` unchanged from before | "Stop cancels the TrueForge turn; nothing half-applied." |

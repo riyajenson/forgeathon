@@ -4,6 +4,7 @@
 // Usage: node scripts/smoke-real-model.mjs [--flask DIR] [--tasks A,B,C] [--config config/models.json] [--meter-log FILE] [--keep]
 // --auto-approve-safe-commands: Tasks B and G with TurnRequest.autoApproveSafeCommands (pytest, python -m pytest,
 // git status, git diff are not prompted).
+// --deny-unrestricted: deny commands flagged unrestricted instead of allowing them (as in the demo video).
 // Task G (mock model only, scripts/e2e-mock.sh): the guardrails. The scripted model sends a malformed propose_edit
 // twice on one file, then five commands; the harness must refuse the last two by the command budget (3) without
 // prompting, and spell out the propose_edit argument shape in the second refusal.
@@ -110,8 +111,9 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
       case 'command_request': {
         if (e.autoApproved) { stats.autoApproved++; console.log(`  [${task}] command ${e.command} → auto-approved`); break; }
         stats.commandPrompts++;
-        console.log(`  [${task}] command ${e.command}${e.unrestricted ? ' (UNRESTRICTED)' : ''} → allow`);
-        await h.submitReview(req({ sessionId, turnId, callId: e.callId, kind: 'command' as const, allow: true }));
+        const allow = !(e.unrestricted && process.argv.includes('--deny-unrestricted'));
+        console.log(`  [${task}] command ${e.command}${e.unrestricted ? ' (UNRESTRICTED)' : ''} → ${allow ? 'allow' : 'deny'}`);
+        await h.submitReview(req({ sessionId, turnId, callId: e.callId, kind: 'command' as const, allow }));
         break;
       }
       case 'command_budget_reached': stats.budgetReached++; console.log(`  [${task}] command ${e.command} → refused: command budget (${e.budget}) reached`); break;

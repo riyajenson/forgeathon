@@ -102,6 +102,20 @@ test('cancel kills a running command', async () => {
   assert.ok(r.ok && /killed: turn cancelled/.test(r.text));
 });
 
+test('a workspace virtualenv comes first on PATH', async () => {
+  const bin = path.join(root, '.venv', 'bin');
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(bin, 'python'), '#!/bin/sh\necho venv-python\n', { mode: 0o755 });
+  try {
+    const args = { command: 'python' };
+    approve(args);
+    const r = await runCommandTool(ctx, args);
+    assert.ok(r.ok && /--- stdout ---\nvenv-python/.test(r.text), r.ok ? r.text : r.message);
+  } finally {
+    await fs.rm(path.join(root, '.venv'), { recursive: true, force: true });
+  }
+});
+
 test('warns when the turn left unsaved editor changes', async () => {
   scope.unsavedPaths.add('src/app.py');
   const args = { command: 'true' };

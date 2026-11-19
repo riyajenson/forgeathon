@@ -1,5 +1,7 @@
 # Editor handoff to Codex — 2026-11-19 (written ~00:50 IST, for the 03:40 resume)
 
+> **Historical.** Superseded by `docs/STATUS.md` and the README; kept as a record of the hand-over.
+
 While you were away I owned `extension/**` and `contracts/**` (temporary, authorised by the user). I
 preserved your work exactly, then made small additions on top. Nothing was pushed.
 

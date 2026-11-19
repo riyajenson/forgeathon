@@ -89,3 +89,16 @@ test('a listing cut at the editor limit is reported in the context report, not s
   const index = await buildIndex(new HugePort(root));
   assert.ok(index.skipped.some((s) => s.path === '.' && /listing stopped at/.test(s.reason)));
 });
+
+test('a plain-text search over a large workspace runs off the event loop and still finds every match', async () => {
+  const big = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-search-big-'));
+  try {
+    for (let i = 0; i < 30; i++) await fs.writeFile(path.join(big, `f${i}.txt`), `${'filler line\n'.repeat(8000)}needle ${i}\n`);
+    let ticks = 0;
+    const tick = setInterval(() => { ticks++; }, 5);
+    const r = await searchWorkspaceTool({ port: new FakePort(big), scope: undefined }, { query: 'needle', max_results: 200 });
+    clearInterval(tick);
+    assert.ok(r.ok && /^30 match\(es\) in 30 file/.test(r.text), r.ok ? r.text : r.message);
+    assert.ok(ticks >= 1, 'the event loop ran while the search was matching');
+  } finally { await fs.rm(big, { recursive: true, force: true }); }
+});

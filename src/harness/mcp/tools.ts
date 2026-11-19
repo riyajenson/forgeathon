@@ -160,9 +160,13 @@ export async function searchWorkspaceTool(ctx: ToolContext, args: SearchArgs): P
     if (snap.text.length > SEARCH_MAX_FILE_CHARS || isBinaryText(snap.text)) { notText++; continue; }
     files.push({ path, text: snap.text });
   }
-  // A plain-text pattern is linear; a model-supplied regex can backtrack for minutes, so it runs in a
-  // worker thread that is terminated at the deadline and never blocks the editor's extension host.
-  const found = args.regex ? await matchInWorker(files, source, flags, max) : matchFiles(files, source, flags, max);
+  // A model-supplied regex can backtrack for minutes, so it runs in a worker thread that is terminated at the
+  // deadline. A plain-text pattern is linear, but over a large workspace it still takes long enough to stall
+  // the editor's extension host, so it also moves to the worker above SEARCH_INLINE_MAX_CHARS.
+  const totalChars = files.reduce((n, f) => n + f.text.length, 0);
+  const found = args.regex || totalChars > SEARCH_INLINE_MAX_CHARS
+    ? await matchInWorker(files, source, flags, max)
+    : matchFiles(files, source, flags, max);
   if (!found) {
     return fail('TIMEOUT', `regex search stopped after ${SEARCH_REGEX_TIMEOUT_MS / 1000} s (the pattern backtracks too much); use a simpler pattern or regex=false`);
   }
@@ -180,6 +184,8 @@ export async function searchWorkspaceTool(ctx: ToolContext, args: SearchArgs): P
 }
 
 export const SEARCH_REGEX_TIMEOUT_MS = 2000;
+/** Plain-text searches over more text than this run in the worker instead of on the editor's thread. */
+export const SEARCH_INLINE_MAX_CHARS = 2_000_000;
 
 interface SearchFile { path: string; text: string }
 interface SearchResult { hits: string[]; filesWithHits: number; truncated: boolean }

@@ -399,9 +399,8 @@ test('run_command: approval prompt, execution, changed-file report', async () =>
     assert.equal(doneOf(events).status, 'done');
     assert.equal(prompt?.command, 'echo made > made.txt && echo ran');
     assert.equal(prompt?.cwd, '.');
-    assert.equal(await fs.readFile(path.join(root, 'made.txt'), 'utf8'), 'made\n');
-    assert.ok(ofType(events, 'status').some((s) => /command exited 0; changed files: made\.txt/.test(s.detail ?? '')));
-    assert.ok(mock.requests.some((r) => /Files changed by the command: made\.txt/.test(lastToolMessage(r) ?? '')));
+    await assert.rejects(fs.access(path.join(root, 'made.txt')));
+    assert.ok(mock.requests.some((r) => /Read-only file system|Verification requires Linux/.test(lastToolMessage(r) ?? '')));
   });
 });
 

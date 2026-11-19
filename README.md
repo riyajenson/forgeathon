@@ -42,6 +42,8 @@ extension is tied to a provider.
 - **VS Code** on Windows with the **WSL** extension (the extension host runs in WSL).
 - **Node.js ≥ 22.14** in WSL (e.g. `nvm install 24`), npm, git.
 - **Python ≥ 3.10** with `venv` for the Flask demo workspace.
+- **bubblewrap** in Linux/WSL for protected verification commands. The tool fails closed
+  when protection is unavailable; see [execution safety](docs/harness/EXECUTION-SAFETY.md).
 
 ## Quick start without model keys (demo mode)
 

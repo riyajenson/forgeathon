@@ -79,6 +79,11 @@ export class SessionScope {
     return this.inFlight.size;
   }
 
+  /** Keep the session occupied until all admitted operations have actually finished. */
+  async waitForIdle(): Promise<void> {
+    while (this.inFlight.size) await Promise.allSettled([...this.inFlight]);
+  }
+
   /** Resolves when every tracked tool call has settled, or after `timeoutMs`. Returns true if all settled. */
   async settle(timeoutMs: number): Promise<boolean> {
     if (this.inFlight.size === 0) return true;

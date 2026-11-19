@@ -58,7 +58,7 @@ export class TurnRun {
   private readonly waiters = new Map<string, ReviewWaiter>();
   private readonly decided = new Map<string, ReviewDecision>();
   private finishedPromise: Promise<void> | undefined;
-  private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, attempts: [] as AttemptRecord[] };
+  private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, commandPrompts: 0, autoApproved: 0, attempts: [] as AttemptRecord[] };
 
   constructor(readonly req: TurnRequest, private readonly deps: TurnDeps) {
     this.buffer = new TurnEventBuffer({ sessionId: req.sessionId, turnId: req.turnId });
@@ -93,6 +93,7 @@ export class TurnRun {
       time: new Date().toISOString(), sessionId: this.req.sessionId, turnId: this.req.turnId, mode: this.req.mode,
       status: done && done.t === 'done' ? done.status : 'error', ms, attempts: this.log.attempts,
       retries: this.log.retries, fallback: this.log.fallback, toolCalls: this.log.toolCalls, reviews: this.log.reviews,
+      commandPrompts: this.log.commandPrompts, autoApprovedCommands: this.log.autoApproved,
       inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
     });
   }
@@ -353,6 +354,15 @@ export class TurnRun {
         if (!command) { deny('INVALID_ARGS: command must be a non-empty string'); continue; }
         this.buffer.emit({ t: 'status', state: 'awaiting_review', detail: command.slice(0, 120) });
         const listed = isListedCommand(command);
+        if (listed && this.req.autoApproveSafeCommands === true) {
+          // Opt-in: a listed verification command (no shell operators) is allowed without a prompt, and shown.
+          this.log.autoApproved++;
+          this.buffer.emit({ t: 'command_request', callId: call.id, command, cwd, autoApproved: true });
+          scope.commands.record(approvalKey('run_command', call.toolArgs), { callRef: { sessionId: this.req.sessionId, turnId: this.req.turnId, callId: call.id }, command, cwd });
+          decisions.push({ id: call.id, threadId: call.threadId, allow: true });
+          continue;
+        }
+        this.log.commandPrompts++;
         this.buffer.emit({ t: 'command_request', callId: call.id, command, cwd, ...(listed ? {} : { unrestricted: true, warning: UNRESTRICTED_WARNING }) });
         const d = await this.waitFor(call.id, { kind: 'command', hunkIds: [] });
         if (d === 'cancelled' || d.kind !== 'command') return 'cancelled';

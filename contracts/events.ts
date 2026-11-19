@@ -12,7 +12,8 @@ type EventBody =
   | { t: 'tool_result'; callId: CallId; ok: boolean; summary: string }
   | { t: 'context_report'; report: ContextReport }
   | { t: 'review_request'; proposal: EditProposal }
-  | { t: 'command_request'; callId: CallId; command: string; cwd: string; unrestricted?: boolean; warning?: string }
+  // autoApproved (0.4.3): already allowed by the adapter (TurnRequest.autoApproveSafeCommands); show it, do not prompt.
+  | { t: 'command_request'; callId: CallId; command: string; cwd: string; unrestricted?: boolean; warning?: string; autoApproved?: boolean }
   | { t: 'edit_applied'; result: ApplyTextResult }
   | { t: 'fallback'; fromModel: string; toModel: string; reason: string }
   | { t: 'error'; error: ProtocolError }

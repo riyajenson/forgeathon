@@ -3,7 +3,12 @@ import type { EditorBridge, ReviewDecision } from './edits';
 import type { HarnessEvent } from './events';
 import type { Request, Response, SessionId, TurnRef } from './protocol';
 
-export type TurnRequest = TurnRef & PromptContext & { mode: 'inline' | 'agent'; instruction: string };
+export type TurnRequest = TurnRef & PromptContext & {
+  mode: 'inline' | 'agent'; instruction: string;
+  /** 0.4.3, default off: the adapter allows listed (not unrestricted) commands itself and reports them with
+   * command_request.autoApproved. Unrestricted commands and edits are never auto-approved. */
+  autoApproveSafeCommands?: boolean;
+};
 export type SessionStatus = {
   sessionId: SessionId; state: 'open' | 'closed'; activeTurnId: string | null;
 };

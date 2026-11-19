@@ -30,7 +30,7 @@ extension is tied to a provider.
 |---|---|
 | `extension/` | VS Code extension: commands, inline review, agent panel, `EditorPort` (editor reads/writes) |
 | `src/harness/` | `forge-harness`: TrueForge adapter (turns, approvals, cancel, retry, fallback), MCP server and tools, context engine, review core |
-| `contracts/` | Shared TypeScript contract between extension and harness (protocol 0.4.2) |
+| `contracts/` | Shared TypeScript contract between extension and harness (protocol 0.4.3) |
 | `agent/` | **TrueForge agent definitions**: `forge-coder.json` (agent mode), `forge-inline.json` (inline edit) |
 | `config/` | `models.example.json` (real providers), `models.mock.example.json` (demo model) |
 | `scripts/` | setup, demo mode, end-to-end checks, real-model smoke test, extension tests |

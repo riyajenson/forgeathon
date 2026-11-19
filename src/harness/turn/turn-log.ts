@@ -26,6 +26,9 @@ export interface TurnRecord {
   fallback: boolean;
   toolCalls: number;
   reviews: number;
+  /** Commands the user was asked to approve, and listed commands allowed by autoApproveSafeCommands. */
+  commandPrompts: number;
+  autoApprovedCommands: number;
   inputTokens: number;
   outputTokens: number;
 }

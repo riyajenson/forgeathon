@@ -53,10 +53,21 @@ OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1"]' MODEL_HTTP_CONNECT_TIMEOUT_MS=3000 MO
 echo $! > "$state/trueforge.pid"
 [ "${1:-}" = "--background" ] || trap 'echo; stop_all' EXIT INT TERM
 
+# Ready means: the scripted model is listening, TrueForge's health check and its API (not only the UI root)
+# answer with 2xx, and they keep answering for three consecutive checks.
+ready() {
+  ss -ltn "sport = :$model_port" | grep -q LISTEN &&
+    curl -sf -o /dev/null --max-time 3 "$TRUEFORGE_URL/healthz" &&
+    curl -sf -o /dev/null --max-time 3 "$TRUEFORGE_URL/api/v1/models"
+}
 echo -n "waiting for TrueForge on $TRUEFORGE_URL"
-for _ in $(seq 1 90); do curl -s -o /dev/null "$TRUEFORGE_URL/" && break; echo -n .; sleep 1; done
+ok=0
+for _ in $(seq 1 180); do
+  if ready; then ok=$((ok + 1)); [ "$ok" -ge 3 ] && break; else ok=0; echo -n .; fi
+  sleep 0.5
+done
 echo
-curl -s -o /dev/null "$TRUEFORGE_URL/" || { echo "TrueForge did not start; see $state/trueforge.log" >&2; exit 1; }
+[ "$ok" -ge 3 ] || { echo "TrueForge or the scripted model did not become ready; see $state/trueforge.log and $state/demo-model.log" >&2; exit 1; }
 setup
 
 cat <<EOF

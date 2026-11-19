@@ -9,6 +9,8 @@ export interface ModelConfig {
   modelId: string;
   contextLength?: number;
   maxOutputTokens?: number;
+  /** Reasoning efforts the model supports (TrueForge warns when none are configured). */
+  reasoningEfforts?: string[];
 }
 
 export interface ProviderConfig {
@@ -102,6 +104,7 @@ export function planProvider(p: ProviderConfig, env: NodeJS.ProcessEnv, usedProv
     properties: {
       ...(m.contextLength ? { contextLength: m.contextLength } : {}),
       ...(m.maxOutputTokens ? { maxOutputTokens: m.maxOutputTokens } : {}),
+      ...(m.reasoningEfforts?.length ? { reasoningEfforts: m.reasoningEfforts } : {}),
     },
   }));
   const auth = key ? { auth: { apiKey: key } } : {};

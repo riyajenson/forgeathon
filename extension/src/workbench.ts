@@ -51,6 +51,9 @@ export class Workbench implements vscode.Disposable {
   showPanel() { this.panel.open(); }
   choose() { this.review.choose(); }
   decideAll(choice: 'accept' | 'reject') { this.review.decideAll(choice); }
+  /** A review prompt, hunk list or pending decision is still showing. */
+  reviewControlsOpen() { return this.review.open; }
+  newConversation() { this.controller?.newConversation(); this.panel.notice('New conversation: the next request starts a new session.'); }
   async undo() {
     const id = this.edits.latestUndoId();
     if (id) await this.edits.undo(id); else this.notice('No reviewed edit to undo.');

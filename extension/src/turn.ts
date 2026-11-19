@@ -15,6 +15,8 @@ export class TurnController {
   private conversation?: string;
   constructor(private harness: ForgeHarness, private version: Version, private root: string,
     private edits: EditReview, private view: TurnView) {}
+  /** The next agent turn starts a new TrueForge session instead of continuing the conversation. */
+  newConversation() { if (!this.active) this.conversation = undefined; }
   private envelope<T>(body: T): Request<T> { return { version: this.version, requestId: randomUUID(), body }; }
   async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: {autoApproveSafeCommands?: boolean; commandBudget?: number} = {}) {
     if (this.active) throw new Error('A turn is already in progress');

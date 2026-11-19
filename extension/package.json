@@ -43,6 +43,10 @@
       {
         "command": "forgeathon.stop",
         "title": "Forge-a-thon: Stop Turn"
+      },
+      {
+        "command": "forgeathon.newConversation",
+        "title": "Forge-a-thon: New Agent Conversation"
       }
     ],
     "keybindings": [

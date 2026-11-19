@@ -57,4 +57,21 @@ recording or submission). The "Fix" column lists the branch work; commit hashes 
 
 ## Fix log
 
-Filled in after the fixes; see the end of this file.
+| Finding | Commits |
+|---|---|
+| B2 | `4c429ec` (+ turn-level race in `5f4a9cb`) |
+| B3 | `5f4a9cb` |
+| B4 | `4c429ec`, `b24f272` (contract flag), `87d5ca9` (editor warning), `61bc700`, README/write-up in `3e20525` |
+| I1 | `9315123` |
+| I2 / cancellation bounds | `b241ae5`, `5f4a9cb` |
+| I3 | `acc9f62` |
+| I4 | `9315123` (ignore policy, credentials files), `612ddb8` (redaction) |
+| I5 | `9315123`, `492c6ef` |
+| I6 | `46ae7be`, `acc9f62` (failed_before_apply), docs claims in `3e20525` and the status/checklist commit |
+| I7 | `612ddb8` |
+| I8 | `3e20525` (demo script) |
+| I9 | `3e20525` (README install section), `46ae7be` (smoke default), checklist made self-contained |
+| I10 | `e6fd9fa`, `87d5ca9` |
+| N1 | `b24f272` · N2 `e2dd14e`/`acc9f62`/`87d5ca9` · N3 `3f9fb7e` · N4 `e62dc18` · N5 `e62dc18` |
+
+Verification after the fixes is in `docs/STATUS.md` ("Final verification on main after the review fixes").

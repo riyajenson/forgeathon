@@ -23,6 +23,8 @@ export interface HarnessOptions {
   cancelTimeoutMs?: number;
   /** No TrueForge events for this long while running → cancel and treat as model unavailable. Default 45000 ms. */
   watchdogMs?: number;
+  /** How long a finished attempt waits for its tool calls to settle before deciding on retry/fallback. Default 10000 ms. */
+  settleMs?: number;
   /** Delay before the single retry of an unavailable model. Default 2000 ms. */
   retryDelayMs?: number;
   /** Token budget for automatically assembled context in agent mode (setting forge.context.budgetTokens). Default 8000. */
@@ -156,7 +158,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       runtimeSession: async (agent, fresh) => {
         const existing = session.runtime.get(agent);
         if (existing && !fresh) return existing;
-        const { data } = await client.sessions.create({ agent: { name: agent }, metadata: { source: 'forge-vscode', appSession: session.id } }, { maxRetries: 0 });
+        const { data } = await client.sessions.create({ agent: { name: agent }, metadata: { source: 'forge-vscode', appSession: session.id } }, { maxRetries: 0, timeoutInSeconds: 30 });
         session.runtime.set(agent, data.id);
         return data.id;
       },
@@ -165,7 +167,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       watchdogMs: this.options.watchdogMs ?? 45000,
       contextBudgetTokens: this.options.contextBudgetTokens ?? 8000,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
-      settleMs: 10000,
+      settleMs: this.options.settleMs ?? 10000,
       turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,
     });
     session.turns.set(b.turnId, run);
@@ -237,7 +239,7 @@ class ForgeHarnessImpl implements ForgeHarness {
     let p = this.models.get(agent);
     if (!p) {
       p = (async () => {
-        const page = await this.client!.agents.list({ agentName: agent });
+        const page = await this.client!.agents.list({ agentName: agent }, { maxRetries: 0, timeoutInSeconds: 15 });
         const found = page.data.find((a) => a.name === agent);
         return found?.manifest.model.name ?? agent;
       })();

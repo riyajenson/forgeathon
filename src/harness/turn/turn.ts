@@ -2,6 +2,7 @@
 // and translates everything into the shared HarnessEvent stream.
 import type { CancelStatus, EditProposal, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
+import { isListedCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
@@ -133,10 +134,22 @@ export class TurnRun {
       for (const w of this.waiters.values()) w.resolve('cancelled');
       this.waiters.clear();
       this.wakeRetry?.();
+      // Safety net: whatever the run is waiting on, the turn ends (once) within a bounded time.
+      const limit = this.deps.cancelTimeoutMs * 2 + this.deps.settleMs + 1000;
+      const guard = setTimeout(() => {
+        if (this.done) return;
+        this.buffer.emit({ t: 'status', state: 'cancelling', detail: 'stopped locally; TrueForge did not confirm in time. No further edits or commands will run.' });
+        this.finishCancelled();
+      }, limit);
+      guard.unref?.();
+      void this.finishedPromise?.finally(() => clearTimeout(guard));
       const attempt = this.attempt;
       if (!attempt || attempt.isFinished) {
-        await this.finishedPromise;
-        return 'confirmed';
+        const finished = await Promise.race([
+          (this.finishedPromise ?? Promise.resolve()).then(() => true),
+          new Promise<false>((r) => setTimeout(() => r(false), this.deps.cancelTimeoutMs).unref?.()),
+        ]);
+        return finished ? 'confirmed' : 'unconfirmed';
       }
       return attempt.cancel();
     })();
@@ -174,16 +187,27 @@ export class TurnRun {
       scope.onContext = (report) => emit({ t: 'context_report', report });
       scope.onCommand = (r) => emit({
         t: 'status', state: 'running',
-        detail: `command exited ${r.exitCode ?? 'without code'}; changed files: ${r.changedFiles.length ? r.changedFiles.join(', ') : 'none'}`.slice(0, 300),
+        detail: (r.changedFiles.length
+          ? `command exited ${r.exitCode ?? 'without code'}; it changed files outside review: ${r.changedFiles.join(', ')}`
+          : `command exited ${r.exitCode ?? 'without code'}; no files changed`).slice(0, 300),
       });
       this.scope = scope;
       if (this.cancelRequested) scope.cancel();
 
       const attemptStart = Date.now();
       const result = await this.runAttempt(runtimeSessionId, input, scope);
+      // Wait (bounded) for our tool calls to settle before deciding anything.
       const settled = await scope.settle(this.deps.settleMs);
-      if (!settled) this.deps.port.log('warn', `tool calls still running ${this.deps.settleMs} ms after the turn ended`);
+      // Approvals the attempt never used: close the gate so they can never be used later.
+      const unexecuted = scope.closeApprovals();
+      if (result.status !== 'done') scope.cancel();
+      if (!settled) {
+        this.deps.port.log('warn', `tool calls still running ${this.deps.settleMs} ms after the turn ended`);
+        emit({ t: 'status', state: 'running', detail: `${scope.inFlightCount} tool call(s) still running ${Math.round(this.deps.settleMs / 1000)} s after the turn ended; their effect on the workspace is unknown` });
+      }
       const wrote = scope.writes > 0;
+      // An approved write or command that had not finished counts as a write: no retry, no fallback.
+      const mayHaveWritten = wrote || unexecuted > 0 || !settled;
       const effect: ProtocolError['workspaceEffect'] = !settled ? 'unknown' : wrote ? 'changed' : 'unchanged';
 
       if (result.status === 'done' || (result.status === 'cancelled' && this.cancelRequested)) {
@@ -192,7 +216,10 @@ export class TurnRun {
       if (result.status === 'done') {
         return void emit({ t: 'done', status: 'done', ...(result.summary ? { summary: result.summary.slice(0, 2000) } : {}), ...(result.usage ? { usage: result.usage } : {}) });
       }
-      if (result.status === 'cancelled' && this.cancelRequested) return this.finishCancelled(result);
+      if (result.status === 'cancelled' && this.cancelRequested) {
+        if (result.unconfirmed) emit({ t: 'status', state: 'cancelling', detail: 'stopped locally; TrueForge did not confirm in time. No further edits or commands will run.' });
+        return this.finishCancelled(result);
+      }
 
       // Failure: model error, watchdog stop, or a cancellation we did not ask for.
       const message = result.watchdog
@@ -201,7 +228,7 @@ export class TurnRun {
       const cls = result.watchdog ? 'MODEL_UNAVAILABLE' : result.status === 'error' ? classifyTurnError(result.message) : 'OTHER';
 
       this.record(agent, model, runtimeSessionId, result, attemptStart, cls);
-      if (!wrote && !this.cancelRequested && cls !== 'OTHER') {
+      if (!mayHaveWritten && !this.cancelRequested && cls !== 'OTHER') {
         if (cls === 'MODEL_UNAVAILABLE' && !retried && !onFallback) {
           retried = true;
           this.log.retries++;
@@ -209,7 +236,8 @@ export class TurnRun {
           const why = isRateLimited(result.message) ? 'rate limited' : message;
           emit({ t: 'status', state: 'retrying', detail: `${why}; retrying once in ${Math.round(delay / 100) / 10} s` });
           await this.sleep(delay);
-          fresh = false;
+          // A turn TrueForge never confirmed as stopped may still be running: retry in a new session.
+          fresh = result.unconfirmed === true;
           continue;
         }
         if (!onFallback) {
@@ -224,10 +252,12 @@ export class TurnRun {
           continue;
         }
       }
-      const code: ProtocolError['code'] = cls === 'MODEL_AUTH' ? 'model' : cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';
-      const prefix = cls === 'MODEL_AUTH' ? 'Model authentication failed' : cls === 'MODEL_UNAVAILABLE' ? 'Model unavailable' : 'Turn failed';
-      const note = wrote ? ' (no retry or fallback: this turn already changed the workspace)' : onFallback ? ' (fallback model also failed)' : '';
-      return this.fail({ code, message: `${prefix}: ${message}${note}`, retryable: cls === 'MODEL_UNAVAILABLE' && !wrote, workspaceEffect: effect });
+      const code: ProtocolError['code'] = cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';
+      const prefix = cls === 'MODEL_AUTH' ? 'Model authentication failed' : cls === 'MODEL_UNAVAILABLE' ? 'Model unavailable' : cls === 'MODEL_OTHER' ? 'Model error' : 'Turn failed';
+      const note = wrote ? ' (no retry or fallback: this turn already changed the workspace)'
+        : mayHaveWritten ? ' (no retry or fallback: an approved change from this attempt had not finished)'
+          : onFallback ? ' (fallback model also failed)' : '';
+      return this.fail({ code, message: `${prefix}: ${message}${note}`, retryable: cls === 'MODEL_UNAVAILABLE' && !mayHaveWritten, workspaceEffect: effect });
     }
   }
 
@@ -240,6 +270,7 @@ export class TurnRun {
       input,
       watchdogMs: this.deps.watchdogMs,
       cancelTimeoutMs: this.deps.cancelTimeoutMs,
+      isBusy: () => scope.inFlightCount > 0,
       onEvent: (e) => {
         switch (e.t) {
           case 'text':
@@ -321,7 +352,8 @@ export class TurnRun {
         const cwd = typeof a.cwd === 'string' && a.cwd ? a.cwd : '.';
         if (!command) { deny('INVALID_ARGS: command must be a non-empty string'); continue; }
         this.buffer.emit({ t: 'status', state: 'awaiting_review', detail: command.slice(0, 120) });
-        this.buffer.emit({ t: 'command_request', callId: call.id, command, cwd });
+        const listed = isListedCommand(command);
+        this.buffer.emit({ t: 'command_request', callId: call.id, command, cwd, ...(listed ? {} : { unrestricted: true, warning: UNRESTRICTED_WARNING }) });
         const d = await this.waitFor(call.id, { kind: 'command', hunkIds: [] });
         if (d === 'cancelled' || d.kind !== 'command') return 'cancelled';
         if (!d.allow) { deny(d.reason ? `user refused to run the command: ${d.reason}` : 'user refused to run the command'); continue; }

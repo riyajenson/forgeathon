@@ -182,7 +182,17 @@ export class TurnRun {
       const attemptStart = Date.now();
       const result = await this.runAttempt(runtimeSessionId, input, scope);
       const settled = await scope.settle(this.deps.settleMs);
-      if (!settled) this.deps.port.log('warn', `tool calls still running ${this.deps.settleMs} ms after the turn ended`);
+      if (!settled) {
+        // Do not release the app session, reset approval state, or start another model while
+        // an earlier operation can still complete. Cancellation closes tool admission first.
+        scope.cancel();
+        this.record(agent, model, runtimeSessionId, result, attemptStart, 'TOOLS_UNSETTLED');
+        emit({ t: 'error', error: { code: 'unavailable', message: 'A tool is still running. Recovery is blocked until it finishes; inspect the workspace afterward.', retryable: false, workspaceEffect: 'unknown' } });
+        emit({ t: 'status', state: 'cancelling', detail: 'Waiting for outstanding tools; no retry or fallback will start.' });
+        await scope.waitForIdle();
+        if (this.cancelRequested) return this.finishCancelled(result);
+        return void emit({ t: 'done', status: 'error' });
+      }
       const wrote = scope.writes > 0;
       const effect: ProtocolError['workspaceEffect'] = !settled ? 'unknown' : wrote ? 'changed' : 'unchanged';
 

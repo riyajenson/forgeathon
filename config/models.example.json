@@ -16,7 +16,7 @@
       "apiKeyEnv": "GROQ_API_KEY",
       "optional": true,
       "models": [
-        { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768 }
+        { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768, "reasoningEfforts": ["low", "medium", "high"] }
       ]
     },
     {
@@ -26,7 +26,7 @@
       "apiKeyEnv": "OPENROUTER_API_KEY",
       "optional": true,
       "models": [
-        { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768 }
+        { "name": "gpt-oss-120b", "modelId": "openai/gpt-oss-120b", "contextLength": 131072, "maxOutputTokens": 32768, "reasoningEfforts": ["low", "medium", "high"] }
       ]
     },
     {

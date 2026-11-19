@@ -16,7 +16,7 @@ export class TurnController {
   constructor(private harness: ForgeHarness, private version: Version, private root: string,
     private edits: EditReview, private view: TurnView) {}
   private envelope<T>(body: T): Request<T> { return { version: this.version, requestId: randomUUID(), body }; }
-  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: {autoApproveSafeCommands?: boolean} = {}) {
+  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: {autoApproveSafeCommands?: boolean; commandBudget?: number} = {}) {
     if (this.active) throw new Error('A turn is already in progress');
     const a: Active = { stopped: false, last: 0, submitted: false };
     this.active = a;
@@ -33,7 +33,8 @@ export class TurnController {
       a.ref = ref;
       this.edits.begin(ref);
       const turn = await this.harness.submitTurn(this.envelope({...ref, ...context, mode, instruction,
-        ...(options.autoApproveSafeCommands === true ? {autoApproveSafeCommands: true} : {})}));
+        ...(options.autoApproveSafeCommands === true ? {autoApproveSafeCommands: true} : {}),
+        ...(options.commandBudget === undefined ? {} : {commandBudget: options.commandBudget})}));
       if (!turn.ok) throw new Error(turn.error.message);
       a.submitted = true;
       if (a.stopped) await this.stop();

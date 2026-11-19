@@ -39,6 +39,11 @@ export class AgentViewState {
           break;
         }
         this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
+      case 'command_budget_reached':
+        // Refused by the harness without a prompt: the model was told to stop running commands.
+        this.status = 'command budget reached';
+        this.tools.push({id:'budget:' + e.callId, label:'command budget reached (' + e.budget + ' per turn): ' + e.command, detail:'not run'});
+        break;
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);

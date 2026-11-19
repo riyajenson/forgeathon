@@ -49,6 +49,20 @@ function diffSnapshots(before: Map<string, string>, after: Map<string, string>):
   return [...changed].sort();
 }
 
+/** The editor's environment, with the workspace's own virtualenv (.venv or venv) first on PATH if there is one. */
+export async function commandEnv(root: string): Promise<NodeJS.ProcessEnv> {
+  for (const dir of ['.venv', 'venv']) {
+    const bin = path.join(root, dir, 'bin');
+    try {
+      await fs.access(path.join(bin, 'python'));
+      return { ...process.env, VIRTUAL_ENV: path.join(root, dir), PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}` };
+    } catch {
+      // no virtualenv here
+    }
+  }
+  return process.env;
+}
+
 function capped(buf: string): string {
   return buf.length <= COMMAND_OUTPUT_CAP ? buf : `${buf.slice(0, COMMAND_OUTPUT_CAP / 2)}\n[... ${buf.length - COMMAND_OUTPUT_CAP} characters omitted ...]\n${buf.slice(-COMMAND_OUTPUT_CAP / 2)}`;
 }
@@ -73,8 +87,9 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs): Pr
   let stdout = '';
   let stderr = '';
   let timedOut = false;
+  const env = await commandEnv(root);
   const exitCode = await new Promise<number | null>((resolve) => {
-    const child = spawn('bash', ['-c', args.command], { cwd, env: process.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('bash', ['-c', args.command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const killGroup = (signal: NodeJS.Signals) => { try { if (child.pid) process.kill(-child.pid, signal); } catch { /* already gone */ } };
     const stop = () => { killGroup('SIGTERM'); setTimeout(() => killGroup('SIGKILL'), 2000).unref(); };
     const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutSec * 1000);

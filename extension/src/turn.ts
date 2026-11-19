@@ -16,7 +16,7 @@ export class TurnController {
   constructor(private harness: ForgeHarness, private version: Version, private root: string,
     private edits: EditReview, private view: TurnView) {}
   private envelope<T>(body: T): Request<T> { return { version: this.version, requestId: randomUUID(), body }; }
-  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext) {
+  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: {autoApproveSafeCommands?: boolean} = {}) {
     if (this.active) throw new Error('A turn is already in progress');
     const a: Active = { stopped: false, last: 0, submitted: false };
     this.active = a;
@@ -32,7 +32,8 @@ export class TurnController {
       const ref = {sessionId, turnId: randomUUID()};
       a.ref = ref;
       this.edits.begin(ref);
-      const turn = await this.harness.submitTurn(this.envelope({...ref, ...context, mode, instruction}));
+      const turn = await this.harness.submitTurn(this.envelope({...ref, ...context, mode, instruction,
+        ...(options.autoApproveSafeCommands === true ? {autoApproveSafeCommands: true} : {})}));
       if (!turn.ok) throw new Error(turn.error.message);
       a.submitted = true;
       if (a.stopped) await this.stop();
@@ -65,7 +66,8 @@ export class TurnController {
         if (e.t === 'done') { this.view.event(e); if (reviewError) throw reviewError; return; }
         if (a.stopped && e.t !== 'edit_applied' && e.t !== 'error') continue;
         this.view.event(e);
-        if (e.t === 'review_request' || e.t === 'command_request') {
+        // An auto-approved command was already allowed by the harness: it is only shown, never prompted.
+        if (e.t === 'review_request' || (e.t === 'command_request' && !e.autoApproved)) {
           // Keep consuming the stream while the user reviews. A terminal event can revoke this prompt.
           void answer(e).catch(async error => {
             if (this.active !== a || a.stopped) return;

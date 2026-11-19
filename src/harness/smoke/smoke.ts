@@ -2,6 +2,7 @@
 // 3.1.3 checkout with a directory-backed editor port, answers every review, then runs the verifications.
 // Works with the scripted demo model (scripts/e2e-mock.sh) or real models (scripts/smoke-real-model.mjs).
 // Usage: node scripts/smoke-real-model.mjs [--flask DIR] [--tasks A,B,C] [--config config/models.json] [--meter-log FILE] [--keep]
+// --auto-approve-safe-commands: Task B with TurnRequest.autoApproveSafeCommands (listed commands are not prompted).
 // --meter-log: the log of scripts/model-meter.mjs, to report model requests and 429s per task (TrueForge's
 // internal retries included).
 import { execFile } from 'node:child_process';
@@ -37,6 +38,10 @@ interface TurnStats {
   toolsByName: Record<string, number>;
   edits: string[];
   reviews: number;
+  reviewsByFile: Record<string, number>;
+  /** Commands the user had to approve, and commands the harness auto-approved (--auto-approve-safe-commands). */
+  commandPrompts: number;
+  autoApproved: number;
   fallback?: string;
   error?: string;
   usage?: { inputTokens: number; outputTokens: number };
@@ -67,7 +72,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, contextFiles: [] };
+  const stats: TurnStats = { task, status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, contextFiles: [] };
   for await (const r of h.stream(req({ sessionId, turnId, afterSequence: 0 }))) {
     if (!r.ok) { stats.error = r.error.message; break; }
     const e: HarnessEvent = r.body;
@@ -86,13 +91,16 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
       case 'review_request': {
         const p = e.proposal;
         stats.reviews++;
+        stats.reviewsByFile[p.path] = (stats.reviewsByFile[p.path] ?? 0) + 1;
         console.log(`  [${task}] review ${p.path}: ${p.hunks.length} hunk(s) → ${decide} all`);
         const d = await h.submitReview(req({ sessionId, turnId, callId: p.callId, kind: 'edit' as const, proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((x) => [x.hunkId, decide])) }));
         if (!d.ok) console.log(`  [${task}]   review refused: ${d.error.message}`);
         break;
       }
       case 'command_request': {
-        console.log(`  [${task}] command ${e.command} → allow`);
+        if (e.autoApproved) { stats.autoApproved++; console.log(`  [${task}] command ${e.command} → auto-approved`); break; }
+        stats.commandPrompts++;
+        console.log(`  [${task}] command ${e.command}${e.unrestricted ? ' (UNRESTRICTED)' : ''} → allow`);
         await h.submitReview(req({ sessionId, turnId, callId: e.callId, kind: 'command' as const, allow: true }));
         break;
       }
@@ -141,6 +149,8 @@ async function main(): Promise<void> {
   const url = arg('--url', process.env['TRUEFORGE_URL'] ?? 'http://127.0.0.1:8790');
   const configPath = path.resolve(arg('--config', path.join(repo, 'config', 'models.json')));
   const meterLog = process.argv.includes('--meter-log') ? path.resolve(arg('--meter-log', '')) : undefined;
+  // Task B only, like the editor setting forge.autoApproveSafeCommands (default off).
+  const autoApprove = process.argv.includes('--auto-approve-safe-commands');
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-smoke-'));
   const ws = path.join(work, 'flask');
   console.log(`copying ${flask} → ${ws}`);
@@ -188,7 +198,7 @@ async function main(): Promise<void> {
       check('A: docstring lists every false value (0, false, no, off, n)', docstring !== '' && missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : '');
     }
     if (tasks.includes('B')) {
-      const b = await turn(h, ws, 'B', { mode: 'agent', instruction: TASK_B }, 'accept', meterLog);
+      const b = await turn(h, ws, 'B', { mode: 'agent', instruction: TASK_B, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) }, 'accept', meterLog);
       results.push(b);
       check('B: turn done', b.status === 'done', b.error ?? '');
       const changed = (await sh('git', ['diff', '--name-only'], ws)).out.trim().split('\n').filter(Boolean);
@@ -239,7 +249,7 @@ async function main(): Promise<void> {
 
   console.log('\n=== turns');
   for (const s of results) {
-    console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s), tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
+    console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
     if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
     if (s.contextUsed) console.log(`   context: ${s.contextUsed}: ${s.contextFiles.join(', ')}`);
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);

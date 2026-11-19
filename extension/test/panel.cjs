@@ -16,6 +16,11 @@ exports.run = async () => {
   assert.match(flagged.command.warning, /without hunk review/, 'the panel carries the unrestricted warning');
   flagged.update({t:'command_request',callId:'y',command:'pytest -q',cwd:'.'});
   assert.equal(flagged.command.warning, undefined, 'listed commands carry no warning');
+  const auto = new AgentViewState();
+  auto.update({t:'command_request',callId:'z',command:'python -m pytest tests/test_x.py -q',cwd:'.',autoApproved:true});
+  assert.equal(auto.command, undefined, 'no Allow/Deny prompt for an auto-approved command');
+  assert.deepEqual(auto.tools, [{id:'auto:z',label:'auto-approved: python -m pytest tests/test_x.py -q',detail:'cwd: .'}], 'shown in the activity list');
+  assert.equal(auto.status, 'auto-approved: python -m pytest tests/test_x.py -q');
   const state = new AgentViewState();
   const folder = vscode.workspace.workspaceFolders[0];
   const selected = {path:'src/a',source:'automatic',rank:1,rationale:'entry point',estimatedTokens:6,truncated:false};
@@ -27,7 +32,7 @@ exports.run = async () => {
   const harness = {
     start:async port => {assert.equal(typeof port.applyText,'function')},
     createSession:async()=>({ok:true,body:{sessionId:'sim'}}),
-    submitTurn:async ({body})=>{submitted=true;assert.equal(body.instruction,'simulated task');return {ok:true,body}},
+    submitTurn:async ({body})=>{submitted=true;assert.equal(body.instruction,'simulated task');assert.equal(body.autoApproveSafeCommands,undefined,'off by default');return {ok:true,body}},
     stream:async function*({body}) {
       const header = {version, sessionId:body.sessionId,turnId:body.turnId};
       let sequence = 0;
@@ -64,6 +69,44 @@ exports.run = async () => {
     assert.match(state.banner,/Simulated model failure.*unchanged/); assert.equal(state.status,'error');
   } finally { await wb.shutdown(); }
   assert.ok(marked);
+
+  // forge.autoApproveSafeCommands on: the request carries it; an auto-approved command opens no prompt and
+  // sends no decision, while an unrestricted command in the same turn still asks.
+  const forgeCfg = vscode.workspace.getConfiguration('forge');
+  await forgeCfg.update('autoApproveSafeCommands', true, vscode.ConfigurationTarget.Global);
+  try {
+    let turnBody, decisions = [], releaseAsk; const askAnswered = new Promise(r => releaseAsk = r);
+    const autoHarness = {...harness,
+      submitTurn:async({body})=>{turnBody=body;return {ok:true,body}},
+      stream:async function*({body}) {
+        const h={version,sessionId:body.sessionId,turnId:body.turnId}; let s=0;
+        for (const e of [{t:'turn_started'},
+          {t:'command_request',callId:'auto1',command:'python -m pytest tests/test_x.py -q',cwd:'.',autoApproved:true},
+          {t:'command_request',callId:'ask1',command:'rm -rf build',cwd:'.',unrestricted:true,warning:'Unrestricted command'},
+          {t:'done',status:'done'}]) {
+          yield {ok:true,body:{...h,...e,sequence:++s}};
+          if (e.callId === 'ask1') await askAnswered;
+        }
+      },
+      submitReview:async({body})=>{decisions.push(body);releaseAsk();return {ok:true,body:null}},
+      dispose:async()=>{}};
+    const wb2 = new Workbench(folder,()=>({version,harness:autoHarness}));
+    const seen2 = [], state2 = new AgentViewState();
+    const original2 = wb2.events.bind(wb2);
+    wb2.events=e=>{seen2.push(e);state2.update(e);original2(e)};
+    const run2 = wb2.run('agent','simulated task',{});
+    try {
+      await until(()=>seen2.some(e=>e.callId==='ask1'));
+      assert.equal(turnBody.autoApproveSafeCommands, true, 'the setting reaches the harness');
+      assert.ok(state2.tools.some(t=>t.label==='auto-approved: python -m pytest tests/test_x.py -q'), 'visible in the panel');
+      await delay(200);
+      assert.equal(decisions.length, 0, 'nothing was sent for the auto-approved command');
+      await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');  // the unrestricted one still asks (Deny)
+      await Promise.race([run2,delay(5000).then(()=>{throw Error('auto-approve run timed out')})]);
+      assert.deepEqual(decisions.map(d=>[d.callId,d.allow]), [['ask1',false]], 'only the unrestricted command was decided by the user');
+    } finally { await wb2.shutdown(); }
+  } finally { await forgeCfg.update('autoApproveSafeCommands', undefined, vscode.ConfigurationTarget.Global); }
+
   const gate = new EditReview(folder);
   let cancelled=false, start, go;
   const ready=new Promise(r=>start=r), released=new Promise(r=>go=r);

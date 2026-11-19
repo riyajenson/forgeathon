@@ -32,7 +32,13 @@ export class AgentViewState {
       }
       case 'context_report': this.context = e.report; break;
       case 'review_request': this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path; break;
-      case 'command_request': this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
+      case 'command_request':
+        if (e.autoApproved) {
+          this.status = 'auto-approved: ' + e.command;
+          this.tools.push({id:'auto:' + e.callId, label:'auto-approved: ' + e.command, detail:'cwd: ' + e.cwd});
+          break;
+        }
+        this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);

@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { normalizeEdits } from '../review';
 import type { EditorPort } from './port';
 import { SESSION_HEADER, type ScopeRegistry } from './scope';
 import { runCommandTool } from './command';
@@ -82,7 +83,8 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
     inputSchema: {
       path: z.string(),
       base_sha256: z.string(),
-      edits: z.array(z.object({ old_text: z.string(), new_text: z.string() })).min(1),
+      // A JSON-encoded array string is accepted (normalizeEdits), matching the review and the approval key.
+      edits: z.preprocess(normalizeEdits, z.array(z.object({ old_text: z.string(), new_text: z.string() })).min(1)),
       summary: z.string().optional().describe('One line describing the change, shown to the reviewer'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },

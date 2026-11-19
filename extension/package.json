@@ -75,6 +75,11 @@
           "minimum": 1,
           "default": 8000,
           "description": "Agent-mode context budget in tokens."
+        },
+        "forge.autoApproveSafeCommands": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the agent's verification commands without asking when they are on the safe list (pytest, python -m pytest, python -c, flask, git status, git diff) and contain no shell operators. Each one is shown in the panel as \"auto-approved\". Unrestricted commands always ask, and edits are always reviewed."
         }
       }
     }

@@ -1,5 +1,20 @@
 // Pure search/replace proposal logic. No I/O, no contract imports.
 
+/**
+ * Some models (seen with NVIDIA Nemotron-3 Ultra, 2026-11-19) send the edits array JSON-encoded as a string.
+ * A string that parses to an array is used as that array; anything else is returned unchanged. Applied
+ * wherever propose_edit arguments are read (review, approval key, MCP execution, summaries) so they agree.
+ */
+export function normalizeEdits(edits: unknown): unknown {
+  if (typeof edits !== 'string' || !edits.trim().startsWith('[')) return edits;
+  try {
+    const parsed: unknown = JSON.parse(edits);
+    return Array.isArray(parsed) ? parsed : edits;
+  } catch {
+    return edits;
+  }
+}
+
 export interface SearchReplaceEdit {
   old_text: string;
   new_text: string;
@@ -92,9 +107,13 @@ function newlineCount(s: string): number {
  * - Each old_text must match the current text exactly once. Line endings in the edit are normalised
  *   to the file's dominant line ending before matching, so LF edits apply to CRLF files.
  */
-export function computeProposal(currentText: string | null, edits: readonly SearchReplaceEdit[]): Proposal | ProposalError {
+export function computeProposal(currentText: string | null, rawEdits: readonly SearchReplaceEdit[]): Proposal | ProposalError {
+  const edits = normalizeEdits(rawEdits) as readonly SearchReplaceEdit[];
+  if (typeof edits === 'string') {
+    return { ok: false, code: 'INVALID_EDIT', message: 'edits must be a JSON array of {"old_text": ..., "new_text": ...} objects; it was a string that is not valid JSON for one. Pass the array itself, not a string' };
+  }
   if (!Array.isArray(edits) || edits.length === 0) {
-    return { ok: false, code: 'INVALID_EDIT', message: 'edits must be a non-empty array' };
+    return { ok: false, code: 'INVALID_EDIT', message: 'edits must be a non-empty array of {"old_text": ..., "new_text": ...} objects' };
   }
 
   if (currentText === null) {

@@ -30,7 +30,7 @@ extension is tied to a provider.
 |---|---|
 | `extension/` | VS Code extension: commands, inline review, agent panel, `EditorPort` (editor reads/writes) |
 | `src/harness/` | `forge-harness`: TrueForge adapter (turns, approvals, cancel, retry, fallback), MCP server and tools, context engine, review core |
-| `contracts/` | Shared TypeScript contract between extension and harness (protocol 0.4.2) |
+| `contracts/` | Shared TypeScript contract between extension and harness (protocol 0.4.3) |
 | `agent/` | **TrueForge agent definitions**: `forge-coder.json` (agent mode), `forge-inline.json` (inline edit) |
 | `config/` | `models.example.json` (real providers), `models.mock.example.json` (demo model) |
 | `scripts/` | setup, demo mode, end-to-end checks, real-model smoke test, extension tests |
@@ -124,7 +124,7 @@ knows the three fixed tasks. It costs nothing and needs no keys. Then open the e
 3. Commands (`Ctrl+Shift+P`, "Forge-a-thon"): **Inline Edit** (`Ctrl+Alt+I`), **Open Agent Panel**,
    **Accept All Hunks**, **Reject All Hunks**, **Review Hunks**, **Undo Last Reviewed Edit**, **Stop Turn**.
    Settings: `forge.trueforgeUrl` (default `http://127.0.0.1:8790`), `forge.mcpPort` (47615),
-   `forge.context.budgetTokens` (8000).
+   `forge.context.budgetTokens` (8000), `forge.autoApproveSafeCommands` (default **off**, see below).
 
 ## The three fixed tasks
 
@@ -155,6 +155,10 @@ What the harness does:
   after Stop, and Stop kills its whole process group.
 - Commands other than `pytest`, `python -m pytest`, `python -c`, `flask`, `git status` and `git diff`
   (without shell operators) are marked **Unrestricted** with a warning in the approval prompt.
+- Optional, off by default: with `forge.autoApproveSafeCommands` the listed commands above (no shell
+  operators) run without a prompt and appear in the panel as "auto-approved: …". Unrestricted commands
+  always ask, and edits are always reviewed hunk by hunk. A listed command such as `python -c` can still run
+  arbitrary Python, so turn this on only if you accept that.
 - The working directory must resolve (symlinks included) inside the workspace; the command gets your
   environment **minus** credential-like variables (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSW*`, …) and editor IPC
   handles; it is killed after its timeout (default 120 s, max 600 s); output is capped.

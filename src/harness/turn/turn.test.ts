@@ -123,10 +123,10 @@ beforeEach(async () => {
   sessionsCreated = [];
 });
 
-function makeRun(tf: FakeTrueForge, overrides: Partial<TurnDeps> = {}): TurnRun {
+function makeRun(tf: FakeTrueForge, overrides: Partial<TurnDeps> = {}, request: Record<string, unknown> = {}): TurnRun {
   const id = `t${++n}`;
   const reuse = new Map<string, string>();
-  return new TurnRun({ sessionId: 's', turnId: id, mode: 'agent', instruction: 'change alpha' }, {
+  return new TurnRun({ sessionId: 's', turnId: id, mode: 'agent', instruction: 'change alpha', ...request }, {
     sdk, client: tf.client as unknown as TrueForgeClient, port, scopes,
     trueforgeUrl: 'http://127.0.0.1:1', workspaceRoot: root, agentName: 'coder',
     runtimeSession: async (agent, fresh) => {
@@ -322,4 +322,101 @@ test('an invalid key reported as HTTP 400 (Google style) falls back without a re
   assert.deepEqual(sessionsCreated, ['rs-coder-1', 'rs-coder-fallback-2']);
   assert.ok(events(run).some((e) => e.t === 'fallback'));
   assert.equal(terminal(run)[0]!.t === 'done' && terminal(run)[0]!.status, 'done');
+});
+
+/** Reads events and answers only what the user is asked; records what was asked. */
+async function userAnswers(run: TurnRun, asked: HarnessEvent[]): Promise<void> {
+  for await (const e of run.buffer.read(0)) {
+    if (e.t === 'command_request' && !e.autoApproved) {
+      asked.push(e);
+      assert.deepEqual(run.submitReview({ kind: 'command', sessionId: e.sessionId, turnId: e.turnId, callId: e.callId, allow: true }), { ok: true });
+    } else if (e.t === 'review_request') {
+      asked.push(e);
+      const p = e.proposal;
+      assert.deepEqual(run.submitReview({ kind: 'edit', sessionId: p.sessionId, turnId: p.turnId, callId: p.callId, proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((h) => [h.hunkId, 'accept'])) }), { ok: true });
+    }
+  }
+}
+
+test('autoApproveSafeCommands: a listed command runs without a prompt and is reported as auto-approved', async () => {
+  const cmd = { command: 'git status --short' };
+  let result: Awaited<ReturnType<typeof runCommandTool>> | undefined;
+  const tf = new FakeTrueForge({
+    onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'run_command', cmd)),
+    onApproval: (sub, sessionId) => {
+      // TrueForge runs the approved call: the MCP tool must find the recorded one-use approval.
+      void runCommandTool({ port, scope: scopeOf(sessionId) }, cmd).then((r) => { result = r; sub.push(done('done')); });
+    },
+  });
+  const run = makeRun(tf, {}, { autoApproveSafeCommands: true });
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.equal(asked.length, 0, 'the user was not asked');
+  const req = events(run).find((e) => e.t === 'command_request') as Extract<HarnessEvent, { t: 'command_request' }>;
+  assert.equal(req.autoApproved, true, 'shown to the user as auto-approved');
+  assert.equal(req.unrestricted, undefined);
+  assert.equal(req.command, 'git status --short');
+  assert.ok(result?.ok, 'the command ran with the auto-approval');
+  assert.equal(terminal(run)[0]!.t === 'done' && terminal(run)[0]!.status, 'done');
+});
+
+test('autoApproveSafeCommands never auto-approves unrestricted commands or edits', async () => {
+  for (const [tool, args] of [
+    ['run_command', { command: 'python -m pytest tests | tail -5' }],
+    ['run_command', { command: 'rm -rf build' }],
+    ['run_command', { command: 'cd /workspace && python -m pytest -q' }],
+    ['propose_edit', editArgs()],
+  ] as const) {
+    const tf = new FakeTrueForge({
+      onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', tool, args)),
+      onApproval: (sub) => sub.push(done('done')),
+    });
+    const run = makeRun(tf, {}, { autoApproveSafeCommands: true });
+    const asked: HarnessEvent[] = [];
+    void userAnswers(run, asked);
+    await run.start();
+    assert.equal(asked.length, 1, `${tool} ${JSON.stringify(args)} waited for the user`);
+    const e = asked[0]!;
+    if (e.t === 'command_request') {
+      assert.equal(e.unrestricted, true);
+      assert.equal(e.autoApproved, undefined);
+    } else assert.equal(e.t, 'review_request');
+    assert.equal(events(run).some((x) => x.t === 'command_request' && x.autoApproved), false);
+  }
+});
+
+test('auto-approval is off unless the request sets autoApproveSafeCommands to true', async () => {
+  for (const request of [{}, { autoApproveSafeCommands: false }, { autoApproveSafeCommands: 'true' }]) {
+    const tf = new FakeTrueForge({
+      onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'run_command', { command: 'python -m pytest -q' })),
+      onApproval: (sub) => sub.push(done('done')),
+    });
+    const run = makeRun(tf, {}, request);
+    const asked: HarnessEvent[] = [];
+    void userAnswers(run, asked);
+    await run.start();
+    assert.equal(asked.length, 1, `prompted with ${JSON.stringify(request)}`);
+  }
+});
+
+test('a propose_edit whose edits arrive as a JSON string is reviewed and applied (not refused as "0 edits")', async () => {
+  const args = { ...editArgs(), edits: JSON.stringify(editArgs().edits) };
+  let result: Awaited<ReturnType<typeof proposeEditTool>> | undefined;
+  const tf = new FakeTrueForge({
+    onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'propose_edit', args)),
+    onApproval: (sub, sessionId) => {
+      // The MCP server's schema hands the tool the parsed array; the approval was recorded from the string.
+      void proposeEditTool({ port, scope: scopeOf(sessionId) }, editArgs()).then((r) => { result = r; sub.push(done('done')); });
+    },
+  });
+  const run = makeRun(tf);
+  void clickThrough(run);
+  await run.start();
+  const call = events(run).find((e) => e.t === 'tool_call') as Extract<HarnessEvent, { t: 'tool_call' }>;
+  assert.match(call.summary, /\(1 edit\)/, 'the panel summary counts the edits');
+  const review = events(run).find((e) => e.t === 'review_request') as Extract<HarnessEvent, { t: 'review_request' }>;
+  assert.equal(review.proposal.hunks.length, 1);
+  assert.ok(result?.ok, 'applied with the recorded approval');
+  assert.equal(await fs.readFile(path.join(root, FILE), 'utf8'), 'def alpha():\n    return 10\n');
 });

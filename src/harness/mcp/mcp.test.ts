@@ -142,6 +142,8 @@ test('tools/list exposes the five tools with read-only annotations on the reader
   assert.equal(byName['list_files']!.annotations?.readOnlyHint, true);
   assert.equal(byName['gather_context']!.annotations?.readOnlyHint, true);
   assert.equal(byName['run_command']!.annotations?.destructiveHint, true);
+  // A real model (2026-11-19) guessed `cd /workspace && …`; the description says where commands start.
+  assert.match(byName['run_command']!.description ?? '', /starts in the workspace root.*workspace-relative paths/);
   assert.equal(byName['read_file']!.annotations?.readOnlyHint, true);
   assert.equal(byName['search_workspace']!.annotations?.readOnlyHint, true);
   assert.equal(byName['propose_edit']!.annotations?.readOnlyHint, false);

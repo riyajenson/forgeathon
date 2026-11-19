@@ -1,7 +1,9 @@
 // End-to-end check of the three fixed tasks: drives createHarness over a temporary copy of a pristine Flask
 // 3.1.3 checkout with a directory-backed editor port, answers every review, then runs the verifications.
 // Works with the scripted demo model (scripts/e2e-mock.sh) or real models (scripts/smoke-real-model.mjs).
-// Usage: node scripts/smoke-real-model.mjs [--flask DIR] [--tasks A,B,C] [--config config/models.json] [--keep]
+// Usage: node scripts/smoke-real-model.mjs [--flask DIR] [--tasks A,B,C] [--config config/models.json] [--meter-log FILE] [--keep]
+// --meter-log: the log of scripts/model-meter.mjs, to report model requests and 429s per task (TrueForge's
+// internal retries included).
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -14,6 +16,7 @@ import { FakePort } from '../mcp/fake-port';
 import { repoRoot } from '../repo-root';
 import { runSetup, type AgentTemplate, type ModelsConfig } from '../setup/setup';
 import { createClient } from '../trueforge/sdk';
+import { meterRecordsSince, requestStats, type RequestStats } from '../meter/meter';
 
 const run = promisify(execFile);
 export const TASK_A = "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.";
@@ -40,6 +43,8 @@ interface TurnStats {
   contextFiles: string[];
   contextUsed?: string;
   session?: string;
+  /** Upstream model requests during the turn, from the meter log (--meter-log). */
+  requests?: RequestStats;
 }
 
 async function sh(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}): Promise<{ ok: boolean; out: string }> {
@@ -52,7 +57,8 @@ async function sh(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessE
   }
 }
 
-async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit<TurnRequest, 'sessionId' | 'turnId'>, decide: 'accept' | 'reject'): Promise<TurnStats> {
+async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit<TurnRequest, 'sessionId' | 'turnId'>, decide: 'accept' | 'reject', meterLog?: string): Promise<TurnStats> {
+  const meterStart = (await meterRecordsSince(meterLog, 0)).lines;
   const req = <T>(b: T) => ({ version: PROTOCOL_VERSION, requestId: randomUUID(), body: b });
   const s = await h.createSession(req({ workspaceRoot: workspace }));
   if (!s.ok) throw new Error(s.error.message);
@@ -100,6 +106,10 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
     }
   }
   stats.seconds = Math.round((Date.now() - t0) / 100) / 10;
+  if (meterLog) {
+    await new Promise((r) => setTimeout(r, 200)); // the meter writes its record when the upstream response ends
+    stats.requests = requestStats((await meterRecordsSince(meterLog, meterStart)).records);
+  }
   return stats;
 }
 
@@ -130,6 +140,7 @@ async function main(): Promise<void> {
   const tasks = arg('--tasks', 'A,B').toUpperCase().split(',');
   const url = arg('--url', process.env['TRUEFORGE_URL'] ?? 'http://127.0.0.1:8790');
   const configPath = path.resolve(arg('--config', path.join(repo, 'config', 'models.json')));
+  const meterLog = process.argv.includes('--meter-log') ? path.resolve(arg('--meter-log', '')) : undefined;
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-smoke-'));
   const ws = path.join(work, 'flask');
   console.log(`copying ${flask} → ${ws}`);
@@ -159,7 +170,7 @@ async function main(): Promise<void> {
   try {
     if (tasks.includes('A')) {
       const selection = await selectionOf(ws, 'src/flask/helpers.py', 'get_debug_flag');
-      const a = await turn(h, ws, 'A', { mode: 'inline', instruction: TASK_A, activeFile: 'src/flask/helpers.py', selection }, 'accept');
+      const a = await turn(h, ws, 'A', { mode: 'inline', instruction: TASK_A, activeFile: 'src/flask/helpers.py', selection }, 'accept', meterLog);
       results.push(a);
       check('A: turn done', a.status === 'done', a.error ?? '');
       const savedHelpers = a.edits.filter((x) => x.startsWith('src/flask/helpers.py: saved'));
@@ -177,7 +188,7 @@ async function main(): Promise<void> {
       check('A: docstring lists every false value (0, false, no, off, n)', docstring !== '' && missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : '');
     }
     if (tasks.includes('B')) {
-      const b = await turn(h, ws, 'B', { mode: 'agent', instruction: TASK_B }, 'accept');
+      const b = await turn(h, ws, 'B', { mode: 'agent', instruction: TASK_B }, 'accept', meterLog);
       results.push(b);
       check('B: turn done', b.status === 'done', b.error ?? '');
       const changed = (await sh('git', ['diff', '--name-only'], ws)).out.trim().split('\n').filter(Boolean);
@@ -211,7 +222,7 @@ async function main(): Promise<void> {
       try {
         const selection = await selectionOf(ws, 'src/flask/helpers.py', 'get_debug_flag');
         // Reject the fallback's proposal so the workspace check shows no change.
-        const c = await turn(h, ws, 'C', { mode: 'inline', instruction: TASK_A, activeFile: 'src/flask/helpers.py', selection }, 'reject');
+        const c = await turn(h, ws, 'C', { mode: 'inline', instruction: TASK_A, activeFile: 'src/flask/helpers.py', selection }, 'reject', meterLog);
         results.push(c);
         check('C: primary failed and the fallback model took over', Boolean(c.fallback), c.fallback ?? c.error ?? '');
         check('C: turn finished without an error', c.status === 'done', c.error ?? '');
@@ -229,6 +240,7 @@ async function main(): Promise<void> {
   console.log('\n=== turns');
   for (const s of results) {
     console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s), tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
+    if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
     if (s.contextUsed) console.log(`   context: ${s.contextUsed}: ${s.contextFiles.join(', ')}`);
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);
     if (s.fallback) console.log(`   fallback: ${s.fallback}`);

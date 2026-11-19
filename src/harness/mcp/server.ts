@@ -116,6 +116,7 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
   server.registerTool('run_command', {
     description:
       'Run one shell command (bash) in the workspace after the user approves it, e.g. "python -m pytest tests/test_cli.py -q". ' +
+      'It starts in the workspace root (or in cwd): use workspace-relative paths and do not cd to a guessed absolute path such as /workspace. ' +
       'Returns exit code, capped stdout/stderr and the files the command changed. Do not use it to edit files: use propose_edit.',
     inputSchema: {
       command: z.string().min(1),

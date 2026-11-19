@@ -74,13 +74,18 @@ Four unrelated Flask tasks also rank their source file first (regression test in
 
 | Role | Model | Hosting | Approx. cost for the demo |
 |---|---|---|---|
-| Primary | `<provider/model>` | `<provider API>` | `<$ … >` |
-| Fallback | `<provider/model>` (different provider) | `<provider API>` | `<$ … >` |
+| Primary | `nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA API Catalog, free tier | $0 |
+| Fallback | `qwen/qwen3.8-27b` (different provider) | Groq, free tier | $0 |
+| Spare (configured, unused) | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter, free model | $0 |
 | Development and tests | scripted demo model (`scripts/dev-mock.sh`) | local, no LLM | $0 |
 
-Models are configured only in TrueForge, from `config/models.json` (examples for Gemini, Groq, OpenRouter,
-Anthropic and OpenAI) via `node scripts/setup-trueforge.mjs`; **switching models is a config change plus
-rerunning setup**. Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
+Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
+**switching models is a config change plus rerunning setup**. The NVIDIA catalog offered no Qwen3 Coder or
+DeepSeek model; Nemotron-3 Ultra was the fastest candidate that made correct streamed tool calls in our
+probes. Real run on a fresh TrueForge database (2026-11-19, each task once, all checks passed, no 429s;
+requests counted by `scripts/model-meter.mjs`): **Task A** 3 requests, 11.4k input / 0.6k output tokens,
+8.5 s; **Task C** 401 from NVIDIA in 0.19 s → Groq, 3 requests, 6.8k / 0.4k tokens, 2.6 s; **Task B** 49
+requests, 1.62M / 7.5k tokens, 133 s (48 tool calls, 15 commands, 7 reviews over 4 files). Failure policy: authentication errors fall back immediately; unreachable/timeouts/5xx/429
 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and then fall back to the
 `-fallback` agent in a new TrueForge session; nothing is retried after the turn changed the workspace. A
 watchdog stops a turn that streams nothing for 45 s. Every turn is logged (model, attempts, tokens, timing; no
@@ -105,7 +110,7 @@ Automated checks use a **scripted model**, so they show that the plumbing works,
 solves the tasks. Without a GUI or keys: `scripts/e2e-mock.sh` (15/15 checks: Task A one-liner and docstring,
 `pytest tests/test_cli.py -q` 57 passed, `flask --help` lists `config`, masked JSON, Task C fallback + clean
 status); in a real VS Code window: `scripts/test-extension-e2e.sh` (Tasks A, B, Stop, C through the extension
-code) and 4 extension suites. Harness: 78 unit tests (including cancel and retry races against an in-memory
+code) and 4 extension suites. Harness: 83 unit tests (including cancel and retry races against an in-memory
 TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
 
 ## 7. Tools used
@@ -120,8 +125,10 @@ TrueForge stand-in) and 17 integration tests against TrueForge 0.185.1.
 
 ## 8. Known limitations and what you would do with another month
 
-**Limitations.** `<Update after the real-model rehearsal.>` Development and automated tests used a scripted
-model; real-model behaviour was checked only in `<n>` rehearsals. Retrieval is lexical (no embeddings) and
+**Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
+one run per task with one model pair. In Task B the real model over-verified (15 commands, each needing
+approval, including a docs build and full test suite) and split edits to one file over several reviews; each
+step resends the whole conversation, so token use grows with the number of steps. Retrieval is lexical (no embeddings) and
 the symbol index covers Python only; ranking weights were tuned on Flask. A fallback starts a new TrueForge
 session, so it does not see earlier panel turns. **`run_command` is not sandboxed:** an approved command can
 change any file you can, without hunk review. Mitigations: one-use approval of the exact command, an

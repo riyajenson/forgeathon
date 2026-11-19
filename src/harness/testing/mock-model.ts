@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 export type MockReply =
   | { text: string; delayMsPerWord?: number }
   | { toolCalls: Array<{ name: string; args: unknown }>; text?: string; delayMsPerWord?: number }
-  | { status: number; message: string };
+  | { status: number; message: string; headers?: Record<string, string> };
 
 export interface MockRequest {
   model: string;
@@ -79,7 +79,7 @@ export class MockModel {
     }
     const reply = this.handler(req);
     if ('status' in reply) {
-      rs.writeHead(reply.status, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: reply.message } }));
+      rs.writeHead(reply.status, { 'content-type': 'application/json', ...(reply.headers ?? {}) }).end(JSON.stringify({ error: { message: reply.message } }));
       return;
     }
     const id = `chatcmpl-${Date.now()}`;

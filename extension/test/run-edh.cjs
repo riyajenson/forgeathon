@@ -8,12 +8,15 @@ const path = require('node:path');
 (async () => {
   const ext = path.resolve(__dirname, '..');
   const test = path.join(__dirname, process.argv[2] || 'panel.cjs');
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-'));
+  // FORGE_EDH_WORKSPACE: open this folder instead of an empty temporary one (it is not deleted).
+  const given = process.env.FORGE_EDH_WORKSPACE;
+  const workspace = given || fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-'));
   try {
     await runTests({
       version: process.env.FORGE_VSCODE_VERSION || '1.146.0',
       extensionDevelopmentPath: ext,
       extensionTestsPath: test,
+      extensionTestsEnv: { ...process.env },
       launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--disable-gpu',
         '--user-data-dir', fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-profile-'))],
     });
@@ -22,6 +25,6 @@ const path = require('node:path');
     console.error(`EDH TESTS FAILED: ${path.basename(test)}: ${error && error.message}`);
     process.exitCode = 1;
   } finally {
-    fs.rmSync(workspace, { recursive: true, force: true });
+    if (!given) fs.rmSync(workspace, { recursive: true, force: true });
   }
 })();

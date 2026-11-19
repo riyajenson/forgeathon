@@ -14,7 +14,7 @@ verified · 🟡 ready, needs a human step · ❌ open.
 | Model configuration lives in TrueForge; not hard-coded to one provider | ✅ | `config/models.example.json` → `scripts/setup-trueforge.mjs`; NVIDIA, Groq, OpenRouter tested; Gemini, Anthropic, OpenAI as untested examples |
 | TrueForge in local mode | ✅ | `npx @truefoundry/trueforge@0.185.1`, SQLite |
 | Agent definition included in the repository | ✅ | `agent/forge-coder.json`, `agent/forge-inline.json` |
-| TrueForge session with turns and tool calls shown for Task B | 🟡 | **Eligibility gate.** `docs/DEMO-SCRIPT.md` shot 2:25–2:37: hold ~10 s on Task B's turn and its tool calls; note the timestamp |
+| TrueForge session with turns and tool calls shown for Task B | 🟡 | **Eligibility gate.** `docs/DEMO-SCRIPT.md` shot 2:48–2:56: hold ~8 s on Task B's turn and its tool calls; note the timestamp |
 | Fork disclosure (if any) | ✅ | Built from scratch — README "Starting point, versions and licence" |
 
 The README's "Eligibility at a glance" table maps each requirement to files.

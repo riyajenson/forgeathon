@@ -76,8 +76,8 @@ const CONFIG_DOCS = `Show the Configuration
 
 The :func:\`config <cli.config_command>\` command prints the loaded application's
 configuration as JSON. The values of keys that contain \`\`SECRET\`\`, \`\`PASSWORD\`\`,
-\`\`TOKEN\`\` or \`\`KEY\`\` are replaced with \`\`"***"\`\`, so the output can be shared
-safely.
+\`\`TOKEN\`\` or \`\`KEY\`\` are replaced with \`\`"***"\`\`. Other values are printed as they
+are, so check the output before sharing it.
 
 .. code-block:: text
 

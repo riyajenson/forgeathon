@@ -1,7 +1,7 @@
 // Deferred tools (loaded on demand through TrueForge's call_tool): find_symbol and list_files.
 import { buildIndex } from '../context/workspace-index';
 import { normalizeWorkspacePath } from './paths';
-import { listOptions } from './port';
+import { visibleFiles } from '../context/files';
 import type { ToolContext, ToolOutcome } from './tools';
 
 export interface FindSymbolArgs {
@@ -40,7 +40,7 @@ export async function listFilesTool(ctx: ToolContext, args: ListFilesArgs): Prom
     prefix = p;
   }
   const limit = Math.min(Math.max(1, Math.floor(args.limit ?? 200)), 1000);
-  const files = await ctx.port.listFiles(listOptions(prefix, limit + 1));
+  const { files } = await visibleFiles(ctx.port, prefix);
   const shown = files.slice(0, limit);
   return { ok: true, text: `${shown.length}${files.length > limit ? '+' : ''} file(s)${prefix ? ` under ${prefix}` : ''}:\n${shown.join('\n')}` };
 }

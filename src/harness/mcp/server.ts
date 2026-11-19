@@ -61,7 +61,7 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
 
   server.registerTool('search_workspace', {
     description:
-      'Search workspace text files line by line (ignores .git, node_modules and .gitignore). ' +
+      'Search workspace text files line by line (respects every .gitignore; skips dependencies, virtualenvs, build output and credentials files). ' +
       'Returns "path:line: text" matches. Plain text by default; set regex=true for a JavaScript regular expression.',
     inputSchema: {
       query: z.string().min(1),
@@ -108,7 +108,7 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
   }, (args) => run(ctx, () => findSymbolTool(ctx, args)));
 
   server.registerTool('list_files', {
-    description: 'List workspace files (ignores .git, node_modules and build output), optionally under a directory prefix.',
+    description: 'List workspace files (respects every .gitignore; skips .git, dependencies, virtualenvs, caches, build output and credentials files), optionally under a path prefix.',
     inputSchema: { prefix: z.string().optional(), limit: z.number().int().min(1).max(1000).optional() },
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, (args) => run(ctx, () => listFilesTool(ctx, args)));

@@ -1,13 +1,17 @@
 // MCP tool handlers. Transport-free so they can be tested directly and reused by the turn controller.
+import { Worker } from 'node:worker_threads';
 import type { ApplyTextResult } from '../contract-types';
+import { isSecretPath, LIST_LIMIT, visibleFiles } from '../context/files';
 import { applyAccepted, canonicalArgsKey, computeProposal, sha256Hex, type ProposalHunk, type SearchReplaceEdit } from '../review';
 import { normalizeWorkspacePath } from './paths';
-import { listOptions, type EditorPort } from './port';
+import type { EditorPort } from './port';
 import type { SessionScope } from './scope';
 
 export type ToolErrorCode =
   | 'INVALID_ARGS'
   | 'OUTSIDE_WORKSPACE'
+  | 'SECRET_FILE'
+  | 'TIMEOUT'
   | 'FILE_NOT_FOUND'
   | 'STALE_BASE'
   | 'NO_REVIEW_DECISION'
@@ -71,6 +75,7 @@ export interface ReadFileArgs {
 export async function readFileTool(ctx: ToolContext, args: ReadFileArgs): Promise<ToolOutcome> {
   const path = normalizeWorkspacePath(args.path);
   if (!path) return fail('OUTSIDE_WORKSPACE', `path must be workspace-relative: ${String(args.path)}`);
+  if (isSecretPath(path)) return fail('SECRET_FILE', `${path} looks like a credentials file; it is not sent to the model`);
   const snap = await ctx.port.readText(path);
   if (!snap) return fail('FILE_NOT_FOUND', `${path} does not exist`);
 
@@ -112,33 +117,66 @@ export async function searchWorkspaceTool(ctx: ToolContext, args: SearchArgs): P
     prefix = p;
   }
   const max = Math.min(Math.max(1, Math.floor(args.max_results ?? 50)), 200);
-  let pattern: RegExp;
+  const source = args.regex ? args.query : args.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const flags = args.case_sensitive ? '' : 'i';
   try {
-    const source = args.regex ? args.query : args.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    pattern = new RegExp(source, args.case_sensitive ? '' : 'i');
+    new RegExp(source, flags);
   } catch (e) {
     return fail('INVALID_ARGS', `invalid regex: ${(e as Error).message}`);
   }
 
-  const files = await ctx.port.listFiles(listOptions(prefix));
+  const files: SearchFile[] = [];
+  const visible = await visibleFiles(ctx.port, prefix);
+  for (const path of visible.files) {
+    const snap = await ctx.port.readText(path);
+    if (!snap || snap.text.length > SEARCH_MAX_FILE_CHARS || snap.text.includes('\0')) continue;
+    files.push({ path, text: snap.text });
+  }
+  // A plain-text pattern is linear; a model-supplied regex can backtrack for minutes, so it runs in a
+  // worker thread that is terminated at the deadline and never blocks the editor's extension host.
+  const found = args.regex ? await matchInWorker(files, source, flags, max) : matchFiles(files, source, flags, max);
+  if (!found) {
+    return fail('TIMEOUT', `regex search stopped after ${SEARCH_REGEX_TIMEOUT_MS / 1000} s (the pattern backtracks too much); use a simpler pattern or regex=false`);
+  }
+  const header = `${found.hits.length} match(es) in ${found.filesWithHits} file(s) for ${args.regex ? 'regex' : 'text'} ${JSON.stringify(args.query)}${prefix ? ` under ${prefix}` : ''}`;
+  const partial = visible.truncated ? ` [only the first ${LIST_LIMIT} workspace files were searched]` : '';
+  return { ok: true, text: `${header}${found.truncated ? ` [truncated at ${max}]` : ''}${partial}\n${found.hits.join('\n')}` };
+}
+
+export const SEARCH_REGEX_TIMEOUT_MS = 2000;
+
+interface SearchFile { path: string; text: string }
+interface SearchResult { hits: string[]; filesWithHits: number; truncated: boolean }
+
+// Self-contained (no imports, no closures): its source text is also the worker's code.
+function matchFiles(files: SearchFile[], source: string, flags: string, max: number): SearchResult {
+  const pattern = new RegExp(source, flags);
   const hits: string[] = [];
   let filesWithHits = 0;
-  let truncated = false;
-  outer: for (const file of files) {
-    const snap = await ctx.port.readText(file);
-    if (!snap || snap.text.length > SEARCH_MAX_FILE_CHARS || snap.text.includes('\0')) continue;
-    const lines = snap.text.split(/\r?\n/);
+  for (const file of files) {
+    const lines = file.text.split(/\r?\n/);
     let fileHit = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
       if (!pattern.test(line)) continue;
       if (!fileHit) { filesWithHits++; fileHit = true; }
-      if (hits.length >= max) { truncated = true; break outer; }
-      hits.push(`${file}:${i + 1}: ${line.trim().slice(0, 200)}`);
+      if (hits.length >= max) return { hits, filesWithHits, truncated: true };
+      hits.push(`${file.path}:${i + 1}: ${line.trim().slice(0, 200)}`);
     }
   }
-  const header = `${hits.length} match(es) in ${filesWithHits} file(s) for ${args.regex ? 'regex' : 'text'} ${JSON.stringify(args.query)}${prefix ? ` under ${prefix}` : ''}`;
-  return { ok: true, text: `${header}${truncated ? ` [truncated at ${max}]` : ''}\n${hits.join('\n')}` };
+  return { hits, filesWithHits, truncated: false };
+}
+
+const WORKER_SOURCE = `const { parentPort, workerData: d } = require('node:worker_threads');\n${matchFiles.toString()}\nparentPort.postMessage(matchFiles(d.files, d.source, d.flags, d.max));`;
+
+/** Runs matchFiles in a worker thread; resolves null if it does not finish within SEARCH_REGEX_TIMEOUT_MS. */
+function matchInWorker(files: SearchFile[], source: string, flags: string, max: number): Promise<SearchResult | null> {
+  return new Promise((resolve) => {
+    const worker = new Worker(WORKER_SOURCE, { eval: true, workerData: { files, source, flags, max } });
+    const timer = setTimeout(() => { void worker.terminate(); resolve(null); }, SEARCH_REGEX_TIMEOUT_MS);
+    worker.once('message', (r: SearchResult) => { clearTimeout(timer); void worker.terminate(); resolve(r); });
+    worker.once('error', () => { clearTimeout(timer); resolve(null); });
+  });
 }
 
 // ---------------------------------------------------------------- propose_edit

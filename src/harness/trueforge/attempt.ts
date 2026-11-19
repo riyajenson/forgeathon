@@ -35,6 +35,8 @@ export interface AttemptResult {
   cancelReason?: string;
   /** The watchdog stopped this attempt. */
   watchdog: boolean;
+  /** Stopped locally because TrueForge did not confirm a cancel in time; its turn may still be running. */
+  unconfirmed?: boolean;
   summary?: string;
   usage?: { inputTokens: number; outputTokens: number };
   runtimeTurnId?: string;
@@ -50,6 +52,8 @@ export interface AttemptOptions {
   onApprovals(calls: PendingCall[]): Promise<CallDecision[] | 'cancelled'>;
   watchdogMs: number;
   cancelTimeoutMs: number;
+  /** True while one of our MCP tools is running for this attempt: TrueForge is silent then, so the watchdog waits. */
+  isBusy?: () => boolean;
 }
 
 type ConsumeOutcome = { kind: 'paused' } | { kind: 'done'; event: TfEvent } | { kind: 'ended' };
@@ -95,6 +99,9 @@ export class Attempt {
   private readonly finishedPromise = new Promise<AttemptResult>((r) => { this.resolveFinished = r; });
   private resolveCancelSignal!: () => void;
   private readonly cancelSignal = new Promise<'cancelled'>((r) => { this.resolveCancelSignal = () => r('cancelled'); });
+  /** Aborts every TrueForge request of this attempt (stream reads included) when it is force-stopped. */
+  private readonly abort = new AbortController();
+  private hardStop: NodeJS.Timeout | undefined;
 
   constructor(private readonly o: AttemptOptions) {}
 
@@ -102,9 +109,16 @@ export class Attempt {
     return this.finished !== undefined;
   }
 
+  private get streamOptions() {
+    return { maxRetries: 0, abortSignal: this.abort.signal };
+  }
+
   async run(): Promise<AttemptResult> {
+    const driving = this.drive();
+    driving.catch(() => undefined); // after a forced stop its rejection is expected and ignored
     try {
-      const result = await this.drive();
+      // A forced stop resolves finishedPromise even while drive() is stuck on a silent request.
+      const result = await Promise.race([driving, this.finishedPromise]);
       return this.finish(result);
     } catch (e) {
       return this.finish({ status: 'error', message: (e as Error).message, watchdog: this.watchdogFired });
@@ -113,30 +127,43 @@ export class Attempt {
     }
   }
 
-  /** Idempotent. Resolves when TrueForge confirms (turn.done) or after cancelTimeoutMs. */
+  /**
+   * Idempotent. Resolves when TrueForge confirms (turn.done) or after cancelTimeoutMs ('unconfirmed'). Every
+   * wait is bounded: if TrueForge has not ended the turn after another cancelTimeoutMs, the attempt stops
+   * observing it, aborts its requests and finishes as cancelled with `unconfirmed`.
+   */
   async cancel(): Promise<CancelStatus> {
-    if (this.finished) return this.finished.status === 'cancelled' && this.cancelRequested ? 'confirmed' : 'already_terminal';
+    if (this.finished) return this.finished.status === 'cancelled' && this.cancelRequested && !this.finished.unconfirmed ? 'confirmed' : 'already_terminal';
     const first = !this.cancelRequested;
     this.cancelRequested = true;
     this.resolveCancelSignal();
-    if (first) {
-      try {
-        await this.o.client.sessions.cancel(this.o.runtimeSessionId);
-      } catch {
-        // Confirmation can only come from the stream; keep observing.
-      }
-    }
+    this.clearWatchdog();
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<'timeout'>((r) => { timer = setTimeout(() => r('timeout'), this.o.cancelTimeoutMs); });
+    if (first) {
+      this.hardStop = setTimeout(() => this.forceStop(), this.o.cancelTimeoutMs * 2);
+      // Not awaited on its own: a silent server must not hold the cancel; confirmation comes from the stream.
+      const timeoutInSeconds = Math.max(1, Math.ceil(this.o.cancelTimeoutMs / 1000));
+      void Promise.resolve()
+        .then(() => this.o.client.sessions.cancel(this.o.runtimeSessionId, undefined, { maxRetries: 0, timeoutInSeconds }))
+        .catch(() => undefined);
+    }
     const outcome = await Promise.race([this.finishedPromise, timeout]);
     clearTimeout(timer);
     if (outcome === 'timeout') return 'unconfirmed';
-    return outcome.status === 'cancelled' ? 'confirmed' : 'already_terminal';
+    return outcome.status === 'cancelled' && !outcome.unconfirmed ? 'confirmed' : outcome.unconfirmed ? 'unconfirmed' : 'already_terminal';
+  }
+
+  private forceStop(): void {
+    if (this.finished) return;
+    this.abort.abort();
+    this.finish({ status: 'cancelled', cancelReason: 'TrueForge did not confirm the stop', watchdog: this.watchdogFired, unconfirmed: true });
   }
 
   private finish(result: AttemptResult): AttemptResult {
     if (!this.finished) {
       this.finished = { ...result, ...(this.runtimeTurnId ? { runtimeTurnId: this.runtimeTurnId } : {}) };
+      if (this.hardStop) clearTimeout(this.hardStop);
       this.resolveFinished(this.finished);
     }
     return this.finished;
@@ -146,6 +173,7 @@ export class Attempt {
     this.clearWatchdog();
     if (this.awaitingUser || this.cancelRequested) return;
     this.watchdog = setTimeout(() => {
+      if (this.o.isBusy?.()) return this.armWatchdog(); // a tool (e.g. pytest) is still running: not a stall
       this.watchdogFired = true;
       void this.cancel();
     }, this.o.watchdogMs);
@@ -162,9 +190,11 @@ export class Attempt {
     const stream = await client.sessions.createTurnStream(
       runtimeSessionId,
       { input: [{ type: 'user.message', content: this.o.input }] },
-      { maxRetries: 0 },
+      this.streamOptions,
     );
-    if (this.cancelRequested) void client.sessions.cancel(runtimeSessionId).catch(() => undefined);
+    if (this.cancelRequested) {
+      void client.sessions.cancel(runtimeSessionId, undefined, { maxRetries: 0, timeoutInSeconds: Math.max(1, Math.ceil(this.o.cancelTimeoutMs / 1000)) }).catch(() => undefined);
+    }
     let outcome = await this.consume(stream as AsyncIterable<unknown>);
 
     for (;;) {
@@ -172,7 +202,7 @@ export class Attempt {
       if (!this.runtimeTurnId || !this.lastEventId) throw new Error('turn stream ended before the turn was created');
       if (outcome.kind === 'ended') {
         // The connection dropped without a terminal event: resume once from the last event we saw.
-        const sub = await client.sessions.subscribeToTurn(runtimeSessionId, this.runtimeTurnId, { afterEventId: this.lastEventId }, { maxRetries: 0 });
+        const sub = await client.sessions.subscribeToTurn(runtimeSessionId, this.runtimeTurnId, { afterEventId: this.lastEventId }, this.streamOptions);
         outcome = await this.consume(sub as AsyncIterable<unknown>);
         if (outcome.kind === 'ended') throw new Error('turn stream ended without a terminal event');
         continue;
@@ -185,7 +215,8 @@ export class Attempt {
       this.clearWatchdog();
       const decisions = this.cancelRequested ? 'cancelled' : await Promise.race([this.o.onApprovals(calls), this.cancelSignal]);
       this.awaitingUser = false;
-      const sub = await client.sessions.subscribeToTurn(runtimeSessionId, this.runtimeTurnId, { afterEventId: this.lastEventId }, { maxRetries: 0 });
+      this.armWatchdog(); // from here on TrueForge must answer; a silent server is a stall
+      const sub = await client.sessions.subscribeToTurn(runtimeSessionId, this.runtimeTurnId, { afterEventId: this.lastEventId }, this.streamOptions);
       if (decisions !== 'cancelled' && !this.cancelRequested) {
         await client.sessions.createTurnEvents(runtimeSessionId, this.runtimeTurnId, {
           events: decisions.map((d) => ({
@@ -194,7 +225,7 @@ export class Attempt {
             toolCallId: d.id,
             approval: d.allow ? { status: 'allow' as const } : { status: 'deny' as const, reason: d.reason },
           })),
-        }, { maxRetries: 0 });
+        }, this.streamOptions);
       }
       this.armWatchdog();
       outcome = await this.consume(sub as AsyncIterable<unknown>);

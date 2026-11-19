@@ -13,6 +13,13 @@ test('classification of TrueForge turn errors (formats verified on 0.185.1)', ()
   assert.equal(classifyTurnError('iteration limit reached'), 'OTHER');
 });
 
+test('invalid-key errors observed with real providers (2026-11-19, TrueForge 0.185.1) fall back at once', () => {
+  // NVIDIA (integrate.api.nvidia.com) answers an invalid key with 401 application/problem+json; TrueForge reports its title.
+  assert.equal(classifyTurnError('[Model Error] Request failed (401): Unauthorized'), 'MODEL_AUTH');
+  // Groq behind Cloudflare answered a direct client (not TrueForge) with 403 "error code: 1010": not retryable either.
+  assert.equal(classifyTurnError('[Model Error] Request failed (403): error code: 1010'), 'MODEL_AUTH');
+});
+
 test('authentication failures are recognised by wording too (formats as documented by the providers; not observed here)', () => {
   // Google answers an invalid key with HTTP 400.
   assert.equal(classifyTurnError('[Model Error] Request failed (400): API key not valid. Please pass a valid API key.'), 'MODEL_AUTH');

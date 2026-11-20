@@ -341,7 +341,7 @@ async function userAnswers(run: TurnRun, asked: HarnessEvent[]): Promise<void> {
   }
 }
 
-test('autoApproveSafeCommands: a listed command runs without a prompt and is reported as auto-approved', async () => {
+test('autoApproveSafeCommands: a listed command runs without a prompt and is reported as auto-approved', { skip: process.platform === 'win32' && 'readonly command sandbox requires Linux' }, async () => {
   const cmd = { command: 'git status --short' };
   let result: Awaited<ReturnType<typeof runCommandTool>> | undefined;
   const tf = new FakeTrueForge({

@@ -4,7 +4,7 @@ import type { ContextReport, Reference, SourceRange } from '../contract-types';
 import type { EditorPort } from '../mcp/port';
 import { normalizeWorkspacePath } from '../mcp/paths';
 import { rankFiles, type RankedFile } from './rank';
-import { isBinaryText, modelPathRefusal } from './files';
+import { isBinaryText, isSecretPath, modelPathRefusal } from './files';
 import { estimateTokens } from './text';
 import { buildIndex, type IndexedChunk, type IndexedFile, type WorkspaceIndex } from './workspace-index';
 
@@ -100,6 +100,9 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
   } else if (req.selection) {
     const s = req.selection;
     const path = normalizeWorkspacePath(s.path) ?? s.path;
+    if (isSecretPath(path)) {
+      skipped.push({ path, reason: 'credentials file is not sent to the model', estimatedTokens: 0 });
+    } else {
     pinnedPaths.add(path);
     const range = { startLine: s.startLine, endLine: s.endLine };
     const ok = add({ path, range, source: 'selection', rationale: 'selected by the user', truncated: false }, s.text, `${path} lines ${s.startLine}-${s.endLine} (selection)`);
@@ -107,6 +110,7 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
       const cut = truncateTo(s.text, Math.floor(remaining * 0.8));
       const fitted = cut !== '' && add({ path, range, source: 'selection', rationale: 'selected by the user (truncated to fit the budget)', truncated: true }, cut, `${path} lines ${s.startLine}-${s.endLine} (selection, truncated)`);
       if (!fitted) skipped.push({ path, reason: `selection does not fit the context budget (${budget} tokens)`, estimatedTokens: estimateTokens(s.text) });
+    }
     }
   }
 
@@ -131,7 +135,7 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
       const refusal = path ? modelPathRefusal(path) : null;
       if (refusal) { skipped.push({ path: ref.path, reason: `@file not sent: ${refusal}`, estimatedTokens: 0 }); continue; }
       const file = path ? index.files.get(path) : undefined;
-      const text = file?.text ?? (path ? (await port.readText(path).catch(() => null))?.text : undefined);
+      const text = path && isSecretPath(path) ? undefined : file?.text ?? (path ? (await port.readText(path).catch(() => null))?.text : undefined);
       if (!path || text === undefined) { skipped.push({ path: ref.path, reason: '@file not found in the workspace', estimatedTokens: 0 }); continue; }
       if (isBinaryText(text)) { skipped.push({ path, reason: '@file not sent: binary (contains NUL bytes)', estimatedTokens: 0 }); continue; }
       pinnedPaths.add(path);

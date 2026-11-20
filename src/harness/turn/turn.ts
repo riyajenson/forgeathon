@@ -160,12 +160,11 @@ export class TurnRun {
       for (const w of this.waiters.values()) w.resolve('cancelled');
       this.waiters.clear();
       this.wakeRetry?.();
-      // Safety net: whatever the run is waiting on, the turn ends (once) within a bounded time.
+      // Report an unconfirmed stop, but retain the session until every tool settles.
       const limit = this.deps.cancelTimeoutMs * 2 + this.deps.settleMs + 1000;
       const guard = setTimeout(() => {
         if (this.done) return;
         this.buffer.emit({ t: 'status', state: 'cancelling', detail: 'stopped locally; TrueForge did not confirm in time. No further edits or commands will run.' });
-        this.finishCancelled();
       }, limit);
       guard.unref?.();
       void this.finishedPromise?.finally(() => clearTimeout(guard));

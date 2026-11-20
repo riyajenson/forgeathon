@@ -18,6 +18,15 @@ const path = require('node:path');
     ? process.env.FORGE_TEST_GPU === '1'
     : path.basename(test) === 'responsiveness.cjs';
   const gpuArgs = gpuEnabled ? [] : ['--disable-gpu'];
+  // TRUEFORGE_URL: point the extension at that TrueForge (e.g. the scripted one on another port) instead of
+  // the default http://127.0.0.1:8790, which may be a real-model TrueForge.
+  if (process.env.TRUEFORGE_URL) {
+    const settings = path.join(profile, 'User', 'settings.json');
+    fs.mkdirSync(path.dirname(settings), { recursive: true });
+    let current = {};
+    try { current = JSON.parse(fs.readFileSync(settings, 'utf8')); } catch { /* new profile */ }
+    fs.writeFileSync(settings, JSON.stringify({ ...current, 'forge.trueforgeUrl': process.env.TRUEFORGE_URL }, null, 1));
+  }
   try {
     await runTests({
       version: process.env.FORGE_VSCODE_VERSION || '1.146.0',

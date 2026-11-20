@@ -128,6 +128,9 @@ measured scripted B runs (peaks 95–139 ms).
 
 - **TrueForge 0.185.1** (agent harness), **TrueForge SDK**, **MCP TypeScript SDK**, VS Code extension API,
   TypeScript, Node.js, Python/pytest, `@vscode/test-electron`.
+- **Demo video:** recorded by an automated UI script (Playwright over the Chrome DevTools Protocol) driving the
+  real extension in VS Code with real models (NVIDIA primary, OpenRouter fallback) and the local TrueForge 0.185.1;
+  no simulated output. Only model waiting time and operator holds were cut, each cut captioned on screen.
 - **AI coding assistants (declared as required):** **Claude** (Anthropic; Claude Code CLI and Claude chat) —
   TrueForge spike, harness architecture and implementation, context engine, tests, and, after the hand-over,
   the editor workstream, documentation and this write-up draft. **OpenAI Codex (via ChatGPT)** — the initial

@@ -80,6 +80,11 @@
           "default": 8000,
           "description": "Agent-mode context budget in tokens."
         },
+        "forge.context.semanticSearch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use local semantic reranking when keyword evidence is weak. Downloads about 54 MB on first use; disabled by default because current benchmarks show higher retrieval latency."
+        },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",
           "default": false,

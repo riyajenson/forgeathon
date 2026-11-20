@@ -181,13 +181,13 @@ export class LocalSemanticRanker {
 
   constructor(private readonly options: LocalSemanticRankerOptions = {}) {}
 
-  async rank(query: string, chunks: readonly IndexedChunk[], signal?: AbortSignal): Promise<ReadonlyMap<string, number>> {
+  async rank(query: string, chunks: readonly IndexedChunk[], signal?: AbortSignal, onProgress?: SemanticProgressHandler): Promise<ReadonlyMap<string, number>> {
     if (!query.trim() || !chunks.length || signal?.aborted) return new Map();
 
     const missing = chunks.filter((chunk) => !chunk.semanticVectors.has(semanticChunkId(chunk)));
     try {
       const texts = [query, ...missing.map(embeddingText)];
-      const vectors = await this.client().embed(texts, signal, this.options.onProgress);
+      const vectors = await this.client().embed(texts, signal, onProgress ?? this.options.onProgress);
       if (signal?.aborted) return new Map();
       if (vectors.length !== texts.length || !vectors[0]?.length) throw new Error('Semantic worker returned incomplete embeddings');
 

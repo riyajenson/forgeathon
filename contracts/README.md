@@ -1,6 +1,6 @@
 # Forge editor and harness contracts
 
-**REVIEWED WITH CHANGES R1-R5** | Application protocol **0.4.4**
+**REVIEWED WITH CHANGES R1-R5** | Application protocol **0.4.5**
 
 The VS Code extension captures user input, displays real harness activity, records review decisions, applies approved edits, and owns undo. Claude’s adapter translates the contract to local TrueForge sessions, MCP operations, retrieval, approvals, retries, and fallback. TrueForge owns model interaction and the agent loop. These declarations specify application behavior and do not establish SDK compatibility.
 

@@ -7,7 +7,7 @@ import { rankFiles, shouldUseSemantic, type RankedFile } from './rank';
 import { isBinaryText, isSecretPath, modelPathRefusal } from './files';
 import { estimateTokens } from './text';
 import { buildIndex, type IndexedChunk, type IndexedFile, type WorkspaceIndex } from './workspace-index';
-import { LocalSemanticRanker } from './semantic';
+import { LocalSemanticRanker, type SemanticProgressHandler } from './semantic';
 
 export interface ContextRequest {
   instruction: string;
@@ -26,6 +26,8 @@ export interface ContextRequest {
 export interface ContextAssemblyOptions {
   /** Test or host injection; production calls share one lazy local model worker. */
   semanticRanker?: Pick<LocalSemanticRanker, 'rank'>;
+  /** Reports the one-time local model load/download to the active turn. */
+  onSemanticProgress?: SemanticProgressHandler;
 }
 
 export interface ContextResult {
@@ -212,7 +214,7 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
       .map((rankedChunk) => rankedChunk.chunk));
     if (chunks.length) {
       const ranker = options.semanticRanker ?? defaultSemanticRanker();
-      semanticRanks = await ranker.rank(task, chunks, req.signal);
+      semanticRanks = await ranker.rank(task, chunks, req.signal, options.onSemanticProgress);
     }
   }
   const { files: ranked } = rankFiles(index, task, semanticRanks);

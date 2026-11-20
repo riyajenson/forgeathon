@@ -18,7 +18,7 @@ export class TurnController {
   /** The next agent turn starts a new TrueForge session instead of continuing the conversation. */
   newConversation() { if (!this.active) this.conversation = undefined; }
   private envelope<T>(body: T): Request<T> { return { version: this.version, requestId: randomUUID(), body }; }
-  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: {autoApproveSafeCommands?: boolean; commandBudget?: number} = {}) {
+  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: {autoApproveSafeCommands?: boolean; commandBudget?: number; semanticSearch?: boolean} = {}) {
     if (this.active) throw new Error('A turn is already in progress');
     const a: Active = { stopped: false, last: 0, submitted: false };
     this.active = a;
@@ -36,7 +36,8 @@ export class TurnController {
       this.edits.begin(ref);
       const turn = await this.harness.submitTurn(this.envelope({...ref, ...context, mode, instruction,
         ...(options.autoApproveSafeCommands === true ? {autoApproveSafeCommands: true} : {}),
-        ...(options.commandBudget === undefined ? {} : {commandBudget: options.commandBudget})}));
+        ...(options.commandBudget === undefined ? {} : {commandBudget: options.commandBudget}),
+        ...(options.semanticSearch === true ? {semanticSearch: true} : {})}));
       if (!turn.ok) throw new Error(turn.error.message);
       a.submitted = true;
       if (a.stopped) await this.stop();

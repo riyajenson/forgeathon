@@ -460,6 +460,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `forge.trueforgeUrl` | `http://127.0.0.1:8790` | TrueForge server |
 | `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token, generated each time the server starts) |
 | `forge.context.budgetTokens` | `8000` | Agent-mode context budget |
+| `forge.context.semanticSearch` | `false` | Opt in to local semantic reranking when keyword evidence is weak |
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
 | `forge.commandBudget.agent` | `3` | Most commands per agent turn |
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
@@ -468,6 +469,18 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults (5000, 2) | We use `3000` and `4`: a short connect timeout, and TrueForge resends a rate-limited (429) model request up to 4 times (about 15 s) before the turn sees the error |
 | `SQLITE_PATH` | TrueForge default | TrueForge's database; a new path starts fresh |
 | `FORGE_FLASK_DIR` | `~/projects/flask-3.1.3` | Flask checkout for the context-ranking unit test |
+
+When `forge.context.semanticSearch` is enabled, Forge runs a pinned MiniLM embedding model locally on the CPU. The first semantic search downloads about 54 MB into `~/.cache/forgeathon/transformers`; model files and vectors stay outside the workspace. The first run can take longer while the model downloads and loads. If files are unavailable or inference fails, Forge continues with lexical and structural retrieval. The setting is off by default. In the paired run on the 11 available Forge tasks, hybrid search raised relevant-file density by 15% and reciprocal rank by 11%, while recall@5 fell by 2%; median context-assembly time rose from about 2 ms to 352 ms (about 178× slower). Two Flask cases could not be scored because that checkout was unavailable. These results do not meet the 2× target.
+
+Run the paired benchmark from the repository root to compare lexical and hybrid results on the same cases:
+
+```bash
+npm --prefix src/harness test
+node scripts/bench-context.mjs --mode lexical
+node scripts/bench-context.mjs --mode hybrid
+```
+
+The hybrid mode performs both retrieval passes and includes per-case results, quality metrics, and latency in its JSON report. Flask cases are marked unavailable when `FORGE_FLASK_DIR` does not point to a Flask checkout. The fixed Task A/B mock workflow (`scripts/e2e-mock.sh --tasks A,B`) also needs a Flask checkout; pass its location with `--flask PATH`.
 
 The turn log at `~/.forge/turns.jsonl` records model, attempts, tokens, timing and approvals per turn, with no
 content.
@@ -562,7 +575,7 @@ The smoke script also accepts these options:
 ```text
 agent/        TrueForge agent definitions (forge-coder.json, forge-inline.json)
 config/       models.example.json (real providers), models.mock.example.json (demo model)
-contracts/    shared TypeScript contract between extension and harness (protocol 0.4.4)
+contracts/    shared TypeScript contract between extension and harness (protocol 0.4.5)
 extension/    VS Code extension: commands, inline review, agent panel, EditorPort
 src/harness/  forge-harness: TrueForge adapter, MCP server and tools, context engine,
               review core, command budget, demo model, model meter

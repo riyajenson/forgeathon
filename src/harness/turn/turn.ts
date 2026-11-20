@@ -74,6 +74,7 @@ export class TurnRun {
   private attempt: Attempt | undefined;
   private scope: SessionScope | undefined;
   private cancelRequested = false;
+  private readonly contextAbort = new AbortController();
   private cancelPromise: Promise<CancelStatus> | undefined;
   private wakeRetry: (() => void) | undefined;
   private readonly waiters = new Map<string, ReviewWaiter>();
@@ -155,6 +156,7 @@ export class TurnRun {
     if (this.done) return Promise.resolve('already_terminal');
     this.cancelPromise ??= (async () => {
       this.cancelRequested = true;
+      this.contextAbort.abort();
       this.buffer.emit({ t: 'status', state: 'cancelling' });
       this.scope?.cancel();
       for (const w of this.waiters.values()) w.resolve('cancelled');
@@ -187,7 +189,13 @@ export class TurnRun {
     const emit = this.buffer.emit.bind(this.buffer);
     emit({ t: 'turn_started' });
     emit({ t: 'status', state: 'starting' });
-    const { input, context } = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens);
+    const { input, context } = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens, this.contextAbort.signal, {
+      onSemanticProgress: (event) => {
+        const progress = typeof event.progress === 'number' ? ` (${Math.floor(event.progress)}%)` : '';
+        const file = event.file ?? event.name;
+        emit({ t: 'status', state: 'starting', detail: `Loading local context model${progress}${file ? ` · ${file}` : ''}` });
+      },
+    });
     if (context) emit({ t: 'context_report', report: context.report });
 
     let agent = this.deps.agentName;
@@ -219,6 +227,7 @@ export class TurnRun {
 
       const scope = this.deps.scopes.open(runtimeSessionId);
       scope.resetForTurn();
+      scope.semanticSearch = this.req.semanticSearch === true;
       scope.onApplied = (result) => emit({ t: 'edit_applied', result });
       scope.workspaceRoot = this.deps.workspaceRoot;
       scope.onContext = (report) => emit({ t: 'context_report', report });

@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = '0.4.4' as const;
+export const PROTOCOL_VERSION = '0.4.5' as const;
 export type Version = typeof PROTOCOL_VERSION;
 export type SessionId = string;
 export type TurnId = string;

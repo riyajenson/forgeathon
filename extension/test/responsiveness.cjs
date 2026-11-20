@@ -93,12 +93,14 @@ exports.run = async () => {
     })();
     try { await ui.run('agent', TASK_B, {}); } finally { done = true; await answering; }
     const turnMs = performance.now() - t0;
+    await sleep(30); // allow the webview's next animation-frame acknowledgements to arrive
+    const render = ui.panel.getRenderMetrics();
     lag.disable();
     const { profile } = await post(session, 'Profiler.stop');
     const changed = (await run('git', ['diff', '--name-only'], { cwd: root })).stdout.trim().split('\n').filter(Boolean);
     const summary = {
       turnMs: Math.round(turnMs), maxBlockMs: Math.round(Math.max(lag.max / 1e6, maxGap)),
-      p99Ms: Math.round(lag.percentile(99) / 1e6), meanMs: Number((lag.mean / 1e6).toFixed(1)), changed,
+      p99Ms: Math.round(lag.percentile(99) / 1e6), meanMs: Number((lag.mean / 1e6).toFixed(1)), changed, render,
       top: topSelf(profile),
     };
     if (process.env.FORGE_PROFILE_OUT) {
@@ -106,7 +108,12 @@ exports.run = async () => {
       await fs.writeFile(process.env.FORGE_PROFILE_OUT.replace(/\.json$/, '.cpuprofile'), JSON.stringify(profile));
     }
     console.log(`RESPONSIVENESS Task B: turn ${summary.turnMs} ms, longest block ${summary.maxBlockMs} ms, p99 ${summary.p99Ms} ms, mean ${summary.meanMs} ms`);
+    console.log(`WEBVIEW event-to-rAF: control n=${render.control.count} p50=${render.control.p50Ms} ms p95=${render.control.p95Ms} ms; text n=${render.text.count} p50=${render.text.p50Ms} ms p95=${render.text.p95Ms} ms`);
     console.log(summary.top.join('\n'));
+    assert.ok(render.control.count > 0, 'the real webview acknowledged control renders');
+    assert.ok(render.text.count > 0, 'the real webview acknowledged text renders');
+    assert.ok(render.control.p95Ms <= 20, `control event-to-rAF p95 was ${render.control.p95Ms} ms`);
+    assert.ok(render.text.p95Ms <= 40, `text event-to-rAF p95 was ${render.text.p95Ms} ms`);
     assert.equal(changed.length, 3, 'Task B completed (three files changed)');
     assert.ok(summary.maxBlockMs <= MAX_BLOCK_MS, `extension host blocked for ${summary.maxBlockMs} ms (limit ${MAX_BLOCK_MS} ms)`);
     console.log(`PASS responsiveness: the extension host was never blocked longer than ${MAX_BLOCK_MS} ms during Task B`);

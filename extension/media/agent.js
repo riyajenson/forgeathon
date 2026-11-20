@@ -41,6 +41,9 @@
     list('summary',s.summary);
     el('changes').hidden = !s.edits.length;
     list('edits',s.edits);
+    if (Number.isInteger(s.renderSequence)) {
+      requestAnimationFrame(() => vscode.postMessage({ action: 'rendered', sequence: s.renderSequence }));
+    }
   });
   vscode.postMessage({action:'ready'});
 })();

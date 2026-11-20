@@ -16,6 +16,10 @@ export class AgentViewState {
   tools: {id: string; label: string; detail: string}[] = [];
   context?: ContextReport;
   edits: string[] = [];
+  /** Per file in this turn: proposals reviewed, hunks proposed and accepted, last apply status. */
+  files: Record<string, {reviews: number; hunks: number; accepted: number; status: string}> = {};
+  /** Set when the turn ends: every file the turn changed (then reviewed files left unchanged), on one screen. */
+  summary: string[] = [];
   command?: {command: string; cwd: string; warning?: string};
 
   update(e: HarnessEvent) {
@@ -33,7 +37,12 @@ export class AgentViewState {
         break;
       }
       case 'context_report': this.context = e.report; break;
-      case 'review_request': this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path; break;
+      case 'review_request': {
+        this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path;
+        const f = this.files[e.proposal.path] ??= {reviews: 0, hunks: 0, accepted: 0, status: ''};
+        f.reviews++; f.hunks += e.proposal.hunks.length;
+        break;
+      }
       case 'command_request':
         if (e.autoApproved) {
           this.status = 'auto-approved: ' + e.command;
@@ -49,6 +58,11 @@ export class AgentViewState {
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);
+        {
+          const f = this.files[e.result.path] ??= {reviews: 0, hunks: 0, accepted: 0, status: ''};
+          f.status = e.result.status;
+          if ('appliedHunkIds' in e.result) f.accepted += e.result.appliedHunkIds.length;
+        }
         if (e.result.status === 'save_failed') this.banner = 'Applied to the buffer. Save failed. Inspect the document before retrying Save.';
         break;
       case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; break;
@@ -56,8 +70,16 @@ export class AgentViewState {
       case 'done':
         this.status = e.summary || e.status; this.outcome = e.status; this.busy = this.reviewing = false; this.command = undefined;
         if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
+        this.summary = this.fileSummary();
         break;
     }
+  }
+  private fileSummary() {
+    const all = Object.entries(this.files);
+    const counts = (f: {reviews: number; hunks: number; accepted: number}) =>
+      f.reviews + (f.reviews === 1 ? ' review, ' : ' reviews, ') + f.accepted + '/' + f.hunks + ' hunks accepted';
+    return [...all.filter(([, f]) => f.accepted > 0).map(([path, f]) => path + ' | ' + counts(f) + ' | ' + f.status),
+      ...all.filter(([, f]) => f.accepted === 0).map(([path, f]) => path + ' | ' + counts(f) + ' | not changed')];
   }
 }
 
@@ -113,7 +135,7 @@ button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
 <section id="context" hidden><h2>Context</h2><p id="budget"></p><ul id="selected"></ul><h2 id="skippedTitle">Skipped</h2><ul id="skipped"></ul></section>

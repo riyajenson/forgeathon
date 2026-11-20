@@ -26,6 +26,18 @@ exports.run = async () => {
   assert.equal(budget.command, undefined, 'a command refused by the budget opens no prompt');
   assert.equal(budget.status, 'command budget reached');
   assert.deepEqual(budget.tools, [{id:'budget:b',label:'command budget reached (3 per turn): python -m pytest',detail:'not run'}]);
+  // Turn-end summary: every changed file with review and accepted-hunk counts; reviewed-but-rejected files last.
+  const turn = new AgentViewState();
+  const prop = (path, n) => ({t:'review_request',proposal:{path,hunks:Array.from({length:n},(_, i)=>({hunkId:String(i)}))}});
+  const applied = (path, ids, status = 'saved') => ({t:'edit_applied',result:{path,status,appliedHunkIds:ids}});
+  turn.update(prop('src/a.py',2)); turn.update(applied('src/a.py',['0','1']));
+  turn.update(prop('docs/b.rst',3)); turn.update({t:'edit_applied',result:{path:'docs/b.rst',status:'approval_missing'}});
+  turn.update(prop('tests/c.py',1)); turn.update(applied('tests/c.py',['0']));
+  turn.update(prop('src/a.py',1)); turn.update(applied('src/a.py',['0']));
+  assert.deepEqual(turn.summary, [], 'no summary while the turn runs');
+  turn.update({t:'done',status:'done'});
+  assert.deepEqual(turn.summary, ['src/a.py | 2 reviews, 3/3 hunks accepted | saved', 'tests/c.py | 1 review, 1/1 hunks accepted | saved',
+    'docs/b.rst | 1 review, 0/3 hunks accepted | not changed']);
   const state = new AgentViewState();
   const folder = vscode.workspace.workspaceFolders[0];
   const selected = {path:'src/a',source:'automatic',rank:1,rationale:'entry point',estimatedTokens:6,truncated:false};

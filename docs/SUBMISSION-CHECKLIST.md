@@ -14,7 +14,7 @@ verified · 🟡 ready, needs a human step · ❌ open.
 | Model configuration lives in TrueForge; not hard-coded to one provider | ✅ | `config/models.example.json` → `scripts/setup-trueforge.mjs`, or a named profile with `scripts/use-models.sh`; NVIDIA, OpenRouter, Groq tested; Gemini, Anthropic, OpenAI as untested examples |
 | TrueForge in local mode | ✅ | `npx @truefoundry/trueforge@0.185.1`, SQLite |
 | Agent definition included in the repository | ✅ | `agent/forge-coder.json`, `agent/forge-inline.json` |
-| TrueForge session with turns and tool calls shown for Task B | 🟡 | **Eligibility gate.** `docs/DEMO-SCRIPT.md` shot 2:48–2:56: hold ~8 s on Task B's turn and its tool calls; note the timestamp |
+| TrueForge session with turns and tool calls shown for Task B | 🟡 | **Eligibility gate.** `docs/DEMO-SCRIPT.md` shot 2:52–3:00: hold ~8 s on Task B's turn and its tool calls; note the timestamp |
 | Fork disclosure (if any) | ✅ | Built from scratch — README "Starting point, versions and licence" |
 
 The README's "Eligibility at a glance" table maps each requirement to files.
@@ -46,11 +46,12 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | No API keys committed | ✅ | Secret scan of full history (STATUS.md); keys only from env |
 | Licence and attribution | ✅ | `LICENSE` (MIT), `THIRD_PARTY_NOTICES.md` |
 | PDF, 1–3 pages (scorecard heading and rows on one page), headings in exact order (Team, Starting point, Architecture on TrueForge, How context is selected, Model setup, Scorecard, Tools used, Known limitations and what you would do with another month) | 🟡 | Draft `docs/writeup/WRITEUP.md` renders to 3 pages; fill team, models, cost, timestamps; `scripts/render-writeup.sh` |
-| All models used, hosting, approx. cost, how to switch | ✅ | Write-up section 5: NVIDIA Nemotron-3 Ultra primary, the same model on OpenRouter's free tier as fallback, Groq Qwen3.8-27B spare, all free ($0); switching = edit config + rerun setup, or `scripts/use-models.sh <profile>` |
+| All models used, hosting, approx. cost, how to switch | ✅ | Write-up section 5: NVIDIA Nemotron-3 Ultra primary, the same model on OpenRouter's free tier as fallback, Groq Qwen3.8-27B as a configured spare (used as fallback in earlier rehearsals, before OpenRouter replaced it), all free ($0); switching = edit config + rerun setup, or `scripts/use-models.sh <profile>` |
 | AI tools declared truthfully | ✅ | Write-up section 7 and README "AI tools used" (Claude: Claude Code CLI + chat; OpenAI Codex via ChatGPT, incl. PRs #3/#4 and QA) |
-| Demo video ≤ 4 min, public, A/B/C in order, each verified, TrueForge session for B, no cut between instruction and diff | 🟡 | `docs/DEMO-SCRIPT.md` (3:50 plan, measured Task B numbers). **Real models only**; record what the model actually does |
+| Demo video ≤ 4 min, public, A/B/C in order, each verified, TrueForge session for B, no cut between instruction and diff | 🟡 | `docs/DEMO-SCRIPT.md` (3:55 plan, measured Task B numbers). **Real models only**; record what the model actually does |
 | Scorecard with video timestamps | 🟡 | Fill `[mm:ss]` after recording; README `<VIDEO_URL>` and `docs/images/` screenshots too |
 | Techfest Team ID | 🟡 | Keep available for the form; add to the write-up header |
 | Submission form https://forms.gle/htyWGFJRBgsg3qmx6 | 🟡 | Human |
-| Links public by the deadline (repo, video) | 🟡 | Check in a signed-out browser |
+| Public PDF link | 🟡 | After the timestamps are filled: `scripts/render-writeup.sh`, then commit the rendered PDF (`git add -f docs/writeup/WRITEUP.pdf`, it is gitignored) and push; submit https://github.com/riyajenson/forgeathon/blob/main/docs/writeup/WRITEUP.pdf as the PDF link. Check it opens signed out (DEMO-SCRIPT "After recording") |
+| Links public by the deadline (repo, video, PDF) | 🟡 | Check in a signed-out browser |
 | Evidence gate `node scripts/check-submission.mjs` | 🟡 | Fails until the write-up placeholders are filled and `docs/writeup/rehearsal.json` (from `config/rehearsal.example.json`) records passing real A/B/C runs on the current commit (or an ancestor followed only by docs commits); `node --test scripts/submission-readiness.test.mjs` 7/7 |

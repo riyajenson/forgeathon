@@ -162,7 +162,7 @@ script is for switching later. The defaults (profile `nvidia-free`):
 |---|---|---|---|
 | Primary | `nvidia/nemotron-3-ultra` | `nvidia/nemotron-3-ultra-550b-a55b` (NVIDIA API Catalog) | ≈ 40 requests/min |
 | Fallback | `openrouter/nemotron-3-ultra-free` | `nvidia/nemotron-3-ultra-550b-a55b:free` (OpenRouter) | 50 requests/day without credit (1,000 after buying $10) |
-| Spare (configured, unused) | `groq/qwen3-8-27b` | `qwen/qwen3.8-27b` (Groq) | ≈ 7,000 input tokens/min: not enough for Task B |
+| Spare: configured; used as fallback in earlier rehearsals, before OpenRouter replaced it | `groq/qwen3-8-27b` | `qwen/qwen3.8-27b` (Groq) | ≈ 7,000 input tokens/min: not enough for Task B |
 
 The fallback is the same model through another provider: its own key, account and quota, and its context
 (1M tokens) and token rate carry Task B's requests, which Groq's free tier refuses; the daily cap above is its
@@ -458,7 +458,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | Name | Default | Purpose |
 |---|---|---|
 | `forge.trueforgeUrl` | `http://127.0.0.1:8790` | TrueForge server |
-| `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token per session) |
+| `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token, generated each time the server starts) |
 | `forge.context.budgetTokens` | `8000` | Agent-mode context budget |
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
 | `forge.commandBudget.agent` | `3` | Most commands per agent turn |
@@ -588,7 +588,8 @@ spike/        TrueForge 0.185.1 feasibility spike and findings (not shipped)
 - **Licence:** MIT (`LICENSE`).
 - **No secrets are committed:**
   - Keys come only from environment variables, and `config/models.json` is gitignored.
-  - The MCP server listens on 127.0.0.1 with a random bearer token per session.
+  - The MCP server listens on 127.0.0.1 with a random bearer token generated when that server starts (one
+    server per running harness, not per session). Approvals are bound to the TrueForge session separately.
   - The demo "keys" are dummy values that only the local demo model accepts.
 
 ## AI tools used

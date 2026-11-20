@@ -12,13 +12,7 @@ export const GATHER_DEFAULT_BUDGET = 6000;
 export async function gatherContextTool(ctx: ToolContext, args: GatherContextArgs): Promise<ToolOutcome> {
   if (typeof args.task !== 'string' || !args.task.trim()) return { ok: false, code: 'INVALID_ARGS', message: 'task must be a non-empty string' };
   const budget = Math.min(Math.max(1000, Math.floor(args.budget_tokens ?? GATHER_DEFAULT_BUDGET)), 12000);
-  const result = await assembleContext(ctx.port, {
-    instruction: args.task,
-    budgetTokens: budget,
-    mode: 'agent',
-    semanticSearch: ctx.scope?.semanticSearch === true,
-    ...(ctx.scope ? { signal: ctx.scope.signal } : {}),
-  });
+  const result = await assembleContext(ctx.port, { instruction: args.task, budgetTokens: budget, mode: 'agent' });
   ctx.scope?.onContext?.(result.report);
   const files = [...new Set(result.report.selections.map((s) => s.path))];
   return { ok: true, text: `Ranked files: ${files.join(', ') || 'none'}\n\n${result.text}` };

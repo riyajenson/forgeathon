@@ -6,9 +6,6 @@ import { countTerms, normalise, splitIdentifier, terms } from './text';
 
 export interface IndexedChunk extends Chunk {
   id: number;
-  sha256: string;
-  /** Shared with the hash-keyed FileAnalysis; this cache is memory-only. */
-  semanticVectors: Map<string, readonly number[]>;
   tf: Map<string, number>;
   length: number;
   /** Normalised parts of the chunk's own name. */
@@ -75,12 +72,7 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => 
 }
 
 /** Per-file analysis, reused while the file's sha256 is unchanged (indexing runs for every context request). */
-interface FileAnalysis {
-  sha256: string;
-  chunks: Array<Omit<IndexedChunk, 'id' | 'sha256' | 'semanticVectors'>>;
-  pathTerms: Set<string>;
-  semanticVectors: Map<string, readonly number[]>;
-}
+interface FileAnalysis { sha256: string; chunks: Array<Omit<IndexedChunk, 'id'>>; pathTerms: Set<string> }
 const analyses = new WeakMap<EditorPort, Map<string, FileAnalysis>>();
 
 /** Yields to the event loop after ~SLICE_MS of synchronous work: the harness shares the editor's thread. */
@@ -126,7 +118,6 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
     if (analysis?.sha256 !== snap.sha256) {
       analysis = {
         sha256: snap.sha256,
-        semanticVectors: new Map(),
         pathTerms: new Set(p.split('/').flatMap((seg) => splitIdentifier(seg.replace(/\.[^.]+$/, '')).map(normalise))),
         chunks: chunkFile(p, snap.text).map((c) => {
           const tokens = terms(`${c.text}`);
@@ -141,7 +132,7 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
       pathTerms: analysis.pathTerms,
     };
     for (const c of analysis.chunks) {
-      const ic: IndexedChunk = { ...c, id: chunks.length, sha256: analysis.sha256, semanticVectors: analysis.semanticVectors };
+      const ic: IndexedChunk = { ...c, id: chunks.length };
       chunks.push(ic);
       file.chunks.push(ic);
     }

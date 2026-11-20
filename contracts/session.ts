@@ -5,14 +5,12 @@ import type { Request, Response, SessionId, TurnRef } from './protocol';
 
 export type TurnRequest = TurnRef & PromptContext & {
   mode: 'inline' | 'agent'; instruction: string;
-  /** 0.4.5: opt into local semantic reranking when lexical evidence is weak; disabled by default. */
-  semanticSearch?: boolean;
   /** 0.4.3, default off: the adapter allows pytest, python -m pytest, git status and git diff (no shell
    * operators, 0.4.4) itself and reports them with command_request.autoApproved. Everything else, unrestricted
    * commands and edits are never auto-approved. */
   autoApproveSafeCommands?: boolean;
   /** 0.4.4: most run_command calls this turn may present (prompted or auto-approved); later ones are refused to
-   * the model without prompting and reported with command_budget_reached. Default 5 for agent, 1 for inline. */
+   * the model without prompting and reported with command_budget_reached. Default 3 for agent, 1 for inline. */
   commandBudget?: number;
 };
 export type SessionStatus = {

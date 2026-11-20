@@ -33,8 +33,6 @@ export class SessionScope {
   readonly commands = new ReviewRegistry<CommandApproval>();
   private readonly inFlight = new Set<Promise<unknown>>();
   private cancelledFlag = false;
-  private contextAbort = new AbortController();
-  semanticSearch = false;
   /** Writes (or possible writes) performed through this scope: edits applied, commands run. */
   writes = 0;
   /** Absolute workspace root of the application session (run_command cwd base). */
@@ -53,14 +51,9 @@ export class SessionScope {
     return this.cancelledFlag;
   }
 
-  get signal(): AbortSignal {
-    return this.contextAbort.signal;
-  }
-
   /** Closes the approval gate: waiting decisions are dropped, no new write may start, commands are killed. */
   cancel(): void {
     this.cancelledFlag = true;
-    this.contextAbort.abort();
     this.reviews.clear();
     this.commands.clear();
     for (const c of this.running) c.abort();
@@ -73,10 +66,7 @@ export class SessionScope {
 
   /** Re-opens the gate for the next turn on the same runtime session. */
   resetForTurn(): void {
-    this.contextAbort.abort();
     this.cancelledFlag = false;
-    this.contextAbort = new AbortController();
-    this.semanticSearch = false;
     this.reviews.clear();
     this.commands.clear();
     this.writes = 0;

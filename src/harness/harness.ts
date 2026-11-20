@@ -6,7 +6,6 @@ import {
   type Request, type Response, type ReviewDecision, type SessionId, type SessionStatus, type TurnRef, type TurnRequest,
 } from './contract-types';
 import { ScopeRegistry } from './mcp/scope';
-import { disposeContextResources } from './context';
 import { canonicalJson } from './review/canonical';
 import { startMcpServer, type RunningMcpServer } from './mcp/server';
 import { isTrueForgeUnreachable, safeMessage } from './trueforge/errors';
@@ -237,7 +236,6 @@ class ForgeHarnessImpl implements ForgeHarness {
   async dispose(): Promise<void> {
     const running = [...this.sessions.values()].map((s) => s.active).filter((r): r is TurnRun => !!r && !r.done);
     await Promise.allSettled(running.map((r) => r.cancel()));
-    await disposeContextResources();
     this.scopes.closeAll();
     await this.mcp?.close();
     this.mcp = undefined;

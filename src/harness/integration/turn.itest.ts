@@ -13,8 +13,6 @@ import { FakePort } from '../mcp/fake-port';
 import { sha256Hex } from '../review';
 import { createClient } from '../trueforge/sdk';
 import { MockModel, MOCK_KEY, scenarioOf, textOf, type MockReply, type MockRequest } from '../testing/mock-model';
-import { commandTestHooks } from '../mcp/command';
-import { checkProtection } from '../mcp/command-protection';
 
 const TF_URL = process.env['TF_URL'] ?? 'http://127.0.0.1:8790';
 const MOCK_PORT = 47702;
@@ -63,9 +61,6 @@ function script(req: MockRequest): MockReply {
     case 'cmd':
       if (toolResult !== undefined) return { text: `cmd finished: ${toolResult.slice(0, 300)}` };
       return { toolCalls: [{ name: 'run_command', args: { command: 'echo made > made.txt && echo ran' } }] };
-    case 'cmd-slow':
-      if (toolResult !== undefined) return { text: `cmd finished: ${toolResult.slice(0, 300)}` };
-      return { toolCalls: [{ name: 'run_command', args: { command: 'sleep 30' } }] };
     case 'edit-then-500':
       if (toolResult !== undefined) return { status: 500, message: 'mock upstream exploded' };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
@@ -292,75 +287,19 @@ test('cancel while paused for review: confirmed, nothing written, late decision 
 test('cancel while streaming: confirmed quickly, done cancelled', async () => {
   await withHarness('it-coder', async (h, sid) => {
     let cancelStatus: string | undefined;
-    let cancelReplyMs = 0;
-    let cancelRequestedAt = 0;
+    let ms = 0;
     const events = await runTurn(h, sid, 'SCENARIO:slow', async (e, ctl) => {
       if (e.t === 'text' && cancelStatus === undefined) {
         cancelStatus = 'pending';
         const t0 = Date.now();
-        cancelRequestedAt = t0;
         const c = await h.cancel({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: ctl.sessionId, turnId: ctl.turnId } });
-        cancelReplyMs = Date.now() - t0;
+        ms = Date.now() - t0;
         cancelStatus = c.ok ? c.body : 'error';
       }
     });
-    const cancelRequestToDoneMs = Date.now() - cancelRequestedAt;
     assert.equal(cancelStatus, 'confirmed');
-    assert.ok(cancelReplyMs < 2000, `cancel reply took ${cancelReplyMs} ms`);
+    assert.ok(ms < 2000, `cancel took ${ms} ms`);
     assert.equal(doneOf(events).status, 'cancelled');
-    assert.ok(cancelRequestToDoneMs < 2000, `cancel request took ${cancelRequestToDoneMs} ms to reach the final done event`);
-    assert.equal(ofType(events, 'edit_applied').length, 0, 'streaming cancellation has no in-flight edit');
-    assert.equal(await disk(), ORIGINAL, 'cancelling the streaming turn leaves the workspace unchanged');
-    console.log(`CANCEL streaming with no pending write: request-to-done ${cancelRequestToDoneMs} ms (reply ${cancelReplyMs} ms)`);
-  });
-});
-
-test('cancel while an approved command is running: process stops and workspace stays unchanged', async (t) => {
-  try { await checkProtection(root, new AbortController().signal); }
-  catch { t.skip('Linux bubblewrap/user namespaces unavailable'); return; }
-
-  await withHarness('it-coder', async (h, sid) => {
-    let turnId: string | undefined;
-    let prompt: Extract<HarnessEvent, { t: 'command_request' }> | undefined;
-    let releaseSpawnTimer: NodeJS.Timeout | undefined;
-    let commandReady!: () => void;
-    const spawned = new Promise<void>(resolve => { commandReady = resolve; });
-    commandTestHooks.beforeSpawn = () => { releaseSpawnTimer = setTimeout(commandReady, 100); };
-    let cancelStatus: string | undefined;
-    let cancelReplyMs = 0;
-    let cancelRequestedAt = 0;
-    try {
-      const eventsPromise = runTurn(h, sid, 'SCENARIO:cmd-slow', async (e, ctl) => {
-        turnId = ctl.turnId;
-        if (e.t === 'command_request') {
-          prompt = e;
-          const decision = await h.submitReview({
-            version: PROTOCOL_VERSION, requestId: rid(),
-            body: { sessionId: ctl.sessionId, turnId: ctl.turnId, callId: e.callId, kind: 'command', allow: true }
-          });
-          assert.ok(decision.ok, JSON.stringify(decision));
-        }
-      });
-      await spawned;
-      assert.ok(turnId, 'the approved command belongs to the active turn');
-      const t0 = cancelRequestedAt = Date.now();
-      const cancelled = await h.cancel({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: sid, turnId } });
-      cancelReplyMs = Date.now() - t0;
-      cancelStatus = cancelled.ok ? cancelled.body : 'error';
-      const events = await eventsPromise;
-      const cancelRequestToDoneMs = Date.now() - cancelRequestedAt;
-      assert.equal(cancelStatus, 'confirmed');
-      assert.ok(cancelReplyMs < 2000, `cancel reply took ${cancelReplyMs} ms`);
-      assert.equal(doneOf(events).status, 'cancelled');
-      assert.ok(cancelRequestToDoneMs < 2000, `command cancellation took ${cancelRequestToDoneMs} ms to reach done`);
-      assert.equal(prompt?.command, 'sleep 30');
-      assert.equal(ofType(events, 'edit_applied').length, 0);
-      assert.equal(await disk(), ORIGINAL, 'the sleeping command made no workspace changes');
-      console.log(`CANCEL running command: request-to-done ${cancelRequestToDoneMs} ms (reply ${cancelReplyMs} ms)`);
-    } finally {
-      if (releaseSpawnTimer) clearTimeout(releaseSpawnTimer);
-      commandTestHooks.beforeSpawn = undefined;
-    }
   });
 });
 

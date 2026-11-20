@@ -12,12 +12,6 @@ const path = require('node:path');
   const given = process.env.FORGE_EDH_WORKSPACE;
   const workspace = given || fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-'));
   const profile = process.env.FORGE_TEST_CDP_PROFILE || fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-profile-'));
-  // Keep the real-frame responsiveness benchmark on the normal renderer. GPU-off
-  // software rendering makes requestAnimationFrame timing depend heavily on host load.
-  const gpuEnabled = process.env.FORGE_TEST_GPU
-    ? process.env.FORGE_TEST_GPU === '1'
-    : path.basename(test) === 'responsiveness.cjs';
-  const gpuArgs = gpuEnabled ? [] : ['--disable-gpu'];
   try {
     await runTests({
       version: process.env.FORGE_VSCODE_VERSION || '1.146.0',
@@ -28,7 +22,7 @@ const path = require('node:path');
       extensionTestsPath: test,
       extensionTestsEnv: { ...process.env },
       // FORGE_TEST_CDP_PROFILE (live.cjs): that profile directory, with a DevTools port so the test can drive native UI.
-      launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', ...gpuArgs,
+      launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--disable-gpu',
         ...(process.env.FORGE_TEST_CDP_PROFILE ? ['--remote-debugging-port=0'] : []),
         '--user-data-dir', profile],
     });

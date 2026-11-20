@@ -2,16 +2,11 @@
 // and neighbour bonuses (tests, docs, imports). Every score comes with plain-English reasons.
 import { countTerms, terms } from './text';
 import type { IndexedChunk, IndexedFile, WorkspaceIndex } from './workspace-index';
-import { semanticChunkId } from './semantic';
 
 export interface RankedChunk {
   chunk: IndexedChunk;
   score: number;
   matched: string[];
-  /** Raw cosine score for display; never added to lexical BM25 scores. */
-  semanticScore?: number;
-  /** Rank-fused chunk relevance used when packing mixed lexical/semantic results. */
-  relevance?: number;
 }
 
 export interface RankedFile {
@@ -70,26 +65,7 @@ const SUPPORTING_WEIGHT = 0.6;
 const isSupporting = (path: string) => /(^|\/)(tests?|docs?)\//.test(path) || /\.(rst|md)$/.test(path) || /(^|\/)test_[^/]*\.py$/.test(path);
 const isCode = (path: string) => !path.startsWith('tests/') && !path.startsWith('docs/') && /\.(py|ts|js|go|rs|java|rb|php|cs|cpp|c)$/.test(path);
 
-const RRF_K = 60;
-const pathOrder = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
-
-/**
- * Decide whether lexical evidence is uncertain enough to spend time on semantic inference.
- * Coverage is measured across the top five files; a close top-two score is also uncertainty.
- */
-export function shouldUseSemantic(files: readonly RankedFile[], queryTerms: readonly string[]): boolean {
-  if (!queryTerms.length) return false;
-  if (!files.length) return true;
-  const top = files.slice(0, 5);
-  const covered = new Set(top.flatMap((file) => file.chunks.flatMap((chunk) => chunk.matched)));
-  const coverage = covered.size / queryTerms.length;
-  if (coverage < 0.4) return true;
-  if (files.length < 2) return false;
-  const margin = (files[0]!.score - files[1]!.score) / Math.max(Math.abs(files[0]!.score), Number.EPSILON);
-  return margin < 0.1;
-}
-
-export function rankFiles(index: WorkspaceIndex, task: string, semanticRanks?: ReadonlyMap<string, number>): { files: RankedFile[]; queryTerms: string[] } {
+export function rankFiles(index: WorkspaceIndex, task: string): { files: RankedFile[]; queryTerms: string[] } {
   const query = countTerms(terms(task));
   const queryTerms = [...query.keys()];
   const byFile = new Map<string, RankedChunk[]>();
@@ -164,67 +140,5 @@ export function rankFiles(index: WorkspaceIndex, task: string, semanticRanks?: R
       if (file) f.chunks = file.chunks.map((chunk) => ({ chunk, score: 0, matched: [] }));
     }
   }
-
-  const lexicalFiles = [...ranked.values()].sort((a, b) => b.score - a.score);
-  if (!semanticRanks?.size || !queryTerms.length) return { files: lexicalFiles, queryTerms };
-
-  const semanticChunks = new Map<string, number>();
-  const semanticBestByFile = new Map<string, number>();
-  for (const chunk of index.chunks) {
-    const score = semanticRanks.get(semanticChunkId(chunk));
-    if (score === undefined || !Number.isFinite(score) || score <= 0) continue;
-    semanticChunks.set(semanticChunkId(chunk), score);
-    const previous = semanticBestByFile.get(chunk.path);
-    if (previous === undefined || score > previous) semanticBestByFile.set(chunk.path, score);
-  }
-
-  const semanticFiles = [...semanticBestByFile.entries()]
-    .sort(([leftPath, leftScore], [rightPath, rightScore]) => rightScore - leftScore || pathOrder(leftPath, rightPath))
-    .map(([path]) => path);
-  if (!semanticFiles.length) return { files: lexicalFiles, queryTerms };
-
-  const fileByPath = new Map<string, RankedFile>();
-  for (const file of lexicalFiles) fileByPath.set(file.path, { ...file, chunks: [...file.chunks] });
-  for (const path of semanticFiles) {
-    let file = fileByPath.get(path);
-    if (!file) {
-      const indexed = index.files.get(path);
-      if (!indexed) continue;
-      file = { path, score: 0, reasons: [], chunks: indexed.chunks.map((chunk) => ({ chunk, score: 0, matched: [] })) };
-      fileByPath.set(path, file);
-    }
-    for (const rankedChunk of file.chunks) {
-      const score = semanticChunks.get(semanticChunkId(rankedChunk.chunk));
-      if (score !== undefined) rankedChunk.semanticScore = score;
-    }
-    const best = semanticBestByFile.get(path)!;
-    file.reasons.push(`semantic similarity (best chunk score ${best.toFixed(3)})`);
-  }
-
-  const lexicalFileRank = new Map(lexicalFiles.map((file, index) => [file.path, index + 1]));
-  const semanticFileRank = new Map(semanticFiles.map((path, index) => [path, index + 1]));
-  const fusedFiles = [...fileByPath.values()];
-  for (const file of fusedFiles) {
-    const lexicalRank = lexicalFileRank.get(file.path);
-    const semanticRank = semanticFileRank.get(file.path);
-    file.score = (lexicalRank ? 1 / (RRF_K + lexicalRank) : 0) + (semanticRank ? 1 / (RRF_K + semanticRank) : 0);
-  }
-
-  const rankedChunks = fusedFiles.flatMap((file) => file.chunks);
-  const lexicalChunks = rankedChunks.filter((chunk) => chunk.score > 0)
-    .sort((a, b) => b.score - a.score || pathOrder(a.chunk.path, b.chunk.path) || a.chunk.startLine - b.chunk.startLine);
-  const semanticRankedChunks = rankedChunks.filter((chunk) => chunk.semanticScore !== undefined)
-    .sort((a, b) => b.semanticScore! - a.semanticScore! || pathOrder(a.chunk.path, b.chunk.path) || a.chunk.startLine - b.chunk.startLine);
-  const lexicalChunkRank = new Map(lexicalChunks.map((chunk, index) => [semanticChunkId(chunk.chunk), index + 1]));
-  const semanticChunkRank = new Map(semanticRankedChunks.map((chunk, index) => [semanticChunkId(chunk.chunk), index + 1]));
-  for (const chunk of rankedChunks) {
-    const lexicalRank = lexicalChunkRank.get(semanticChunkId(chunk.chunk));
-    const semanticRank = semanticChunkRank.get(semanticChunkId(chunk.chunk));
-    if (lexicalRank || semanticRank) {
-      chunk.relevance = (lexicalRank ? 1 / (RRF_K + lexicalRank) : 0) + (semanticRank ? 1 / (RRF_K + semanticRank) : 0);
-    }
-  }
-
-  fusedFiles.sort((a, b) => b.score - a.score || pathOrder(a.path, b.path));
-  return { files: fusedFiles, queryTerms };
+  return { files: [...ranked.values()].sort((a, b) => b.score - a.score), queryTerms };
 }

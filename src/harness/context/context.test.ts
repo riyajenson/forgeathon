@@ -283,3 +283,18 @@ test('indexing yields to the event loop and reuses unchanged files', async () =>
   assert.equal(second.chunks.length, first.chunks.length);
   assert.ok(reads >= 800);
 });
+
+test('retrieval benchmark reports recall, reciprocal rank, packed file density, and median latency', () => {
+  let benchmark: { measureRetrieval?: (results: unknown[]) => unknown } | undefined;
+  try { benchmark = require('./retrieval-benchmark') as typeof benchmark; } catch { /* New module is the behavior under test. */ }
+  assert.equal(typeof benchmark?.measureRetrieval, 'function', 'benchmark metric function is exported');
+  assert.deepEqual(benchmark!.measureRetrieval!([
+    { caseId: 'first', expectedPaths: ['src/a.ts', 'src/b.ts'], rankedPaths: ['src/x.ts', 'src/a.ts', 'src/b.ts'], packedPaths: ['src/a.ts'], packedTokens: 500, elapsedMs: 10 },
+    { caseId: 'second', expectedPaths: ['src/c.ts'], rankedPaths: ['src/c.ts'], packedPaths: ['src/c.ts'], packedTokens: 250, elapsedMs: 30 },
+  ]), {
+    recallAt5: 1,
+    mrr: 0.75,
+    relevantFilesPer1000Tokens: 2000 / 750,
+    medianElapsedMs: 20,
+  });
+});

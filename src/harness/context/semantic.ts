@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import type { IndexedChunk } from './workspace-index';
+import { semanticRuntimeDir } from './semantic-runtime';
 
 export const SEMANTIC_MODEL_ID = 'onnx-community/all-MiniLM-L6-v2-ONNX';
 export const SEMANTIC_MODEL_REVISION = '2a90286a00a3fba4a0c16c5ea113091359ad5c86';
@@ -28,6 +29,8 @@ export interface ThreadEmbeddingClientOptions {
   modelId?: string;
   revision?: string;
   cacheDir?: string;
+  /** Where the opt-in @huggingface/transformers runtime is installed (default: semanticRuntimeDir()). */
+  runtimeDir?: string;
 }
 
 interface EmbedPending {
@@ -62,6 +65,7 @@ export class ThreadEmbeddingClient implements SemanticEmbeddingWorker {
         modelId: options.modelId ?? SEMANTIC_MODEL_ID,
         revision: options.revision ?? SEMANTIC_MODEL_REVISION,
         cacheDir,
+        runtimeDir: options.runtimeDir ?? semanticRuntimeDir(),
       },
     });
     this.worker.on('message', (message: WorkerMessage) => this.onMessage(message));
@@ -178,6 +182,8 @@ function cosineSimilarity(left: readonly number[], right: readonly number[]): nu
 
 export class LocalSemanticRanker {
   private worker: SemanticEmbeddingWorker | undefined;
+  /** Why the last rank() returned no scores, when it failed (cleared by the next success). */
+  unavailable: Error | undefined;
 
   constructor(private readonly options: LocalSemanticRankerOptions = {}) {}
 
@@ -203,9 +209,11 @@ export class LocalSemanticRanker {
         const vector = chunk.semanticVectors.get(id);
         if (vector) scores.set(id, cosineSimilarity(queryVector, vector));
       }
+      this.unavailable = undefined;
       return scores;
     } catch (caught) {
       const error = caught instanceof Error ? caught : new Error(String(caught));
+      if (!(signal?.aborted || error.name === 'AbortError')) this.unavailable = error;
       if (signal?.aborted || error.name === 'AbortError') {
         const worker = this.worker;
         this.worker = undefined;
@@ -224,6 +232,7 @@ export class LocalSemanticRanker {
         ...(this.options.modelId ? { modelId: this.options.modelId } : {}),
         ...(this.options.revision ? { revision: this.options.revision } : {}),
         ...(this.options.cacheDir ? { cacheDir: this.options.cacheDir } : {}),
+        ...(this.options.runtimeDir ? { runtimeDir: this.options.runtimeDir } : {}),
       });
     }
     return this.worker;

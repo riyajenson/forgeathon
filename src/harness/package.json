@@ -16,7 +16,6 @@
     "test:integration": "tsc -p . && node --test --test-concurrency=1 \"dist/src/harness/integration/*.itest.js\""
   },
   "dependencies": {
-    "@huggingface/transformers": "4.3.2",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@truefoundry/trueforge-sdk": "0.185.0",
     "zod": "4.6.7"

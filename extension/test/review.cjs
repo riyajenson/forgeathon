@@ -3,8 +3,101 @@ const fs=require('node:fs/promises');
 const path=require('node:path');
 const vscode=require('vscode');
 const {EditReview,hash}=require('../out/review');
+const {InlineReview}=require('../out/inlineReview');
 const {TurnController}=require('../out/turn');
+function fakeQuickPick(){
+  const accepts=[], hides=[], buttons=[];
+  return {
+    items:[], selectedItems:[], buttons:[], canSelectMany:false, acceptCount:0, hidden:false, disposed:false,
+    onDidAccept(fn){accepts.push(fn);return {dispose(){}};},
+    onDidHide(fn){hides.push(fn);return {dispose(){}};},
+    onDidTriggerButton(fn){buttons.push(fn);return {dispose(){}};},
+    show(){this.hidden=false;},
+    hide(){if(this.hidden)return;this.hidden=true;for(const fn of hides)fn();},
+    dispose(){this.disposed=true;},
+    accept(){this.acceptCount++;for(const fn of accepts)fn();},
+    triggerButton(button){for(const fn of buttons)fn(button);}
+  };
+}
+async function directPickerChecks(){
+  const originalCreateQuickPick=vscode.window.createQuickPick;
+  const originalExecuteCommand=vscode.commands.executeCommand;
+  const picks=[];
+  vscode.window.createQuickPick=()=>{const picker=fakeQuickPick();picks.push(picker);return picker;};
+  vscode.commands.executeCommand=async(command,...args)=>command==='vscode.diff'?undefined:originalExecuteCommand.call(vscode.commands,command,...args);
+  const original='one\ntwo\n', proposed='ONE\nTWO\n';
+  const proposal={sessionId:'s',turnId:'t',callId:'c',proposalId:'direct',kind:'proposal',path:'src/task.py',
+    originalText:original,proposedText:proposed,hunks:[
+      {hunkId:'a',startOffset:0,endOffset:3,oldText:'one',newText:'ONE'},
+      {hunkId:'b',startOffset:4,endOffset:7,oldText:'two',newText:'TWO'}]};
+  const decisions=[];
+  let active=true;
+  const edits={isActive:()=>active,decide:(_p,hunks)=>{decisions.push(hunks);return {proposalId:proposal.proposalId,hunks};}};
+  const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
+  try{
+    const review=new InlineReview(edits), pending=review.request(proposal);
+    await settle();
+    const picker=picks[0];
+    assert.equal(picks.length,1,'choosing one hunk opens one picker instead of the former action menu plus hunk picker');
+    assert.equal(picker.canSelectMany,true,'each hunk has its own checkbox');
+    assert.deepEqual(picker.items.map(item=>item.hunkId),['a','b'],'the direct picker exposes every hunk');
+    assert.deepEqual(picker.buttons.map(button=>button.tooltip),['Accept all hunks','Reject all hunks']);
+    picker.selectedItems=[picker.items[1]];
+    picker.accept();
+    assert.equal(picker.acceptCount,1,'a partial decision needs one submit action');
+    assert.deepEqual((await pending).hunks,{a:'reject',b:'accept'});
+    assert.equal(picker.hidden,true,'accept closes the picker');
+    assert.equal(review.open,false);
+    assert.deepEqual(decisions[0],{a:'reject',b:'accept'});
+    review.dispose();
+
+    for(const [buttonIndex,choice] of [[0,'accept'],[1,'reject']]){
+      const allReview=new InlineReview(edits), allPending=allReview.request(proposal);
+      await settle();
+      const allPicker=picks.at(-1);
+      allPicker.triggerButton(allPicker.buttons[buttonIndex]);
+      assert.deepEqual((await allPending).hunks,{a:choice,b:choice});
+      assert.equal(allPicker.hidden,true,'Accept All and Reject All close the picker');
+      allReview.dispose();
+    }
+
+    const staleReview=new InlineReview(edits), stale=staleReview.request(proposal);
+    await settle();
+    const stalePicker=picks.at(-1);
+    active=false;
+    stalePicker.triggerButton(stalePicker.buttons[0]);
+    const staleControlsOpen=staleReview.open;
+    staleReview.cancel();
+    assert.equal(staleControlsOpen,false,'a stale proposal closes review controls');
+    assert.equal(await stale,undefined);
+    staleReview.dispose();
+    active=true;
+
+    const cancelledReview=new InlineReview(edits), cancelled=cancelledReview.request(proposal);
+    await settle();
+    const cancelledPicker=picks.at(-1);
+    cancelledReview.cancel();
+    assert.equal(await cancelled,undefined);
+    assert.equal(cancelledPicker.hidden,true,'cancel closes the picker');
+    assert.equal(cancelledReview.open,false,'cancel removes every review control');
+    cancelledReview.dispose();
+
+    const failedReview=new InlineReview({...edits,decide(){throw new Error('decision failed');}});
+    const failed=failedReview.request(proposal);
+    await settle();
+    const failedPicker=picks.at(-1);
+    failedPicker.accept();
+    await assert.rejects(failed,/decision failed/);
+    assert.equal(failedPicker.hidden,true,'decision errors close the picker');
+    assert.equal(failedReview.open,false,'decision errors remove the pending review controls');
+    failedReview.dispose();
+  }finally{
+    vscode.window.createQuickPick=originalCreateQuickPick;
+    vscode.commands.executeCommand=originalExecuteCommand;
+  }
+}
 exports.run=async()=>{
+  await directPickerChecks();
   await require('./editorPort.cjs').run();
   const folder=vscode.workspace.workspaceFolders[0], root=folder.uri.fsPath;
   const dir=await fs.mkdtemp(path.join(root,'review-'));

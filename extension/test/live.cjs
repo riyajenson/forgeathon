@@ -89,7 +89,6 @@ exports.run = async() => {
         tab.input instanceof vscode.TabInputTextDiff && tab.input.original.scheme==='forge-preview'),'native diff',45000);
       assert.equal(await fs.readFile(file,'utf8'),before,'Preview changed disk');
       await until(()=>driver.evaluate("document.body.innerText.includes('Review hunks')"),'review control');
-      await vscode.commands.executeCommand('forgeathon.reviewHunks');
       await until(()=>driver.evaluate("document.querySelector('.quick-input-widget')?.innerText.includes('Hunk 1')"),'hunk picker');
       await selectOnly(n);
       await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
@@ -100,9 +99,9 @@ exports.run = async() => {
     }
     // Stop while the review is pending: the diff tab and every review control close; nothing actionable remains.
     {
-      const visibleAcceptAll=`[...document.querySelectorAll('.notifications-toasts .notification-toast, .notifications-center .notification-list-item, .quick-input-widget')]
-        .filter(el=>el.offsetParent!==null && getComputedStyle(el).display!=='none').some(el=>el.innerText.includes('Accept All'))`;
-      assert.equal(await driver.evaluate(visibleAcceptAll),false,'no Accept All left on screen from the reviews already decided');
+      const visibleHunkPicker=`(()=>{const el=document.querySelector('.quick-input-widget');
+        return !!el && el.offsetParent!==null && getComputedStyle(el).display!=='none' && el.innerText.includes('Hunk 1')})()`;
+      await until(async()=>!(await driver.evaluate(visibleHunkPicker)),'hunk picker closes after completed reviews');
       const doc=await vscode.workspace.openTextDocument(vscode.Uri.file(file));
       const editor=await vscode.window.showTextDocument(doc);
       editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(doc.getText().length));
@@ -113,19 +112,19 @@ exports.run = async() => {
       const previews=()=>vscode.window.tabGroups.all.flatMap(g=>g.tabs).filter(tab=>tab.input instanceof vscode.TabInputTextDiff && tab.input.original.scheme==='forge-preview');
       await until(()=>previews().length===1,'native diff before Stop',45000);
       await until(()=>driver.evaluate("document.querySelector('.statusbar')?.innerText.includes('Review hunks')"),'review pending (status bar)');
-      await until(()=>driver.evaluate(visibleAcceptAll),'Accept All shown while the review is pending');
+      await until(()=>driver.evaluate(visibleHunkPicker),'hunk picker shown while the review is pending');
       await vscode.commands.executeCommand('forgeathon.stop');
       await Promise.race([run,new Promise((_,reject)=>setTimeout(()=>reject(Error('Turn did not stop')),15000))]);
       await new Promise(r=>setTimeout(r,1000));
       assert.equal(previews().length,0,'diff tab closed after Stop');
-      assert.equal(await driver.evaluate(visibleAcceptAll),false,'no Accept All left on screen one second after Stop');
+      assert.equal(await driver.evaluate(visibleHunkPicker),false,'no hunk picker left on screen one second after Stop');
       assert.equal(await fs.readFile(file,'utf8'),before,'Stop left the file unchanged');
     }
     assert.ok(model.requests.some(r=>r.messages.some(m=>m.role==='tool')),'Tool result returned to model');
     const sessions=await client.sessions.list();
     assert.ok(sessions.data.length,'TrueForge session persisted');
     sessionIds.push(sessions.data[0].id);
-    console.log('PASS real TrueForge 0.185.1 + scripted model, inline command, native diff, hunk picker (hunk 1 only, then hunk 2 only: exactly that hunk saved), undo after each, Stop with a pending review leaves no Accept All on screen; session '+sessionIds[0]);
+    console.log('PASS real TrueForge 0.185.1 + scripted model, inline command, native diff, hunk picker (hunk 1 only, then hunk 2 only: exactly that hunk saved), undo after each, Stop with a pending review closes the picker; session '+sessionIds[0]);
     console.log('Extension host '+process.platform+' Node '+process.versions.node+' remoteName='+(vscode.env.remoteName||'local'));
   } finally {
     driver?.close(); await model.stop(); server.kill('SIGTERM');

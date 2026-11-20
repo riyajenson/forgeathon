@@ -79,6 +79,10 @@ exports.run = async () => {
     assert.deepEqual(state.tools,[{id:'ctx',label:'gather_context',detail:'Done: one selected'}]);
     assert.deepEqual(state.context,report);
     assert.match(state.banner,/unreachable.*backup/);
+    assert.equal(wb.reviewControlsOpen(),false,'a command approval does not open edit-review controls');
+    wb.choose(); wb.decideAll('accept');
+    await delay(50);
+    assert.equal(command,undefined,'review controls cannot answer the pending command approval');
     await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
     await Promise.race([run,delay(5000).then(()=>{throw Error('Command decision timed out')})]);
     assert.equal(submitted,true);

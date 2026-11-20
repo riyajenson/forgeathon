@@ -7,7 +7,7 @@
 // --deny-unrestricted: deny commands flagged unrestricted instead of allowing them (as in the demo video).
 // Task G (mock model only, scripts/e2e-mock.sh): the guardrails. The scripted model sends a malformed propose_edit
 // twice on one file, then five commands (git status, python -c, the unrestricted `ls src`, git status, git diff);
-// the harness must flag `ls src` as unrestricted, refuse the last two by the command budget (3) without prompting,
+// the harness must flag `ls src` as unrestricted, refuse the last two by the command budget (set to 3 for this task; the default is 5) without prompting,
 // and spell out the propose_edit argument shape in the second refusal.
 // --meter-log: the log of scripts/model-meter.mjs, to report model requests and 429s per task (TrueForge's
 // internal retries included).
@@ -245,7 +245,7 @@ async function main(): Promise<void> {
     }
     if (tasks.includes('G')) {
       await sh('git', ['checkout', '--', '.'], ws);
-      const g = await turn(h, ws, 'G', { mode: 'agent', instruction: GUARD_TASK, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) }, 'accept', meterLog);
+      const g = await turn(h, ws, 'G', { mode: 'agent', instruction: GUARD_TASK, commandBudget: 3, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) }, 'accept', meterLog);
       results.push(g);
       check('G: turn done', g.status === 'done', g.error ?? '');
       const shown = g.commandPrompts + g.autoApproved;

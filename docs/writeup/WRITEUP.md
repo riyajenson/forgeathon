@@ -140,7 +140,7 @@ measured scripted B runs (peaks 95–139 ms).
 
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
-instructions, hence the harness command budget (3 per turn); each step resends the whole conversation. Retrieval is lexical (no embeddings) and
+instructions, hence the harness command budget (5 per turn); each step resends the whole conversation. Retrieval is lexical (no embeddings) and
 the symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const vscode = require('vscode');
-const { AgentViewState } = require('../out/agentPanel');
+const { AgentPanel, AgentViewState } = require('../out/agentPanel');
 const { Workbench } = require('../out/workbench');
 const { TurnController } = require('../out/turn');
 const { EditReview } = require('../out/review');
@@ -9,7 +9,80 @@ const until = async condition => {
   for (let i = 0; i < 150; i++) { if (await condition()) return; await delay(40); }
   throw Error('Timed out waiting for UI');
 };
+async function panelRefreshChecks() {
+  const originalCreateWebviewPanel = vscode.window.createWebviewPanel;
+  const messages = [];
+  let receive, disposed;
+  const webview = {
+    asWebviewUri: uri => uri,
+    onDidReceiveMessage: fn => { receive = fn; return { dispose() {} }; },
+    postMessage: async state => {
+      messages.push(state);
+      // Acknowledge inline to keep these host-side timing assertions deterministic.
+      // agent-media.cjs verifies the actual webview script waits for requestAnimationFrame.
+      receive?.({ action: 'rendered', sequence: state.renderSequence, frameMs: 0, domMs: 0, visibility: 1, eventToFrameMs: 0, textEventToFrameMs: 0 });
+      return true;
+    }
+  };
+  const panel = {
+    webview, reveal() {}, onDidDispose: fn => { disposed = fn; return { dispose() {} }; },
+    dispose() { disposed?.(); }
+  };
+  vscode.window.createWebviewPanel = () => panel;
+  const closedPanelAgent = new AgentPanel({ send: async () => {}, stop: async () => {}, review() {}, command() {} });
+  closedPanelAgent.event({ t: 'text', messageId: 'before-open', delta: 'history before opening' });
+  closedPanelAgent.open();
+  receive({ action: 'ready' });
+  await delay(25);
+  assert.equal(messages.at(-1).text, 'history before opening', 'the first panel snapshot includes text received before it opened');
+  assert.equal(closedPanelAgent.getRenderMetrics().text.count, 0, 'text received with no panel is not retained as pending render work');
+  closedPanelAgent.dispose();
+  messages.length = 0;
+
+  const agent = new AgentPanel({ send: async () => {}, stop: async () => {}, review() {}, command() {} });
+  try {
+    agent.open();
+    receive({ action: 'ready' });
+    await delay(25);
+    messages.length = 0;
+
+    agent.event({ t: 'text', messageId: 'm', delta: 'first ' });
+    agent.event({ t: 'text', messageId: 'm', delta: 'second' });
+    await delay(25);
+    assert.equal(messages.length, 1, 'text fragments share one 16 ms refresh');
+    assert.equal(messages[0].text, 'first second', 'coalescing preserves text order');
+    assert.ok(Number.isInteger(messages[0].renderSequence), 'each posted state has a render sequence');
+    await delay(20);
+
+    const beforeControl = messages.length;
+    agent.event({ t: 'text', messageId: 'm', delta: ' third' });
+    agent.event({ t: 'command_request', callId: 'command', command: 'sleep 1', cwd: '.' });
+    assert.equal(messages.length, beforeControl + 1, 'control state posts immediately while text refresh is pending');
+    assert.equal(messages.at(-1).text, 'first second third', 'the immediate control snapshot includes queued text');
+    assert.equal(messages.at(-1).command.command, 'sleep 1');
+    assert.equal(messages.at(-1).command.cwd, '.');
+    await delay(20);
+    assert.equal(messages.length, beforeControl + 1, 'the flushed text does not cause a duplicate refresh');
+
+    const metrics = agent.getRenderMetrics();
+    assert.ok(metrics.control.count > 0, 'control frame acknowledgements contribute measurements');
+    assert.ok(metrics.text.count > 0, 'text frame acknowledgements contribute measurements');
+    assert.ok(metrics.control.webviewFrame.count > 0 && metrics.text.webviewFrame.count > 0, 'webview frame timing is recorded');
+    assert.ok(Number.isFinite(metrics.control.p95Ms) && Number.isFinite(metrics.text.p95Ms), 'latency summaries contain numeric p95 values');
+
+    const beforeClose = messages.length;
+    agent.event({ t: 'text', messageId: 'm', delta: ' never posted' });
+    disposed();
+    await delay(25);
+    assert.equal(messages.length, beforeClose, 'a queued refresh is discarded when its webview closes');
+  } finally {
+    agent.dispose();
+    vscode.window.createWebviewPanel = originalCreateWebviewPanel;
+  }
+}
 exports.run = async () => {
+  await require('./agent-media.cjs').run();
+  await panelRefreshChecks();
   await require('./review.cjs').run();
   const flagged = new AgentViewState();
   flagged.update({t:'command_request',callId:'x',command:'rm -rf build',cwd:'.',unrestricted:true,warning:'Unrestricted command: it can change any file without hunk review and is not sandboxed.'});
@@ -79,6 +152,10 @@ exports.run = async () => {
     assert.deepEqual(state.tools,[{id:'ctx',label:'gather_context',detail:'Done: one selected'}]);
     assert.deepEqual(state.context,report);
     assert.match(state.banner,/unreachable.*backup/);
+    assert.equal(wb.reviewControlsOpen(),false,'a command approval does not open edit-review controls');
+    wb.choose(); wb.decideAll('accept');
+    await delay(50);
+    assert.equal(command,undefined,'review controls cannot answer the pending command approval');
     await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
     await Promise.race([run,delay(5000).then(()=>{throw Error('Command decision timed out')})]);
     assert.equal(submitted,true);

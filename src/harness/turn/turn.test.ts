@@ -6,7 +6,8 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import type { HarnessEvent, ReviewDecision } from '../contract-types';
+import { PROTOCOL_VERSION, type HarnessEvent, type ReviewDecision, type TurnRequest } from '../contract-types';
+import type { ContextAssemblyOptions } from '../context';
 import { FakePort } from '../mcp/fake-port';
 import { ScopeRegistry, type SessionScope } from '../mcp/scope';
 import { proposeEditTool } from '../mcp/tools';
@@ -14,6 +15,7 @@ import { runCommandTool } from '../mcp/command';
 import { sha256Hex } from '../review';
 import type { TrueForgeClient, TrueForgeSdk } from '../trueforge/sdk';
 import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, TurnRun, type TurnDeps } from './turn';
+import { buildTurnInput } from './prompt';
 
 /** An async event stream the test feeds by hand. Aborting the request signal ends it with an error. */
 class Channel implements AsyncIterable<unknown> {
@@ -166,6 +168,101 @@ const events = (run: TurnRun): readonly HarnessEvent[] => run.buffer.snapshot();
 const terminal = (run: TurnRun) => events(run).filter((e) => e.t === 'done');
 const lastError = (run: TurnRun) => events(run).filter((e) => e.t === 'error').pop() as Extract<HarnessEvent, { t: 'error' }> | undefined;
 const scopeOf = (sessionId: string): SessionScope => scopes.get(sessionId)!;
+
+test('turn prompt includes the ranked shortlist and keeps an explicit reference pinned', async () => {
+  const request = {
+    sessionId: 's', turnId: 'prompt', mode: 'agent',
+    instruction: 'find the new user token alpha theta login flow',
+    references: [{ kind: 'file', path: FILE }],
+    semanticSearch: true,
+  } as TurnRequest;
+  let semanticCalls = 0;
+  const progress: number[] = [];
+  const options: ContextAssemblyOptions = {
+    onSemanticProgress: (event) => { if (typeof event.progress === 'number') progress.push(event.progress); },
+    semanticRanker: {
+      rank: async (_query, chunks, _signal, onProgress) => {
+        semanticCalls++;
+        onProgress?.({ status: 'progress_total', progress: 42 });
+        return new Map(chunks.map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.95]));
+      },
+    },
+  };
+  const turnInput = await buildTurnInput(request, port, 2000, undefined, options);
+  assert.ok(turnInput.input.includes('Context gathered by the editor'));
+  assert.ok(turnInput.context?.text.includes(FILE));
+  assert.ok(turnInput.context?.text.includes('@file'));
+  assert.equal(turnInput.context?.report.selections[0]?.path, FILE);
+  assert.equal(turnInput.context?.report.selections[0]?.source, 'explicit');
+  assert.equal(semanticCalls, 1, 'the request setting reaches context assembly when keyword coverage is weak');
+  assert.deepEqual(progress, [42], 'model progress reaches the active turn callback');
+});
+
+test('cancelling while semantic context is loading aborts the ranker', async () => {
+  const request = {
+    sessionId: 's', turnId: 'cancel-context', mode: 'agent',
+    instruction: 'new user token alpha theta login', semanticSearch: true,
+  } as TurnRequest;
+  const controller = new AbortController();
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  let observedAbort = false;
+  const options: ContextAssemblyOptions = {
+    semanticRanker: {
+      rank: async (_query, _chunks, signal) => new Promise((resolve) => {
+        markStarted();
+        signal?.addEventListener('abort', () => { observedAbort = true; resolve(new Map()); }, { once: true });
+      }),
+    },
+  };
+  const pending = buildTurnInput(request, port, 2000, controller.signal, options);
+  await started;
+  controller.abort();
+  await pending;
+  assert.ok(observedAbort);
+});
+
+test('coder and inline prompts use the ranked evidence workflow', async () => {
+  const repoRoot = path.resolve(__dirname, '../../../../../../');
+  const coder = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-coder.json'), 'utf8')) as { manifest: { instructions: string } };
+  const inline = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-inline.json'), 'utf8')) as { manifest: { instructions: string } };
+  // The coder prompt is main's (ecd4a06) verbatim: explore / edit / verify with the explicit command rules.
+  assert.match(coder.manifest.instructions, /Work in three phases/);
+  assert.match(coder.manifest.instructions, /context the editor ranked for this task/i);
+  assert.match(coder.manifest.instructions, /exactly ONE propose_edit per file/i);
+  assert.match(coder.manifest.instructions, /You have 2 run_command calls/);
+  assert.match(coder.manifest.instructions, /no cd, no pipes or redirection/);
+  assert.match(coder.manifest.instructions, /read-only host filesystem/);
+  assert.match(coder.manifest.instructions, /never use shell commands to edit source files/);
+  assert.match(inline.manifest.instructions, /ranked context/i);
+  assert.match(inline.manifest.instructions, /selected file only/i);
+});
+
+test('hybrid context setting stays off by default and the request contract is versioned', async () => {
+  const repoRoot = path.resolve(__dirname, '../../../../../../');
+  const extension = JSON.parse(await fs.readFile(path.join(repoRoot, 'extension/package.json'), 'utf8')) as {
+    contributes: { configuration: { properties: Record<string, { default?: unknown; description?: string }> } };
+  };
+  const setting = extension.contributes.configuration.properties['forge.context.semanticSearch'];
+  assert.ok(setting, 'the semantic-search setting is declared');
+  assert.equal(setting.default, false, 'benchmark results keep the slower semantic path opt-in');
+  assert.match(setting.description ?? '', /local|keyword/i);
+  assert.equal(PROTOCOL_VERSION as string, '0.4.5');
+});
+
+test('turn semantic setting is scoped to its session and stop aborts in-flight context work', async () => {
+  const tf = new FakeTrueForge({ onTurn: (ch, k) => ch.push(ev('turn.created', { turnId: `rt-${k}` }), done('done')) });
+  const run = makeRun(tf, {}, { semanticSearch: true });
+  await run.start();
+  const scope = scopeOf('rs-coder-1');
+  assert.equal(scope.semanticSearch, true);
+  const signal = scope.signal;
+  scope.cancel();
+  assert.equal(signal.aborted, true);
+  scope.resetForTurn();
+  assert.equal(scope.semanticSearch, false);
+  assert.equal(scope.signal.aborted, false);
+});
 
 test('control: a model error before any approval is retried once', async () => {
   const tf = new FakeTrueForge({
@@ -452,7 +549,7 @@ async function userDeniesCommands(run: TurnRun, asked: HarnessEvent[]): Promise<
 test('command budget: after 3 commands in an agent turn, run_command is refused without asking', async () => {
   const commands = ['python -m pytest tests/a.py', 'git diff', 'flask routes', 'python -m pytest', 'ls'];
   const tf = stepwise(commands.map((command) => ['run_command', { command }]));
-  const run = makeRun(tf);
+  const run = makeRun(tf, {}, { commandBudget: 3 });
   const asked: HarnessEvent[] = [];
   void userAnswers(run, asked);
   await run.start();
@@ -494,12 +591,12 @@ test('command budget: 0 refuses every command; edits are never limited', async (
   assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'allow']);
 });
 
-test('command budget defaults: 3 for agent, 1 for inline; invalid values use the default', () => {
-  assert.equal(commandBudgetOf({ mode: 'agent' }), 3);
+test('command budget defaults: 5 for agent, 1 for inline; invalid values use the default', () => {
+  assert.equal(commandBudgetOf({ mode: 'agent' }), 5);
   assert.equal(commandBudgetOf({ mode: 'inline' }), 1);
   assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: 0 }), 0);
   assert.equal(commandBudgetOf({ mode: 'inline', commandBudget: 5 }), 5);
-  for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 3);
+  for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 5);
 });
 
 test('autoApproveSafeCommands is narrowed: python -c, flask and path- or env-prefixed pytest still ask (not as unrestricted)', async () => {

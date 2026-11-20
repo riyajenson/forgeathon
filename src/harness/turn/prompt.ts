@@ -1,4 +1,4 @@
-import { assembleContext, type ContextResult } from '../context';
+import { assembleContext, type ContextAssemblyOptions, type ContextResult } from '../context';
 import type { TurnRequest } from '../contract-types';
 import type { EditorPort } from '../mcp/port';
 import { normalizeWorkspacePath } from '../mcp/paths';
@@ -13,7 +13,7 @@ export interface TurnInput {
  * Builds the user message for a turn: the instruction, the editor's prompt context, and the context the
  * engine retrieved within the budget (pinned selection/@file/@symbol first, then ranked code).
  */
-export async function buildTurnInput(req: TurnRequest, port: EditorPort, budgetTokens: number): Promise<TurnInput> {
+export async function buildTurnInput(req: TurnRequest, port: EditorPort, budgetTokens: number, signal?: AbortSignal, options: ContextAssemblyOptions = {}): Promise<TurnInput> {
   const parts: string[] = [req.instruction.trim()];
   const refused = (p: string) => modelPathRefusal(normalizeWorkspacePath(p) ?? p);
   const selectionRefusal = req.selection ? refused(req.selection.path) : null;
@@ -36,8 +36,10 @@ export async function buildTurnInput(req: TurnRequest, port: EditorPort, budgetT
       ...(req.activeFile ? { activeFile: req.activeFile } : {}),
       ...(req.references ? { references: req.references } : {}),
       budgetTokens: req.mode === 'inline' ? Math.min(budgetTokens, 2500) : budgetTokens,
+      semanticSearch: req.semanticSearch === true,
+      ...(signal ? { signal } : {}),
       mode: req.mode,
-    });
+    }, undefined, options);
     parts.push(context.text);
   } catch (e) {
     port.log('warn', `context assembly failed: ${(e as Error).message}`);

@@ -233,7 +233,12 @@ test('coder and inline prompts use the ranked evidence workflow', async () => {
   assert.match(coder.manifest.instructions, /Work in three phases/);
   assert.match(coder.manifest.instructions, /context the editor ranked for this task/i);
   assert.match(coder.manifest.instructions, /exactly ONE propose_edit per file/i);
-  assert.match(coder.manifest.instructions, /You have 2 run_command calls/);
+  assert.match(coder.manifest.instructions, /Verify only with `python -m pytest <the test file you changed> -q`/);
+  assert.match(coder.manifest.instructions, /task message states your run_command budget/);
+  assert.match(coder.manifest.instructions, /one more rerun of a test command that already ran/);
+  assert.match(coder.manifest.instructions, /re-read the request's requirements and check every assertion/);
+  assert.match(coder.manifest.instructions, /no python -c/);
+  assert.doesNotMatch(coder.manifest.instructions, /You have \d+ run_command calls/, 'the budget comes from the harness, not a number in the prompt');
   assert.match(coder.manifest.instructions, /no cd, no pipes or redirection/);
   assert.match(coder.manifest.instructions, /read-only host filesystem/);
   assert.match(coder.manifest.instructions, /never use shell commands to edit source files/);

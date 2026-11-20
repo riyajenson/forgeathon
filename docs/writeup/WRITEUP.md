@@ -105,8 +105,6 @@ from the provider's status and wording. The free fallback shares NVIDIA's backen
 key problems, not an NVIDIA outage. A
 watchdog stops a turn that streams nothing for 45 s; every turn is logged (no content) to `~/.forge/turns.jsonl`.
 
-<div class="keep">
-
 ## 6. Scorecard
 
 | Criterion (points) | What we show | Video |
@@ -120,8 +118,6 @@ watchdog stops a turn that streams nothing for 45 s; every turn is logged (no co
 | TrueForge depth (10) | Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` when the model uses them) | `[mm:ss]` |
 | Demo video (10) | Tasks A, B, C in order, each verified on screen | A `[mm:ss]` · B `[mm:ss]` · C `[mm:ss]` |
 | PDF write-up (15) | This document; the video's closing frame links the repository | `[mm:ss]` |
-
-</div>
 
 Automated checks use a **scripted model**: they show that the plumbing works, not that a real model solves
 the tasks; the scripted B supplies the file paths and edits, so it is no evidence of discovery. `scripts/e2e-mock.sh`

@@ -8,6 +8,12 @@ accepted-hunk counts; one clean-clone mock block in the README; scorecard kept o
 accepts docs-only commits after the rehearsed commit. Current counts: 134 unit, 19 integration. Real-model results
 for the submitted commit: `docs/writeup/rehearsal.json`; everything below dated 19 Nov is history.
 
+**Real-model rehearsal of `f67c719` (2026-11-20, profile nvidia-free, video settings, one attempt each):** A passed 6/6
+(first diff 10.1 s, 3 requests); C passed 3/3 (NVIDIA 401 → OpenRouter, first diff 9.6 s, 4 requests); **B passed 6/6
+on the first attempt** (first diff 42.0 s, turn 97.8 s, 37 NVIDIA requests, no 429; `cli.py` 2 reviews, `tests/test_cli.py`
+2, `docs/cli.rst` 1; 2 commands auto-approved, 1 Unrestricted denied, 3 refused by the budget; 1.10M input tokens).
+Pre-flight: NVIDIA ready (HTTP 200).
+
 Updated: 2026-11-19 (late night), after merging `origin/main` (PRs #3 and #4 by another contributor:
 bubblewrap command protection, hold-until-idle for unsettled tools, retrieval coverage reporting, submission
 evidence gate). See "Merge of origin/main" and `docs/review/merge-origin-main.md`. All automated checks are

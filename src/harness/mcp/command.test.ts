@@ -168,7 +168,7 @@ protectedTest('credential-like environment variables are withheld from the comma
 
 test('a cwd that resolves outside the workspace through a symlink is refused', async () => {
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-outside-'));
-  await fs.symlink(outside, path.join(root, 'escape'));
+  await fs.symlink(outside, path.join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
   try {
     const args = { command: 'touch pwned', cwd: 'escape' };
     approve(args);

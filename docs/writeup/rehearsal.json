@@ -3,7 +3,7 @@
   "repositoryCommit": "f67c719e6d929d3f39a07af35560619fcc4060bc",
   "flaskCommit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
   "repositoryUrl": "https://github.com/riyajenson/forgeathon",
-  "videoUrl": "<VIDEO_URL>",
+  "videoUrl": "https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing",
   "models": [
     {
       "role": "primary",
@@ -113,7 +113,7 @@
       "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w937mfsxq3q3p7w526a4xn",
       "verification": "invalid NVIDIA key: 401, automatic fallback to openrouter/nemotron-3-ultra-free in a new session, proposal rejected, git status clean",
       "recordedAt": "2026-11-20T10:47:35.085Z",
-      "videoTimestamp": "02:13",
+      "videoTimestamp": "03:17",
       "inputTokens": 10995,
       "outputTokens": 589,
       "firstDiffSeconds": 9.6,

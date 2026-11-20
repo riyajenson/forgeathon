@@ -7,12 +7,12 @@ stylesheet: writeup.css
 
 # Forge — a VS Code coding agent on TrueForge
 
-Repository: https://github.com/riyajenson/forgeathon · Video: `<VIDEO_URL>` · Techfest Team ID: TM-C5CB9D87285
+Repository: https://github.com/riyajenson/forgeathon · Video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing · Techfest Team ID: TM-C5CB9D87285
 
 ## 1. Team
 
-Riya Jenson (GitHub `riyajenson`, `<COLLEGE>`) · Shriya Prasad Sawant (GitHub `shriyapsawant21-wq`, `<COLLEGE>`) ·
-Akil Ansari (GitHub `dumbly-smart`, `<COLLEGE>`) · Divyam Agrawal (GitHub `divyamagrawal06`, `<COLLEGE>`)
+Riya Jenson (GitHub `riyajenson`, Vellore Institute of Technology, Vellore) · Shriya Prasad Sawant (GitHub `shriyapsawant21-wq`, Vellore Institute of Technology, Vellore) ·
+Akil Ansari (GitHub `dumbly-smart`, Vellore Institute of Technology, Vellore) · Divyam Agrawal (GitHub `divyamagrawal06`, Vellore Institute of Technology, Vellore)
 
 ## 2. Starting point
 
@@ -114,10 +114,10 @@ watchdog stops a turn that streams nothing for 45 s.
 | Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
 | Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
 | Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
-| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 02:13 |
-| TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | 01:58 |
-| Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 02:13 |
-| PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 02:48 |
+| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
+| TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | 03:05 |
+| Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
+| PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in

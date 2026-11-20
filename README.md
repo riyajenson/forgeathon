@@ -1,7 +1,7 @@
 # Forge: a VS Code coding agent on TrueForge
 
 Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
-Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all `<COLLEGE>` · Demo video: `<VIDEO_URL>` ·
+Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing ·
 Write-up: [`docs/writeup/WRITEUP.pdf`](docs/writeup/WRITEUP.pdf)
 
 Forge is a VS Code-native coding agent whose entire agent loop (sessions, turns, model calls and tool
@@ -15,7 +15,7 @@ Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 
 ## Demo
 
-- **Video:** <VIDEO_URL>
+- **Video:** https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing
 - **Screenshots:** pending; the shots needed are listed in [`docs/images/README.md`](docs/images/README.md).
   <!-- ![Inline diff review](docs/images/inline-review.png) -->
   <!-- ![Agent panel with the Context block](docs/images/agent-panel-context.png) -->

@@ -1,6 +1,6 @@
 {
-  "$comment": "Real-model rehearsal on the final main with the video settings (auto-approve safe commands, budget 3, deny Unrestricted), run as A, then C, then B by scripts/smoke-real-model.mjs through scripts/model-meter.mjs (--min-interval-ms 1600). Session URLs point at the local TrueForge used for the rehearsal. videoUrl and videoTimestamp are filled in after recording. Task B did not pass in this rehearsal; see tasks[B].outcome. Task C was re-run once on 2026-11-19 at 20:13 UTC after the fallback switched to OpenRouter (commit b3dca29, same settings and meter); tasks[C] records that run and tasks[C].previousRun the Groq run from this rehearsal.",
-  "repositoryCommit": "e5afea6e99e497514303847f4ad734cd5c835df8",
+  "$comment": "Real-model rehearsal of the submitted commit (repositoryCommit) on 2026-11-20 with the video settings (auto-approve safe commands, command budget 3, deny Unrestricted), profile nvidia-free, fresh TrueForge 0.185.1 database, requests paced at >= 1.6 s through scripts/model-meter.mjs, run by scripts/smoke-real-model.mjs as A, C (one attempt each), then B (first attempt; no second attempt was needed). Pre-flight first: NVIDIA ready (HTTP 200). Session URLs point at the local TrueForge used for the run. videoUrl and videoTimestamp are filled in after recording. Earlier rehearsals (19 Nov, other commits) are history in docs/STATUS.md.",
+  "repositoryCommit": "f67c719e6d929d3f39a07af35560619fcc4060bc",
   "flaskCommit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
   "repositoryUrl": "https://github.com/riyajenson/forgeathon",
   "videoUrl": "<public video URL>",
@@ -16,14 +16,14 @@
       "role": "fallback",
       "name": "openrouter/nemotron-3-ultra-free",
       "providerModelId": "nvidia/nemotron-3-ultra-550b-a55b:free",
-      "hosting": "OpenRouter, free model",
+      "hosting": "OpenRouter, free model (served upstream by NVIDIA; 50 requests/day without credit)",
       "approximateCostUsd": 0
     },
     {
       "role": "spare",
       "name": "groq/qwen3-8-27b",
       "providerModelId": "qwen/qwen3.8-27b",
-      "hosting": "Groq, free tier (the fallback in this rehearsal; cannot take Task B)",
+      "hosting": "Groq, free tier (configured, not used)",
       "approximateCostUsd": 0
     }
   ],
@@ -33,14 +33,14 @@
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfbe7xs28kr1a9nwv54ssk",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w92rxf4jqm82sfsswz3dw1",
       "verification": "diff accepted and saved to src/flask/helpers.py; FLASK_DEBUG=off and N return False, 1 returns True; docstring lists 0, false, no, off, n",
-      "recordedAt": "2026-11-19T17:58:26.623Z",
+      "recordedAt": "2026-11-20T10:47:19.917Z",
       "videoTimestamp": "[mm:ss]",
-      "inputTokens": 11274,
-      "outputTokens": 675,
-      "firstDiffSeconds": 7.8,
-      "turnSeconds": 9.1,
+      "inputTokens": 11071,
+      "outputTokens": 663,
+      "firstDiffSeconds": 10.1,
+      "turnSeconds": 13.9,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -50,6 +50,7 @@
       "commands": {
         "autoApproved": 0,
         "prompted": 0,
+        "deniedUnrestricted": 0,
         "refusedByBudget": 0
       },
       "modelRequests": {
@@ -63,19 +64,60 @@
       "checks": "6/6 passed"
     },
     {
+      "task": "B",
+      "mode": "real",
+      "model": "nvidia/nemotron-3-ultra",
+      "passed": true,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w94129s064h8qres8fnd87",
+      "verification": "no files named; the agent edited src/flask/cli.py, tests/test_cli.py and docs/cli.rst (5 reviews, all saved); pytest tests/test_cli.py -q: 57 passed, 3 skipped; flask --help lists config; flask config prints JSON with SECRET/PASSWORD/TOKEN/KEY values masked",
+      "recordedAt": "2026-11-20T10:48:01.019Z",
+      "videoTimestamp": "[mm:ss]",
+      "inputTokens": 1097214,
+      "outputTokens": 6090,
+      "firstDiffSeconds": 42,
+      "turnSeconds": 97.8,
+      "reviews": {
+        "src/flask/cli.py": 2,
+        "tests/test_cli.py": 2,
+        "docs/cli.rst": 1
+      },
+      "edits": [
+        "src/flask/cli.py: saved",
+        "src/flask/cli.py: saved",
+        "tests/test_cli.py: saved",
+        "docs/cli.rst: saved",
+        "tests/test_cli.py: saved"
+      ],
+      "commands": {
+        "autoApproved": 2,
+        "prompted": 1,
+        "deniedUnrestricted": 1,
+        "refusedByBudget": 3
+      },
+      "modelRequests": {
+        "total": 37,
+        "status429": 0,
+        "otherErrors": 0,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 37
+        }
+      },
+      "checks": "6/6 passed",
+      "attempts": 1
+    },
+    {
       "task": "C",
       "mode": "real",
       "model": "openrouter/nemotron-3-ultra-free",
       "passed": true,
-      "repositoryCommit": "b3dca29b5c3546f5be7e208f11f169cf59ddd412",
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tq2kr1bsask2fm6sp25jv1",
-      "verification": "invalid NVIDIA key: 401, automatic fallback to OpenRouter (same model, free tier), proposal rejected, git status clean",
-      "recordedAt": "2026-11-19T20:13:25.193Z",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w937mfsxq3q3p7w526a4xn",
+      "verification": "invalid NVIDIA key: 401, automatic fallback to openrouter/nemotron-3-ultra-free in a new session, proposal rejected, git status clean",
+      "recordedAt": "2026-11-20T10:47:35.085Z",
       "videoTimestamp": "[mm:ss]",
-      "inputTokens": 11178,
-      "outputTokens": 623,
-      "firstDiffSeconds": 8.0,
-      "turnSeconds": 9.2,
+      "inputTokens": 10995,
+      "outputTokens": 589,
+      "firstDiffSeconds": 9.6,
+      "turnSeconds": 11,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -83,6 +125,7 @@
       "commands": {
         "autoApproved": 0,
         "prompted": 0,
+        "deniedUnrestricted": 0,
         "refusedByBudget": 0
       },
       "modelRequests": {
@@ -95,115 +138,7 @@
         }
       },
       "checks": "3/3 passed",
-      "fallback": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (401): Unauthorized",
-      "previousRun": {
-        "model": "groq/qwen3-8-27b",
-        "passed": true,
-        "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfc27k5yqxc27atmcm8p8n",
-        "verification": "invalid NVIDIA key: 401, automatic fallback to Groq, proposal rejected, git status clean",
-        "recordedAt": "2026-11-19T17:58:46.830Z",
-        "inputTokens": 6835,
-        "outputTokens": 393,
-        "firstDiffSeconds": 2.0,
-        "turnSeconds": 2.5,
-        "reviews": {
-          "src/flask/helpers.py": 1
-        },
-        "edits": [],
-        "commands": {
-          "autoApproved": 0,
-          "prompted": 0,
-          "refusedByBudget": 0
-        },
-        "modelRequests": {
-          "total": 3,
-          "status429": 0,
-          "otherErrors": 1,
-          "byModel": {
-            "nvidia nvidia/nemotron-3-ultra-550b-a55b": 1,
-            "groq qwen/qwen3.8-27b": 2
-          }
-        },
-        "checks": "3/3 passed",
-        "fallback": "nvidia/nemotron-3-ultra → groq/qwen3-8-27b: [Model Error] Request failed (401): Unauthorized"
-      }
-    },
-    {
-      "task": "B",
-      "mode": "real",
-      "model": "nvidia/nemotron-3-ultra",
-      "passed": false,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfcfhx3w85hjgf7r1gg2nb",
-      "verification": "FAILED: B: turn done; B: ≥3 files changed incl. cli.py, test_cli.py, cli.rst",
-      "recordedAt": "2026-11-19T17:59:00.736Z",
-      "videoTimestamp": "[mm:ss]",
-      "inputTokens": 627824,
-      "outputTokens": 4171,
-      "firstDiffSeconds": 68.0,
-      "turnSeconds": 127.7,
-      "reviews": {
-        "src/flask/cli.py": 3
-      },
-      "edits": [
-        "src/flask/cli.py: saved",
-        "src/flask/cli.py: saved",
-        "src/flask/cli.py: saved"
-      ],
-      "commands": {
-        "autoApproved": 0,
-        "prompted": 0,
-        "refusedByBudget": 0
-      },
-      "modelRequests": {
-        "total": 30,
-        "status429": 2,
-        "otherErrors": 0,
-        "byModel": {
-          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 30
-        }
-      },
-      "checks": "4/6 passed",
-      "attempts": [
-        {
-          "startedAt": "2026-11-19T17:59:00.736Z",
-          "turnSeconds": 127.7,
-          "firstDiffSeconds": 68.0,
-          "edits": [
-            "src/flask/cli.py: saved",
-            "src/flask/cli.py: saved",
-            "src/flask/cli.py: saved"
-          ],
-          "modelRequests": {
-            "total": 30,
-            "status429": 2,
-            "otherErrors": 0,
-            "byModel": {
-              "nvidia nvidia/nemotron-3-ultra-550b-a55b": 30
-            }
-          },
-          "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfcfhx3w85hjgf7r1gg2nb",
-          "error": "Model unavailable: [Model Error] Request failed (429): Too Many Requests (no retry or fallback: this turn already changed the workspace)"
-        },
-        {
-          "startedAt": "2026-11-19T18:06:44.218Z",
-          "turnSeconds": 32.4,
-          "firstDiffSeconds": null,
-          "edits": [],
-          "modelRequests": {
-            "total": 16,
-            "status429": 6,
-            "otherErrors": 1,
-            "byModel": {
-              "nvidia nvidia/nemotron-3-ultra-550b-a55b": 15,
-              "groq qwen/qwen3.8-27b": 1
-            }
-          },
-          "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7tfvkdp32yyk3qed251xpnj",
-          "error": "Model error: [Model Error] Request failed (413): Request too large for model `qwen/qwen3.8-27b` in organization [redacted] service tier `on_demand` on input tokens per minute (ITPM): Limit 7000, Requested 10901, please"
-        }
-      ],
-      "outcome": "Not passed: NVIDIA's free tier answered 429 (no Retry-After) at 9-15 requests/min in both attempts. Attempt 1 had saved three cli.py edits (flask config worked, masked JSON, --help listed it) when the 429 came, so by policy there was no retry or fallback. Attempt 2 (after a 5-minute pause) got 429s before any edit, retried once, fell back to Groq, and Groq refused the 10.9k-token request (413: free-tier limit 7,000 input tokens/min).",
-      "tokenSource": "model meter, attempt 1 (the failed turn sent no usage event)"
+      "fallback": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (401): Unauthorized"
     }
   ]
 }

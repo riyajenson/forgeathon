@@ -601,7 +601,7 @@ As declared in the write-up (`docs/writeup/WRITEUP.md`, "Tools used"):
 - **OpenAI Codex (via ChatGPT):** the initial VS Code extension scaffold, the editor features (EditorPort,
   inline review, agent panel) and the shared contracts; PRs #3 and #4 (the execution-safety sandbox for
   commands, tool-call settlement, retrieval coverage reporting and the submission-evidence checker); and a QA
-  review of the final build.
+  review of the 19 Nov build.
 
 All code was reviewed and directed by the team.
 

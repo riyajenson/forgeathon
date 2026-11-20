@@ -135,7 +135,7 @@ tests against TrueForge 0.185.1.
   the editor workstream, documentation and this write-up draft. **OpenAI Codex (via ChatGPT)** — the initial
   VS Code extension scaffold, editor features (EditorPort, inline review, agent panel) and the shared
   contracts; PRs #3 and #4 (execution-safety sandbox for commands, tool-call settlement, retrieval coverage
-  reporting, the submission-evidence checker); and a QA review of the final build. All code was reviewed and
+  reporting, the submission-evidence checker); and a QA review of the 19 Nov build. All code was reviewed and
   directed by the team.
 
 ## 8. Known limitations and what you would do with another month

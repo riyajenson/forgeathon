@@ -152,6 +152,7 @@ export interface VisibleFiles {
 export async function visibleFiles(port: EditorPort, prefix?: string): Promise<VisibleFiles> {
   const all = await port.listFiles({ limit: LIST_LIMIT });
   const policy = await IgnorePolicy.load(port, all);
-  const files = all.filter((p) => (!prefix || p.startsWith(prefix)) && !policy.ignores(p) && !isSecretPath(p));
+  const files = all.filter((p) => (!prefix || p.startsWith(prefix)) && !policy.ignores(p) && !isSecretPath(p) &&
+    !policy.unreadable.some((ignore) => ignore === '.gitignore' || p.startsWith(`${ignore.slice(0, -'/.gitignore'.length)}/`)));
   return { files, truncated: all.length >= LIST_LIMIT, unreadableIgnores: policy.unreadable };
 }

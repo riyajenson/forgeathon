@@ -5,7 +5,7 @@ import path from 'node:path';
 import { existsSync, promises as fs } from 'node:fs';
 import { FakePort } from '../mcp/fake-port';
 import { chunkDocs, chunkPython } from './chunks';
-import { GitIgnore, IgnorePolicy } from './files';
+import { GitIgnore, IgnorePolicy, visibleFiles } from './files';
 import { assembleContext, buildIndex, parseMentions, rankFiles } from './index';
 import { splitIdentifier, terms } from './text';
 import type { EditorPort } from '../mcp/port';
@@ -47,6 +47,25 @@ test('unreadable ignore policy refuses indexing and explains why', async () => {
   const result = await assembleContext(inventoryPort(3, new Set(['.gitignore'])), { instruction: 'symbol', mode: 'agent', budgetTokens: 8000 });
   assert.equal(result.report.selections.length, 0);
   assert.ok(result.report.skipped.some(s => s.path === '.gitignore'));
+});
+
+test('unreadable root ignore rules hide files from search and listing inventory', async () => {
+  const visible = await visibleFiles(inventoryPort(3, new Set(['.gitignore'])));
+  assert.deepEqual(visible.files, []);
+  assert.deepEqual(visible.unreadableIgnores, ['.gitignore']);
+});
+
+test('explicit references and selections never include credentials files', async () => {
+  const fake = inventoryPort(1);
+  const originalRead = fake.readText.bind(fake);
+  fake.readText = async (file) => file === '.env'
+    ? { text: 'SYNTHETIC_SECRET=fixture', sha256: 'fixture' }
+    : originalRead(file);
+  const result = await assembleContext(fake, {
+    instruction: 'inspect @file:.env', mode: 'agent', budgetTokens: 8000,
+    selection: { path: '.env', startLine: 1, endLine: 1, text: 'SYNTHETIC_SECRET=fixture' },
+  });
+  assert.ok(!result.text.includes('SYNTHETIC_SECRET'));
 });
 
 test('small configured budgets are not silently raised to 500 tokens', async () => {

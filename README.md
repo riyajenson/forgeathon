@@ -3,8 +3,9 @@
 Forge is a VS Code-native coding agent whose entire agent loop (sessions, turns, model calls and tool
 approvals) runs on **[TrueForge](https://github.com/truefoundry/trueforge) 0.185.1** in local mode. The agent
 works through MCP editor tools. You review every change hunk by hunk. The context is assembled within a token
-budget and its rationale is shown. If the primary model fails, the turn falls back automatically to a model
-from another provider, and the harness enforces a per-turn command budget.
+budget and its rationale is shown. If the primary model fails before anything was written, the turn falls back
+automatically to a model from another provider, in a fresh TrueForge session; and the harness enforces a per-turn
+command budget. **No keys?** [Run with the mock](#run-with-the-mock-no-keys-from-a-clean-clone).
 
 Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 
@@ -30,10 +31,10 @@ Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 | TrueForge in local mode | `npx @truefoundry/trueforge@0.185.1` with SQLite | [Quickstart](#quickstart-with-real-models) |
 | Agent definition in the repository | `forge-coder` (agent mode) and `forge-inline` (inline edit), plus `-fallback` variants created by the setup | `agent/forge-coder.json`, `agent/forge-inline.json` |
 | Inline edit with in-editor diff, accept/reject, no copy-paste | Diff editor, per-hunk picker, Accept/Reject All, undo | `extension/src/review.ts`, Task A |
-| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; every proposed change is reviewed before it is written (a file can get several reviews; the measured Task B had 5 over 3 files) | `agent/forge-coder.json`, Task B |
+| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; every proposed change is reviewed before it is written (a file can get several reviews). Passed on real models in earlier rehearsals; the result on the submitted commit is in `docs/writeup/rehearsal.json`. The mock B is scripted (it supplies the paths and edits) | `agent/forge-coder.json`, Task B |
 | Context: `@file`, `@symbol`, automatic retrieval, budget, visible rationale | Context engine and the panel's Context block | `src/harness/context/`, [How context is selected](#how-context-is-selected) |
 | Diff safety: preview, per-hunk accept/reject, no silent writes, undo | Review before write, stale-base refusal, guarded undo | [Safety model](#safety-model) |
-| Streaming and cancellation, workspace consistent | Streamed text and tool calls; Stop cancels the TrueForge turn and closes the review | `src/harness/turn/turn.ts`, `extension/src/agentPanel.ts` |
+| Streaming and cancellation, workspace consistent | Streamed text and tool calls; Stop cancels the TrueForge turn and closes the review; an approved edit already handed to VS Code is saved and reported before the turn ends | `src/harness/turn/turn.ts`, `extension/src/agentPanel.ts` |
 | Fixed tasks A, B and C on Flask 3.1.3 | Exact steps and verification commands | [Running Tasks A, B and C](#running-tasks-a-b-and-c) |
 | Fork disclosure | Built from scratch, not a fork | [Starting point](#starting-point-versions-and-licence) |
 
@@ -80,8 +81,11 @@ How one turn runs:
 5. **Streaming.** Text, tool calls, results, reviews and command requests stream into the panel. Stop cancels
    the TrueForge turn and closes the approval gate.
 6. **Recovery.** A model error before any write is retried once, and a 429 first waits for the provider's
-   `Retry-After`. Otherwise the turn falls back to the `-fallback` agent on a different provider. Nothing is
-   retried after the turn has changed the workspace.
+   `Retry-After`. Otherwise the turn falls back to the `-fallback` agent on a different provider, which starts
+   a **fresh TrueForge session** (it does not see earlier panel turns). There is **no retry or fallback after a
+   write**, or while a tool call is unsettled: the turn ends with the error. Errors are classified from the
+   provider's status and wording. The free OpenRouter fallback serves the same model from NVIDIA's backend and
+   has a daily cap (50 requests without credit), so it covers throttling and key problems, not an NVIDIA outage.
 
 ## Quickstart with real models
 
@@ -90,12 +94,15 @@ All models below are **free tiers ($0)**. These are the models tested on Tasks A
 ### 1. Prerequisites
 
 - Windows 11 with **WSL 2 (Ubuntu)**, or any Linux. Every command below runs in WSL or Linux.
-- **VS Code** with the **WSL** extension (Remote-WSL) on Windows.
+- **VS Code**: on Windows with the **WSL** extension (Remote-WSL); on Linux, VS Code itself.
 - **Node.js ≥ 22.14** (for example `nvm install 24`), npm, git.
 - **Python ≥ 3.10** with `venv`.
 - **bubblewrap** (`sudo apt install bubblewrap` on Ubuntu/WSL) for protected commands. Check it with
   `bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true`. Without it, `run_command` refuses to run
   anything (fail closed); editing and model calls still work. See `docs/harness/EXECUTION-SAFETY.md`.
+  On generic Linux the check can fail with `setting up uid map: Permission denied` where unprivileged user
+  namespaces are restricted (for example Ubuntu 24.04's AppArmor setting
+  `kernel.apparmor_restrict_unprivileged_userns=1`); allow them for bwrap per your distribution's guidance.
 - Internet access: npm, TrueForge through `npx`, the model providers, GitHub (for Flask).
 
 ### 2. Install and build
@@ -248,9 +255,10 @@ python3 -m venv ~/flask-demo/.venv && echo ".venv/" >> ~/flask-demo/.git/info/ex
 git -C ~/flask-demo status --short                                      # prints nothing
 ```
 
-### 9. Launch the extension under Remote-WSL
+### 9. Launch the extension (Remote-WSL, or Linux directly)
 
-1. In VS Code run **WSL: Connect to WSL**, then open the `forgeathon/extension` folder.
+1. On Windows, run **WSL: Connect to WSL** in VS Code, then open the `forgeathon/extension` folder. On Linux,
+   just open that folder (`code forgeathon/extension`).
 2. Press **F5** (*Launch Forge editor*). An Extension Development Host window opens; it runs in WSL.
 3. In that window, open `~/flask-demo`.
 4. Open the commands with `Ctrl+Shift+P`, "Forge-a-thon":
@@ -298,6 +306,8 @@ FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; p
 - Tool calls: reads and searches, then one diff per file: `src/flask/cli.py`, `tests/test_cli.py` and
   `docs/cli.rst`.
 - The test run, then a summary.
+- At turn end, **Files changed in this turn: 3**, listing the three paths together with their review and
+  accepted-hunk counts.
 - At most 3 commands per turn. Any more appear as "command budget reached".
 
 **What to click:**
@@ -389,14 +399,19 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
   - The result is one of six reported outcomes (stale, approval missing, failed before apply, applied but
     unsaved, save failed, saved).
 - **Per hunk:** accept or reject each hunk, or all of them.
-- **Undo:** restores the exact original bytes, even with format-on-save, after checking the file has not
-  changed since.
+- **Apply:** the reviewed text (the original with only the accepted hunks) is verified by hash before it is
+  saved; save-time formatters (format on save) may alter the saved file, and the receipt records the post-save hash.
+- **Undo:** restores the reviewed original text, verified by hash (saved without save participants), after
+  checking the file has not changed since.
 - **Stale-base refusal:** an edit is based on the file's sha256. If the file changed since it was read, the
   edit is refused (in both the harness and the editor), and the model is told to read it again.
 - **Cancel:**
   - Stop closes the approval gate, cancels the TrueForge turn, closes any open review without writing, and
     kills a running command's process group.
   - An approved command never starts after Stop.
+  - If Stop arrives after an approved edit was handed to VS Code, the turn waits (bounded) for it: the edit is
+    saved and reported as saved before the turn ends, never left unsaved in the buffer.
+  - Edits saved earlier in the turn stay, so a stopped multi-file task can be partly done (the panel lists them).
 - **run_command gating:**
   - Each command needs your approval of that exact command and directory, used once.
   - Any command other than `pytest`, `python -m pytest`, `python -c`, `flask`, `git status` and `git diff`
@@ -457,23 +472,43 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 The turn log at `~/.forge/turns.jsonl` records model, attempts, tokens, timing and approvals per turn, with no
 content.
 
-## Mock mode (no keys)
+## Run with the mock (no keys), from a clean clone
 
 The **scripted demo model** stands in for an LLM on loopback. It calls the same tools a real model would and
-knows the fixed tasks, so the rest of the stack (TrueForge, the harness, the MCP tools, the extension) is
-real. **It is for testing only and is not used in the demo video.**
+knows the fixed tasks (it supplies Task B's paths and edits), so everything else is real: TrueForge 0.185.1,
+the harness, the MCP tools and the extension. **It is for testing only and is not used in the demo video.**
+Prerequisites as in [step 1](#1-prerequisites) (Node ≥ 22.14, Python ≥ 3.10 with venv, git, VS Code, bubblewrap).
 
 ```bash
-scripts/dev-mock.sh            # demo model + fresh TrueForge on :8790 + setup; Ctrl+C stops all
+# 1. Bubblewrap check (commands are refused without it; editing still works)
+bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo "bubblewrap OK"
+# 2. Clone and build both packages
+git clone https://github.com/riyajenson/forgeathon.git && cd forgeathon
+npm --prefix src/harness ci && npm --prefix src/harness run build
+(cd extension && npm ci && npm run compile)
+# 3. The pinned Flask 3.1.3 workspace
+git clone https://github.com/pallets/flask ~/flask-demo && git -C ~/flask-demo checkout -q 22d92470
+python3 -m venv ~/flask-demo/.venv && echo ".venv/" >> ~/flask-demo/.git/info/exclude
+~/flask-demo/.venv/bin/pip install -q -e ~/flask-demo "pytest==9.0.2"
+# 4. Scripted model + a fresh TrueForge on :8790 (own SQLite under ~/.forge-mock) + setup. Keep this open;
+#    Ctrl+C stops everything. (--background returns; stop with: scripts/dev-mock.sh stop)
+scripts/dev-mock.sh
 ```
 
-Then do steps 7–9 of the quickstart. For Task C, use `scripts/dev-mock.sh --break-primary` and then
-`scripts/dev-mock.sh --restore`.
+5. **Editor:** on Linux, `code extension`; on Windows, **WSL: Connect to WSL** and open `forgeathon/extension`.
+   Press **F5** (*Launch Forge editor*) and, in the window that opens, open `~/flask-demo`.
+6. **Tasks A and B:** as in [Running Tasks A, B and C](#running-tasks-a-b-and-c), with the same instructions
+   and verification commands. The TrueForge UI is at http://localhost:8790.
+7. **Task C (mock override):** in a second terminal, `scripts/dev-mock.sh --break-primary`, then repeat Task A.
+   The banner reads "Primary model failed: … 401 … → switched to demo-fallback/scripted"; click **Reject All**;
+   `git -C ~/flask-demo status --short` prints nothing. Then `scripts/dev-mock.sh --restore`.
 
 ## Testing
 
 Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
-real model solves the tasks; real-model results are recorded in `docs/STATUS.md`.
+real model solves the tasks: the scripted model knows the fixed tasks and, in Task B, supplies the file paths
+and edits, so a mock run is no evidence of file discovery. Real-model results: `docs/writeup/rehearsal.json`
+(the submitted commit) and `docs/STATUS.md` (history). Current counts: 134 unit and 19 integration tests.
 
 | Command | What it proves | Needs |
 |---|---|---|
@@ -481,9 +516,9 @@ real model solves the tasks; real-model results are recorded in `docs/STATUS.md`
 | `npm --prefix src/harness run test:integration` | Turns through a real TrueForge 0.185.1: approvals, partial accept, deny, cancel races, 401/429/watchdog → retry or fallback, two 429s per model call absorbed by TrueForge's own retries (no harness retry, no duplicate tool call), run_command, setup | TrueForge on :8790 (`scripts/dev-mock.sh --background`) |
 | `scripts/e2e-mock.sh` | Tasks A, B, C and G (guardrails) through the harness on a copy of Flask 3.1.3, with the verification commands: 21 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
 | `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
-| `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, panel, settings | A display (WSLg). Fetches 3 libraries without sudo |
+| `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, Stop during an apply, panel (incl. the turn-end file summary), settings | A display (WSLg, or X/Wayland on Linux). Fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A (incl. undo and re-apply), B, Stop during a pending review and during a running command, and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |
-| `FORGE_E2E_TEST=responsiveness.cjs scripts/test-extension-e2e.sh` | The extension host is never blocked longer than 150 ms during Task B (event-loop delay, CPU profile summary) | As above |
+| `FORGE_E2E_TEST=responsiveness.cjs scripts/test-extension-e2e.sh` | In a measured scripted Task B run, no extension-host block exceeds 150 ms (event-loop delay, CPU profile summary). A bounded measurement, not a guarantee for every machine | As above |
 | `scripts/test-extension-live.sh` | The native UI driven through the DevTools port: inline command, diff tab, hunk picker (hunk 1 only, then hunk 2 only, exactly that hunk saved), undo, and no Accept All left on screen after a decision or Stop | As above, plus TrueForge 0.185.1 in the npx cache |
 | `src/harness/node_modules/.bin/tsc -p contracts/tsconfig.json` | The shared protocol types compile | `npm ci` in `src/harness` |
 | `node scripts/smoke-real-model.mjs --tasks A,B,C` | The `e2e-mock.sh` checks with your real models (costs real requests) | Keys, `config/models.json`, TrueForge |

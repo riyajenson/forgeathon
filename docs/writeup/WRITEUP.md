@@ -88,11 +88,11 @@ Four unrelated Flask tasks also rank their source file first (regression test in
 |---|---|---|---|
 | Primary | `nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA API Catalog, free tier | $0 |
 | Fallback | `nvidia/nemotron-3-ultra-550b-a55b:free` (same model; NVIDIA serves it upstream; 50 requests/day without credit) | OpenRouter, free model | $0 |
-| Spare (configured, unused) | `qwen/qwen3.8-27b` | Groq, free tier | $0 |
+| Spare: configured; fallback in earlier rehearsals, before OpenRouter replaced it | `qwen/qwen3.8-27b` | Groq, free tier | $0 |
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
 **switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`, one of three named profiles). The NVIDIA catalog offered no Qwen3 Coder or
-DeepSeek model; tests use a local scripted model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
+DeepSeek model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
 fastest with correct streamed tool calls. Gemini,
 Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** Task B
 passed on real models in earlier rehearsals (133–259 s); the result of A, B and C on the submitted commit is in
@@ -103,28 +103,26 @@ then fall back to the `-fallback` agent, which **starts a fresh TrueForge sessio
 fallback after a write** (or while a tool call is unsettled): the turn ends with the error. Errors are classified
 from the provider's status and wording. The free fallback shares NVIDIA's backend, so it covers throttling and
 key problems, not an NVIDIA outage. A
-watchdog stops a turn that streams nothing for 45 s; every turn is logged (no content) to `~/.forge/turns.jsonl`.
+watchdog stops a turn that streams nothing for 45 s.
 
 ## 6. Scorecard
 
-| Criterion (points) | What we show | Video |
+| Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
 |---|---|---|
-| Inline edit (10) | Task A: selection → instruction → in-editor diff → Accept All / per-hunk → saved → verification `False` | `[mm:ss]` |
-| Agent mode (10) | Task B on a real model: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end | `[mm:ss]` |
-| Streaming / cancellation (10) | Streamed text and tool calls; Stop (streaming, pending review, running command) → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first (tested) | `[mm:ss]` |
-| Context assembly (15) | Context block: used/budget, ranked files with reasons, skipped items | `[mm:ss]` |
-| Diff safety (10) | Per-hunk picker, Undo restores the file, re-apply; partial accept (exactly the chosen hunk saved) in the native UI test | `[mm:ss]` |
-| Resilience (10) | Task C: invalid primary key → fallback banner → `git status` clean | `[mm:ss]` |
-| TrueForge depth (10) | Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` when the model uses them) | `[mm:ss]` |
-| Demo video (10) | Tasks A, B, C in order, each verified on screen | A `[mm:ss]` · B `[mm:ss]` · C `[mm:ss]` |
-| PDF write-up (15) | This document; the video's closing frame links the repository | `[mm:ss]` |
+| Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | `[mm:ss]` |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests) | `[mm:ss]` |
+| Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | `[mm:ss]` |
+| Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | `[mm:ss]` |
+| Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | `[mm:ss]` |
+| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | `[mm:ss]` |
+| TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | `[mm:ss]` |
+| Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A `[mm:ss]` · B `[mm:ss]` · C `[mm:ss]` |
+| PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | `[mm:ss]` |
 
-Automated checks use a **scripted model**: they show that the plumbing works, not that a real model solves
-the tasks; the scripted B supplies the file paths and edits, so it is no evidence of discovery. `scripts/e2e-mock.sh`
-runs A, B, C and the guardrails (21 checks); `scripts/test-extension-e2e.sh` drives A (with undo), B, Stop and C
-in a real VS Code window; a native-UI test checks that the picker saves exactly the chosen hunk; in measured
-scripted Task B runs no extension-host block exceeded 150 ms (peaks 95–139 ms; not a guarantee for every machine). Harness: 134 unit tests and 19 integration
-tests against TrueForge 0.185.1.
+Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
+discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
+VS Code), 134 unit and 19 integration tests against TrueForge 0.185.1; no extension-host block over 150 ms in
+measured scripted B runs (peaks 95–139 ms).
 
 ## 7. Tools used
 
@@ -142,16 +140,16 @@ tests against TrueForge 0.185.1.
 
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
-instructions, hence the harness command budget (3 per turn); each step resends the whole conversation. An optional setting auto-approves bare `pytest`/`git status|diff` only. Retrieval is lexical (no embeddings) and
+instructions, hence the harness command budget (3 per turn); each step resends the whole conversation. Retrieval is lexical (no embeddings) and
 the symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
 9–15 requests/min, Groq's free tier (7,000 tokens/min) cannot take B's ~11k-token requests, and the OpenRouter
 fallback allows 50 requests/day without credit (one B takes 40–70). Compaction is configured but the
-demo tasks never reach the threshold. Hunk review uses a picker rather than per-hunk CodeLens. One workspace
+demo tasks never reach the threshold. One workspace
 folder; tested on WSL only.
 
 **With another month:** embeddings and language-server symbols for retrieval, evaluated across repositories and
-models; per-hunk CodeLens and streaming diff previews; conversation history across fallback; read confinement for
+models; per-hunk CodeLens; conversation history across fallback; read confinement for
 `run_command`; cost-aware model routing; Marketplace packaging.

@@ -298,3 +298,125 @@ test('retrieval benchmark reports recall, reciprocal rank, packed file density, 
     medianElapsedMs: 20,
   });
 });
+
+type SemanticTestChunk = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+  sha256: string;
+  semanticVectors: Map<string, number[]>;
+};
+type SemanticTestWorker = {
+  embed: (texts: readonly string[], signal?: AbortSignal, progress?: (event: { status: string; progress?: number }) => void) => Promise<readonly number[][]>;
+  dispose: () => Promise<void>;
+};
+type SemanticTestApi = {
+  semanticChunkId: (chunk: Pick<SemanticTestChunk, 'path' | 'startLine' | 'endLine'>) => string;
+  LocalSemanticRanker: new (options?: {
+    workerFactory?: () => SemanticTestWorker;
+    onProgress?: (event: { status: string; progress?: number }) => void;
+  }) => {
+    rank: (query: string, chunks: readonly SemanticTestChunk[], signal?: AbortSignal) => Promise<ReadonlyMap<string, number>>;
+    dispose: () => Promise<void>;
+  };
+};
+function semanticApiForTest(): SemanticTestApi | undefined {
+  try { return require('./semantic') as SemanticTestApi; } catch { return undefined; }
+}
+
+test('semantic chunk IDs are stable for a path and line range', () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  assert.equal(api.semanticChunkId({ path: 'src/alpha.py', startLine: 4, endLine: 9 }), 'src/alpha.py:4:9');
+  assert.notEqual(api.semanticChunkId({ path: 'src/alpha.py', startLine: 4, endLine: 10 }), 'src/alpha.py:4:9');
+});
+
+test('semantic vectors reuse unchanged file analysis and invalidate after a content hash change', async () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-semantic-cache-'));
+  const localPath = path.join(localRoot, 'src', 'sample.py');
+  await fs.mkdir(path.dirname(localPath), { recursive: true });
+  await fs.writeFile(localPath, 'def handler():\n    return 1\n');
+  const localPort = new FakePort(localRoot);
+  const batches: number[] = [];
+  const ranker = new api.LocalSemanticRanker({
+    workerFactory: () => ({
+      embed: async (texts) => { batches.push(texts.length); return texts.map(() => [1, 0]); },
+      dispose: async () => {},
+    }),
+  });
+  try {
+    const first = await buildIndex(localPort);
+    const firstChunks = first.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
+    await ranker.rank('handler', firstChunks);
+
+    const unchanged = await buildIndex(localPort);
+    const unchangedChunks = unchanged.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
+    assert.strictEqual(unchangedChunks[0]!.semanticVectors, firstChunks[0]!.semanticVectors);
+    await ranker.rank('handler', unchangedChunks);
+    assert.deepEqual(batches, [firstChunks.length + 1, 1], 'unchanged chunks reuse their cached vectors');
+
+    await fs.writeFile(localPath, 'def handler():\n    return 2\n');
+    const changed = await buildIndex(localPort);
+    const changedChunks = changed.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
+    assert.notStrictEqual(changedChunks[0]!.semanticVectors, firstChunks[0]!.semanticVectors);
+    assert.equal(changedChunks[0]!.semanticVectors.size, 0, 'a new SHA-256 starts with an empty vector cache');
+    await ranker.rank('handler', changedChunks);
+    assert.deepEqual(batches, [firstChunks.length + 1, 1, changedChunks.length + 1]);
+  } finally {
+    await ranker.dispose();
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
+});
+
+test('missing semantic model falls back to no semantic scores and reports download progress', async () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  const chunk = (await buildIndex(port).then((index) => index.chunks.slice(0, 1))) as unknown as SemanticTestChunk[];
+  const progress: Array<{ status: string; progress?: number }> = [];
+  const ranker = new api.LocalSemanticRanker({
+    onProgress: (event) => progress.push(event),
+    workerFactory: () => ({
+      embed: async (_texts, _signal, onProgress) => {
+        onProgress?.({ status: 'progress_total', progress: 42 });
+        throw new Error('model files unavailable');
+      },
+      dispose: async () => {},
+    }),
+  });
+  try {
+    assert.deepEqual([...await ranker.rank('find handler', chunk)], []);
+    assert.deepEqual(progress, [{ status: 'progress_total', progress: 42 }]);
+  } finally {
+    await ranker.dispose();
+  }
+});
+
+test('cancelled semantic work returns no stale scores or cached vectors', async () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  const chunk = (await buildIndex(port).then((index) => index.chunks.slice(0, 1))) as unknown as SemanticTestChunk[];
+  const controller = new AbortController();
+  let disposed = false;
+  const ranker = new api.LocalSemanticRanker({
+    workerFactory: () => ({
+      embed: (_texts, signal) => new Promise((_resolve, reject) => {
+        const cancel = () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
+        if (signal?.aborted) cancel();
+        else signal?.addEventListener('abort', cancel, { once: true });
+      }),
+      dispose: async () => { disposed = true; },
+    }),
+  });
+  try {
+    const pending = ranker.rank('find handler', chunk, controller.signal);
+    controller.abort();
+    assert.deepEqual([...await pending], []);
+    assert.equal(chunk[0]!.semanticVectors.size, 0);
+  } finally {
+    await ranker.dispose();
+  }
+  assert.ok(disposed, 'dispose releases the worker');
+});

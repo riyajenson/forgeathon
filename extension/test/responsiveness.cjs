@@ -8,9 +8,7 @@ const { monitorEventLoopDelay, performance } = require('node:perf_hooks');
 const inspector = require('node:inspector');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const vscode = require('vscode');
-const { Workbench } = require('../out/workbench');
-const { configuredHarness } = require('../out/connect');
+const path = require('node:path');
 
 const run = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -36,7 +34,30 @@ function topSelf(profile, n = 15) {
     .map(([k, ms]) => `${ms.toFixed(1).padStart(8)} ms  ${k}`);
 }
 
+async function runSemanticWorkerSmoke() {
+  let api;
+  try { api = require('../../src/harness/dist/src/harness/context/semantic'); } catch { api = undefined; }
+  assert.equal(typeof api?.ThreadEmbeddingClient, 'function', 'semantic worker client is exported');
+  const client = new api.ThreadEmbeddingClient({ workerPath: path.join(__dirname, 'semantic-worker-fixture.cjs') });
+  let beats = 0;
+  const progress = [];
+  const beat = setInterval(() => { beats++; }, 5);
+  try {
+    const vectors = await client.embed(['fixture'], new AbortController().signal, (event) => progress.push(event));
+    assert.deepEqual(vectors, [[1, 0]]);
+    assert.ok(beats >= 2, `extension event loop kept running while worker computed (${beats} ticks)`);
+    assert.deepEqual(progress, [{ status: 'progress_total', progress: 100 }]);
+  } finally {
+    clearInterval(beat);
+    await client.dispose();
+  }
+}
+
 exports.run = async () => {
+  const vscode = require('vscode');
+  const { Workbench } = require('../out/workbench');
+  const { configuredHarness } = require('../out/connect');
+  await runSemanticWorkerSmoke();
   const folder = vscode.workspace.workspaceFolders[0];
   const root = folder.uri.fsPath;
   const ui = new Workbench(folder, configuredHarness);
@@ -96,3 +117,13 @@ exports.run = async () => {
     await ui.shutdown();
   }
 };
+
+
+if (require.main === module && process.argv.includes('--semantic-worker-smoke')) {
+  runSemanticWorkerSmoke().then(() => {
+    console.log('PASS semantic worker: embedding ran off the extension event loop');
+  }).catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

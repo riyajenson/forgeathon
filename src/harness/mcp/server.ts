@@ -98,6 +98,7 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
     inputSchema: {
       task: z.string().min(1).describe('What you are looking for, in words and identifiers'),
       budget_tokens: z.number().int().min(1000).max(12000).optional().describe('Default 6000'),
+      semantic_search: z.boolean().optional().describe('Use local semantic reranking when keyword evidence is weak'),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, (args) => run(ctx, () => gatherContextTool(ctx, args)));

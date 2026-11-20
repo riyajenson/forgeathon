@@ -20,8 +20,8 @@ function option(name, fallback) {
 }
 
 const mode = option('mode', 'lexical');
-if (mode !== 'lexical') {
-  console.error(`Unsupported benchmark mode "${mode}". Task 1 supports --mode=lexical.`);
+if (!['lexical', 'hybrid'].includes(mode)) {
+  console.error(`Unsupported benchmark mode "${mode}". Use --mode=lexical or --mode=hybrid.`);
   process.exit(2);
 }
 
@@ -32,8 +32,9 @@ const requireFromScript = createRequire(import.meta.url);
 const harnessDist = path.join(forgeRoot, 'src/harness/dist/src/harness');
 const { FakePort } = requireFromScript(path.join(harnessDist, 'mcp/fake-port.js'));
 const { buildIndex } = requireFromScript(path.join(harnessDist, 'context/workspace-index.js'));
-const { assembleContext } = requireFromScript(path.join(harnessDist, 'context/engine.js'));
+const { assembleContext, disposeContextResources } = requireFromScript(path.join(harnessDist, 'context/engine.js'));
 const { measureRetrieval } = requireFromScript(path.join(harnessDist, 'context/retrieval-benchmark.js'));
+const { SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION } = requireFromScript(path.join(harnessDist, 'context/semantic.js'));
 
 const benchmarkArtifacts = new Set([
   'src/harness/context/retrieval-benchmark.json',
@@ -89,34 +90,54 @@ for (const [name, root] of roots) {
   indexTimings[name] = { root, files: index.files.size, chunks: index.chunks.length, coldIndexMs, warmIndexMs };
 }
 
-const results = [];
+const resultsByMode = Object.fromEntries((mode === 'hybrid' ? ['lexical', 'hybrid'] : [mode]).map((runMode) => [runMode, []]));
 const unavailableCases = [];
-for (const benchmarkCase of dataset.cases) {
-  const port = ports.get(benchmarkCase.workspace);
-  const index = indexes.get(benchmarkCase.workspace);
-  if (!port || !index) {
-    unavailableCases.push({ caseId: benchmarkCase.id, workspace: benchmarkCase.workspace, reason: 'workspace root is unavailable' });
-    continue;
-  }
+try {
+  for (const benchmarkCase of dataset.cases) {
+    const port = ports.get(benchmarkCase.workspace);
+    const index = indexes.get(benchmarkCase.workspace);
+    if (!port || !index) {
+      unavailableCases.push({ caseId: benchmarkCase.id, workspace: benchmarkCase.workspace, reason: 'workspace root is unavailable' });
+      continue;
+    }
 
-  const started = performance.now();
-  const context = await assembleContext(port, {
-    instruction: benchmarkCase.query,
-    mode: 'agent',
-    budgetTokens: benchmarkCase.budgetTokens ?? 8000,
-  }, index);
-  const elapsedMs = performance.now() - started;
-  results.push({
-    caseId: benchmarkCase.id,
-    expectedPaths: benchmarkCase.expectedPaths,
-    rankedPaths: context.ranked.map((entry) => entry.path),
-    packedPaths: context.report.selections.map((entry) => entry.path),
-    packedTokens: context.report.estimatedTokens,
-    elapsedMs,
-  });
+    for (const runMode of Object.keys(resultsByMode)) {
+      const started = performance.now();
+      const context = await assembleContext(port, {
+        instruction: benchmarkCase.query,
+        mode: 'agent',
+        budgetTokens: benchmarkCase.budgetTokens ?? 8000,
+        semanticSearch: runMode === 'hybrid',
+      }, index);
+      const elapsedMs = performance.now() - started;
+      resultsByMode[runMode].push({
+        caseId: benchmarkCase.id,
+        expectedPaths: benchmarkCase.expectedPaths,
+        rankedPaths: context.ranked.map((entry) => entry.path),
+        packedPaths: context.report.selections.map((entry) => entry.path),
+        packedTokens: context.report.estimatedTokens,
+        elapsedMs,
+      });
+    }
+  }
+} finally {
+  await disposeContextResources();
 }
 
+const results = resultsByMode[mode];
 const metrics = measureRetrieval(results);
+const lexicalMetrics = mode === 'hybrid' ? measureRetrieval(resultsByMode.lexical) : undefined;
+const hybridMetrics = mode === 'hybrid' ? measureRetrieval(resultsByMode.hybrid) : undefined;
+const pairedComparison = lexicalMetrics && hybridMetrics ? {
+  lexical: { metrics: lexicalMetrics, results: resultsByMode.lexical },
+  hybrid: { metrics: hybridMetrics, results: resultsByMode.hybrid },
+  ratios: {
+    recallAt5: hybridMetrics.recallAt5 / Math.max(lexicalMetrics.recallAt5, Number.EPSILON),
+    mrr: hybridMetrics.mrr / Math.max(lexicalMetrics.mrr, Number.EPSILON),
+    relevantFilesPer1000Tokens: hybridMetrics.relevantFilesPer1000Tokens / Math.max(lexicalMetrics.relevantFilesPer1000Tokens, Number.EPSILON),
+    latencyEfficiency: lexicalMetrics.medianElapsedMs / Math.max(hybridMetrics.medianElapsedMs, Number.EPSILON),
+  },
+} : undefined;
 const output = {
   schemaVersion: 1,
   mode,
@@ -130,11 +151,12 @@ const output = {
   tokenMetadata: {
     budgetTokens: 8000,
     estimate: 'Forge context token estimator',
-    semanticModel: null,
+    semanticModel: mode === 'hybrid' ? { id: SEMANTIC_MODEL_ID, revision: SEMANTIC_MODEL_REVISION, runtime: 'local CPU q4' } : null,
   },
   excludedFromIndex: ['benchmark runner and dataset', 'docs/superpowers/**', '.superpowers/**'],
   metrics,
   results,
+  ...(pairedComparison ? { pairedComparison } : {}),
 };
 
 process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);

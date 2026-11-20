@@ -43,6 +43,16 @@ export function checkSubmission(writeup, evidence) {
   return errors;
 }
 
+/** The evidence must be for HEAD, or for an ancestor of HEAD followed only by documentation commits (docs/, *.md):
+ * committing rehearsal.json itself, or the video URL, must not invalidate the evidence. */
+export function commitError(recorded, head, isAncestor, changedSinceRecorded) {
+  if (recorded.toLowerCase() === head.toLowerCase()) return undefined;
+  const code = isAncestor ? changedSinceRecorded.filter(f => !f.startsWith('docs/') && !/^[^/]+\.md$/.test(f)) : [];
+  if (isAncestor && !code.length) return undefined;
+  return `Real-model evidence was recorded for ${recorded}; rehearse A/B/C on the current commit ${head}` +
+    (isAncestor ? ` (changed since then outside docs: ${code.slice(0, 5).join(', ')}${code.length > 5 ? ', …' : ''}).` : '.');
+}
+
 export function main(args = process.argv.slice(2)) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   let writeupPath = path.join(root, 'docs/writeup/WRITEUP.md');
@@ -57,8 +67,12 @@ export function main(args = process.argv.slice(2)) {
   catch (error) { if (error.code !== 'ENOENT') throw new Error(`Cannot parse rehearsal evidence: ${evidencePath}`); }
   const errors = checkSubmission(writeup, evidence);
   if (evidence?.repositoryCommit) {
-    const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-    if (evidence.repositoryCommit.toLowerCase() !== currentCommit.toLowerCase()) errors.push(`Real-model evidence was recorded for ${evidence.repositoryCommit}; rehearse A/B/C on the current commit ${currentCommit}.`);
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const head = git('rev-parse', 'HEAD'), recorded = evidence.repositoryCommit;
+    let ancestor = false, changed = [];
+    try { git('merge-base', '--is-ancestor', recorded, head); ancestor = true; changed = git('diff', '--name-only', recorded, head).split('\n').filter(Boolean); } catch { /* not an ancestor */ }
+    const error = commitError(recorded, head, ancestor, changed);
+    if (error) errors.push(error);
   }
   if (errors.length) {
     console.error('Submission evidence is incomplete:\n' + errors.map(e => `- ${e}`).join('\n'));

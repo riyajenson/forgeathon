@@ -36,7 +36,7 @@ export class EditReview implements vscode.Disposable {
   readonly readText: ReturnType<typeof createReader>;
   constructor(private readonly folder: vscode.WorkspaceFolder,
     private readonly save = (doc: vscode.TextDocument) => doc.save(),
-    // Undo restores exact bytes: save without save participants (format on save would change them again).
+    // Undo restores the reviewed original text: save without save participants (format on save would change it again).
     private readonly saveExact = async (doc: vscode.TextDocument) => {
       await vscode.window.showTextDocument(doc, { preview: false });
       await vscode.commands.executeCommand('workbench.action.files.saveWithoutFormatting');
@@ -99,7 +99,9 @@ export class EditReview implements vscode.Disposable {
       this.receipts.set(undoId, receipt);
       const details = () => ({ ...base, appliedHunkIds: [...a.ids], undo: { undoId, path: r.path, expectedPostSha256: receipt.after } });
       let result: ApplyTextResult;
-      if (dirty || hash(doc.getText()) !== digest || !this.isActive(r)) {
+      // Once VS Code has applied the reviewed edit, finish it (save) even if Stop arrived meanwhile: the harness
+      // waits (bounded) for this result, so the edit is reported as saved, never left half-done in the buffer.
+      if (dirty || hash(doc.getText()) !== digest) {
         result = { ...details(), status: 'buffer_applied', save: 'deferred', reason: 'Inspect the live buffer before saving' };
       } else {
         let saved = false;

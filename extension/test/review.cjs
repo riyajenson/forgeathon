@@ -158,6 +158,27 @@ exports.run=async()=>{
     await edits.undo(r3.undo.undoId);
     await assert.rejects(fs.access(path.join(dir,'fmt3.py')));
   } finally { formatter.dispose(); }
+  // Stop after the WorkspaceEdit was submitted: the edit lands and is saved, reported as 'saved' (not deferred).
+  {
+    const s1=path.join(dir,'stop1.py'), s1Local=path.basename(dir)+'/stop1.py';
+    await fs.writeFile(s1,original);
+    const ps=make({proposalId:'s1',callId:'s1',path:s1Local});
+    edits.begin(ps); edits.decide(ps,{a:'accept',b:'reject'});
+    let stoppedMidApply=false;
+    const stopper=vscode.workspace.onDidChangeTextDocument(e=>{
+      if (e.document.uri.fsPath===s1 && e.contentChanges.length && !stoppedMidApply) { stoppedMidApply=true; edits.end(); }
+    });
+    try {
+      const rs=await edits.applyText(request(ps,{path:s1Local}));
+      assert.ok(stoppedMidApply,'Stop (end of review) arrived while the edit was being applied');
+      assert.equal(rs.status,'saved','an edit already submitted to VS Code is finished and saved after Stop');
+      assert.equal(await fs.readFile(s1,'utf8'),replacement);
+      assert.equal((await vscode.workspace.openTextDocument(vscode.Uri.file(s1))).isDirty,false,'nothing left unsaved in the buffer');
+      await check('approval_missing',request(ps,{path:s1Local,proposalId:'s2',callId:'s2'}));
+      await edits.undo(rs.undo.undoId);
+      assert.equal(await fs.readFile(s1,'utf8'),original);
+    } finally { stopper.dispose(); }
+  }
   edits.dispose(); failing.dispose();
-  console.log('PASS simulated turn, all six apply outcomes (incl. failed_before_apply), partial approval, cancel gate, guarded undo, undo with a formatting save participant, replay after save failure, safe new-file creation');
+  console.log('PASS simulated turn, all six apply outcomes (incl. failed_before_apply), partial approval, cancel gate, guarded undo, undo with a formatting save participant, replay after save failure, safe new-file creation, Stop mid-apply saves the submitted edit');
 };

@@ -1,5 +1,13 @@
 # Project status
 
+**2026-11-20, judge round (branch `fix/judge-round`):** a blind review scored `f1cf5b6` 76/90 and held it off the
+shortlist for lack of a passing real Task B on the submitted build. Changes: claims scoped to the evidence (README,
+write-up, this file, checklist); Stop after an approved edit reached VS Code now saves that edit and reports it as
+saved (extension test; it was "applied, save deferred"); the panel lists every file a turn changed, with review and
+accepted-hunk counts; one clean-clone mock block in the README; scorecard kept on one PDF page; the evidence checker
+accepts docs-only commits after the rehearsed commit. Current counts: 134 unit, 19 integration. Real-model results
+for the submitted commit: `docs/writeup/rehearsal.json`; everything below dated 19 Nov is history.
+
 Updated: 2026-11-19 (late night), after merging `origin/main` (PRs #3 and #4 by another contributor:
 bubblewrap command protection, hold-until-idle for unsettled tools, retrieval coverage reporting, submission
 evidence gate). See "Merge of origin/main" and `docs/review/merge-origin-main.md`. All automated checks are
@@ -31,16 +39,16 @@ verification commands. "Real run" = `scripts/smoke-real-model.mjs` (same checks)
 |---|---|---|
 | Task A: inline edit → diff → accept → saved | ✅ | UI e2e + harness e2e (`FLASK_DEBUG=off` → False, `N` → False, `1` → True) |
 | Task A: per-hunk review | ✅ | Extension suites in a real VS Code window (partial approval, all six apply outcomes asserted) |
-| Task A: undo | ✅ | UI e2e (undo restores the file; `git status` clean); extension suite with a formatting save participant (exact bytes restored) |
+| Task A: undo | ✅ | UI e2e (undo restores the file; `git status` clean); extension suite with a formatting save participant (the reviewed original text restored, verified by hash) |
 | Task A: keybinding, input box, notifications | 🟡 | Contributed; only checkable by hand → `docs/MANUAL-TEST.md` |
 | Task B: panel streaming + tool calls (incl. deferred `find_symbol` via `call_tool`) | ✅ | UI e2e + harness e2e |
 | Task B: context block (used/budget, reasons, skipped) | ✅ | UI e2e; `src/flask/cli.py` ranks #1 (Flask ranking regression test) |
-| Task B: ≥3 files, per-file review, verification | ✅ | Exactly `cli.py`, `test_cli.py`, `docs/cli.rst`; `pytest tests/test_cli.py -q` 57 passed; `flask --help` lists `config`; masked JSON |
+| Task B: ≥3 files, per-file review, verification | ✅ scripted model (it supplies the paths and edits: no evidence of discovery) | Exactly `cli.py`, `test_cli.py`, `docs/cli.rst`; `pytest tests/test_cli.py -q` 57 passed; `flask --help` lists `config`; masked JSON |
 | Task C: invalid primary → fallback, workspace unchanged | ✅ | UI e2e (panel banner, `git status` clean) + harness e2e; fallback also shown as a VS Code notification |
-| Cancel: Stop ends the turn, review closes, no partial edits | ✅ | UI e2e + harness integration (cancel while paused / streaming / racing an apply) + unit races (Stop before a command spawns; silent TrueForge ends the turn once, bounded) |
+| Cancel: Stop ends the turn, review closes, nothing applied after Stop | ✅ | UI e2e + harness integration (cancel while paused / streaming / racing an apply) + unit races (Stop before a command spawns; silent TrueForge ends the turn once, bounded) + extension suite (Stop after the edit reached VS Code: saved, reported as saved). Edits saved earlier in the turn stay |
 | TrueForge session link | ✅ | UI e2e (link present); opening it is manual |
 | Demo without keys | ✅ | `scripts/dev-mock.sh` |
-| Real model (Tasks A, B, C) | ✅ | Real runs 2026-11-19: A 6/6 (twice), C 3/3, B 6/6 (three times) (see "Real-model run", "Task B tuning round") |
+| Real model (Tasks A, B, C) | ✅ earlier builds · see rehearsal.json | Real runs 2026-11-19 on earlier builds: A 6/6 (twice), C 3/3, B 6/6 (three times) (see "Real-model run", "Task B tuning round"); B failed in the 19 Nov rehearsal (429). The submitted commit's result: `docs/writeup/rehearsal.json` |
 | Optional auto-approval (`forge.autoApproveSafeCommands`, default off), narrowed to bare `pytest`, `python -m pytest`, `git status`, `git diff` | ✅ | Harness unit tests (these auto-approved and run; `python -c`, `flask`, path/env-prefixed pytest, pipes, `cd`, edits always ask; off unless `true`); extension suite; `e2e-mock.sh --auto-approve-safe-commands` 20/20 (Task G: `git status`/`git diff` auto-approved, `python -c` asked) |
 | Command budget per turn (`forge.commandBudget.agent` 3, `.inline` 1), enforced by the harness | ✅ | Unit tests (4th and 5th command refused without a prompt with the exact message; denied, unrestricted and auto-approved commands count; 0 refuses all, edits unaffected; defaults); extension suite ("command budget reached" in the panel, settings reach the harness); `e2e-mock.sh` Task G (3 shown, 2 refused, refusal reached the model). Not yet measured with a real model |
 | Guardrails with the real models (video settings) | ✅ | Real run 4 (2026-11-19): Task B 6/6, 3 commands shown (1 auto-approved, 2 asked), 4 refused by the budget, 6 reviews; A 6/6, C 3/3 (see "Real-model validation of the guardrails") |
@@ -256,7 +264,7 @@ All automated checks use the scripted demo model: they prove the plumbing, not r
   demo tasks — documented honestly.
 - **run_command:** git status before/after, changed files reported, counts as a write; workspace `.venv` first on PATH.
 
-## Final rehearsal (2026-11-19, `main` at `e5afea6`)
+## Rehearsal of 19 Nov (`main` at `e5afea6`; historical, superseded by `docs/writeup/rehearsal.json`)
 
 Real models, video settings, fresh TrueForge database, requests paced at ≥ 1.6 s per provider through
 `scripts/model-meter.mjs --min-interval-ms 1600`; run A, then C, then B (`docs/writeup/rehearsal.json`).

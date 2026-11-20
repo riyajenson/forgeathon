@@ -84,7 +84,9 @@ exports.run = async () => {
     assert.ok(st.tools.some((t) => t.label === 'propose_edit') && st.tools.some((t) => t.label === 'run_command'), 'tool activity listed');
     assert.ok(st.text.includes('flask config'), 'streamed summary text');
     assert.ok(st.edits.length === 3, 'three reviewed edits listed');
-    console.log('PASS Task B: panel streaming, context block, 3 files reviewed and saved, command approval');
+    assert.deepEqual(st.summary.map((l) => l.split(' | ')[0]).sort(), ['docs/cli.rst', 'src/flask/cli.py', 'tests/test_cli.py'], `turn-end summary lists the three changed files together (got ${JSON.stringify(st.summary)})`);
+    assert.ok(st.summary.every((l) => /\| \d+ reviews?, (\d+)\/\d+ hunks accepted \| saved$/.test(l) && !/\| 0\//.test(l)), 'each with review and accepted-hunk counts, saved');
+    console.log('PASS Task B: panel streaming, context block, 3 files reviewed and saved, listed together at turn end, command approval');
     await git(root, 'checkout', '--', '.');
 
     // ---------------- Stop (1): a review is certainly pending, then Stop → cancelled, nothing applied, no prompt left

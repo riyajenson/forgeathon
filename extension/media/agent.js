@@ -36,6 +36,9 @@
       el('skippedTitle').hidden = !s.context.skipped.length;
       list('skipped',s.context.skipped.map(i => i.path + ' | ' + i.reason + ' | ' + i.estimatedTokens + ' tokens'));
     }
+    el('turnFiles').hidden = !s.summary.length;
+    el('turnFilesTitle').textContent = 'Files changed in this turn: ' + s.summary.filter(line => !line.endsWith('| not changed')).length;
+    list('summary',s.summary);
     el('changes').hidden = !s.edits.length;
     list('edits',s.edits);
   });

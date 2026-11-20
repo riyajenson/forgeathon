@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSubmission } from './check-submission.mjs';
+import { checkSubmission, commitError } from './check-submission.mjs';
 
 const writeup = ['Team', 'Starting point', 'Architecture on TrueForge', 'How context is selected', 'Model setup', 'Scorecard', 'Tools used', 'Known limitations and what you would do with another month'].map((h, i) => `## ${i + 1}. ${h}\nCompleted evidence`).join('\n\n');
 const fixture = () => ({
@@ -29,3 +29,10 @@ test('model costs and pinned revision must be concrete', () => {
   assert.ok(checkSubmission(writeup, evidence).length >= 3);
 });
 test('required headings cannot be missing or reordered', () => assert.ok(checkSubmission(writeup.replace('## 1. Team', '## 1. Wrong heading'), fixture()).some(e => /headings/.test(e))));
+test('evidence commit: HEAD, or an ancestor followed only by docs commits', () => {
+  const rec = 'b'.repeat(40), head = 'c'.repeat(40);
+  assert.equal(commitError(rec, rec.toUpperCase(), false, []), undefined);
+  assert.equal(commitError(rec, head, true, ['docs/writeup/rehearsal.json', 'README.md']), undefined);
+  assert.match(commitError(rec, head, true, ['docs/STATUS.md', 'extension/src/review.ts']), /outside docs: extension\/src\/review\.ts/);
+  assert.match(commitError(rec, head, false, []), /rehearse A\/B\/C on the current commit c{40}\.$/);
+});

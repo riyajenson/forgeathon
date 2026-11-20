@@ -14,7 +14,7 @@ import { proposeEditTool } from '../mcp/tools';
 import { runCommandTool } from '../mcp/command';
 import { sha256Hex } from '../review';
 import type { TrueForgeClient, TrueForgeSdk } from '../trueforge/sdk';
-import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, TurnRun, type TurnDeps } from './turn';
+import { cdPrefix, COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, RERUN_AFTER_FIX, TurnRun, type TurnDeps } from './turn';
 import { buildTurnInput } from './prompt';
 
 /** An async event stream the test feeds by hand. Aborting the request signal ends it with an error. */
@@ -74,12 +74,15 @@ class FakeTrueForge {
   cancels = 0;
   /** Every user.tool_approval sent back to TrueForge, in order. */
   readonly approvals: Array<{ toolCallId: string; approval: { status: string; reason?: string } }> = [];
+  /** The request body of every createTurnStream call (the turn's input). */
+  readonly turnRequests: unknown[] = [];
   private active: Channel | undefined;
   constructor(private readonly script: Script) {}
 
   readonly client = {
     sessions: {
-      createTurnStream: async (sessionId: string, _req: unknown, opts?: { abortSignal?: AbortSignal }) => {
+      createTurnStream: async (sessionId: string, req: unknown, opts?: { abortSignal?: AbortSignal }) => {
+        this.turnRequests.push(req);
         const ch = new Channel(opts?.abortSignal);
         this.active = ch;
         this.script.onTurn(ch, ++this.turns, sessionId);
@@ -465,7 +468,7 @@ test('autoApproveSafeCommands never auto-approves unrestricted commands or edits
   for (const [tool, args] of [
     ['run_command', { command: 'python -m pytest tests | tail -5' }],
     ['run_command', { command: 'rm -rf build' }],
-    ['run_command', { command: 'cd /workspace && python -m pytest -q' }],
+    ['run_command', { command: 'python -m pytest -q && rm -rf build' }],
     ['propose_edit', editArgs()],
   ] as const) {
     const tf = new FakeTrueForge({
@@ -589,6 +592,66 @@ test('command budget: 0 refuses every command; edits are never limited', async (
   await run.start();
   assert.deepEqual(asked.map((e) => e.t), ['review_request'], 'the edit was still reviewed; the command never asked');
   assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'allow']);
+});
+
+test('a cd-prefixed command is refused without a prompt and without using the budget, with the corrected call', async () => {
+  const tf = stepwise([
+    ['run_command', { command: 'cd /workspace && python -m pytest tests/test_cli.py -q' }],
+    ['run_command', { command: 'cd examples/tutorial; flask --app flaskr --help' }],
+    ['run_command', { command: 'python -m pytest tests/test_cli.py -q' }],
+  ]);
+  const run = makeRun(tf, {}, { commandBudget: 1 });
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.deepEqual(asked.map((e) => e.t === 'command_request' && e.command), ['python -m pytest tests/test_cli.py -q'], 'only the bare command was shown');
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'deny', 'allow'], 'the budget of 1 was still free for the third call');
+  assert.match(tf.approvals[0]!.approval.reason ?? '', /COMMAND_SHAPE: .*command "python -m pytest tests\/test_cli.py -q"\. Nothing was run and the command budget was not used/);
+  assert.match(tf.approvals[1]!.approval.reason ?? '', /command "flask --app flaskr --help" and cwd "examples\/tutorial"/);
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 0);
+});
+
+test('cdPrefix: only a leading cd joined by && or ; is recognised', () => {
+  assert.deepEqual(cdPrefix('cd /w && pytest -q'), { dir: '/w', rest: 'pytest -q' });
+  assert.deepEqual(cdPrefix('  cd "a b";git status'), { dir: 'a b', rest: 'git status' });
+  for (const c of ['pytest -q', 'echo cd x && y', 'cd x', 'cd x || y', 'cdx && y']) assert.equal(cdPrefix(c), undefined, c);
+});
+
+test('command budget: after a fix, one rerun of a command that already ran is allowed past the budget, once', async () => {
+  const test = 'python -m pytest tests/test_cli.py -q';
+  const tf = stepwise([
+    ['run_command', { command: test }],
+    ['run_command', { command: test }],          // budget used up, no edit since: refused
+    ['propose_edit', editArgs()],
+    ['run_command', { command: 'git diff' }],     // never ran before: refused
+    ['run_command', { command: test }],          // the rerun after the fix: allowed
+    ['propose_edit', editArgs()],
+    ['run_command', { command: test }],          // the allowance is used: refused
+  ]);
+  const run = makeRun(tf, {}, { commandBudget: 1, autoApproveSafeCommands: true });
+  void userAnswers(run, []);
+  await run.start();
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'deny', 'allow', 'deny', 'allow', 'allow', 'deny']);
+  assert.match(tf.approvals[1]!.approval.reason ?? '', new RegExp(RERUN_AFTER_FIX));
+  assert.doesNotMatch(tf.approvals[6]!.approval.reason ?? '', new RegExp(RERUN_AFTER_FIX), 'no allowance is offered once it is used');
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 3);
+});
+
+test('command budget: inline turns get no rerun allowance and no budget note', async () => {
+  const tf = stepwise([['run_command', { command: 'pytest' }], ['propose_edit', editArgs()], ['run_command', { command: 'pytest' }]]);
+  const run = makeRun(tf, {}, { mode: 'inline', commandBudget: 1 });
+  void userAnswers(run, []);
+  await run.start();
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'allow', 'deny']);
+  assert.doesNotMatch(JSON.stringify(tf.turnRequests[0]), /Command budget for this turn/);
+});
+
+test('the agent turn message states the command budget the harness enforces', async () => {
+  const tf = stepwise([['run_command', { command: 'pytest' }]]);
+  const run = makeRun(tf, {}, { commandBudget: 4 });
+  void userAnswers(run, []);
+  await run.start();
+  assert.match(JSON.stringify(tf.turnRequests[0]), /Command budget for this turn: 4 run_command call\(s\)/);
 });
 
 test('command budget defaults: 5 for agent, 1 for inline; invalid values use the default', () => {

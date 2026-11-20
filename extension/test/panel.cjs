@@ -20,7 +20,7 @@ async function panelRefreshChecks() {
       messages.push(state);
       // Acknowledge inline to keep these host-side timing assertions deterministic.
       // agent-media.cjs verifies the actual webview script waits for requestAnimationFrame.
-      receive?.({ action: 'rendered', sequence: state.renderSequence });
+      receive?.({ action: 'rendered', sequence: state.renderSequence, frameMs: 0, domMs: 0, visibility: 1, eventToFrameMs: 0, textEventToFrameMs: 0 });
       return true;
     }
   };
@@ -67,6 +67,7 @@ async function panelRefreshChecks() {
     const metrics = agent.getRenderMetrics();
     assert.ok(metrics.control.count > 0, 'control frame acknowledgements contribute measurements');
     assert.ok(metrics.text.count > 0, 'text frame acknowledgements contribute measurements');
+    assert.ok(metrics.control.webviewFrame.count > 0 && metrics.text.webviewFrame.count > 0, 'webview frame timing is recorded');
     assert.ok(Number.isFinite(metrics.control.p95Ms) && Number.isFinite(metrics.text.p95Ms), 'latency summaries contain numeric p95 values');
 
     const beforeClose = messages.length;

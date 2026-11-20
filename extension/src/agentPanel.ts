@@ -90,36 +90,47 @@ export class AgentPanel implements vscode.Disposable {
   private panel?: vscode.WebviewPanel;
   private textTimer?: NodeJS.Timeout;
   private renderSequence = 0;
-  private readonly pendingTextEvents: number[] = [];
-  private readonly pendingRenders = new Map<number, { kind: 'control' | 'text'; controlEventAt?: number; textEvents: number[] }>();
+  private readonly pendingTextEvents: Array<{ eventAt: number; wallAt: number }> = [];
+  private readonly pendingRenders = new Map<number, {
+    kind: 'control' | 'text'; controlEventAt?: number; textEvents: Array<{ eventAt: number; wallAt: number }>;
+  }>();
   private readonly controlLatencies: number[] = [];
   private readonly textLatencies: number[] = [];
+  private readonly controlHostAcks: number[] = [];
+  private readonly textHostAcks: number[] = [];
+  private readonly controlWebviewFrames: number[] = [];
+  private readonly textWebviewFrames: number[] = [];
+  private readonly controlWebviewDom: number[] = [];
+  private readonly textWebviewDom: number[] = [];
   constructor(private readonly actions: Actions) {}
   start() {
     const eventAt = performance.now();
-    this.state = new AgentViewState(); this.state.busy = true; this.state.status = 'Starting'; this.refreshControl(eventAt);
+    const wallAt = Date.now();
+    this.state = new AgentViewState(); this.state.busy = true; this.state.status = 'Starting'; this.refreshControl(eventAt, wallAt);
   }
   finish() {
     const eventAt = performance.now();
-    this.state.busy = this.state.reviewing = false; this.refreshControl(eventAt);
+    const wallAt = Date.now();
+    this.state.busy = this.state.reviewing = false; this.refreshControl(eventAt, wallAt);
   }
   event(e: HarnessEvent) {
     const eventAt = performance.now();
+    const wallAt = Date.now();
     this.state.update(e);
     if (e.t === 'text') {
       // A closed panel has no text frame to measure or flush. The state still
       // accumulates text, so the next panel snapshot will include it.
       if (this.panel) {
-        this.pendingTextEvents.push(eventAt);
+        this.pendingTextEvents.push({ eventAt, wallAt });
         if (this.pendingTextEvents.length > 512) this.pendingTextEvents.shift();
         this.refreshText();
       }
-    } else this.refreshControl(eventAt);
+    } else this.refreshControl(eventAt, wallAt);
   }
-  notice(message: string) { const eventAt = performance.now(); this.state.status = message; this.refreshControl(eventAt); }
+  notice(message: string) { const eventAt = performance.now(), wallAt = Date.now(); this.state.status = message; this.refreshControl(eventAt, wallAt); }
   /** The command decision was given elsewhere (quick pick): retire the panel's Allow/Deny buttons. */
-  commandAnswered() { if (this.state.command) { const eventAt = performance.now(); this.state.command = undefined; this.refreshControl(eventAt); } }
-  error(message: string) { const eventAt = performance.now(); this.state.banner = message; this.refreshControl(eventAt); }
+  commandAnswered() { if (this.state.command) { const eventAt = performance.now(), wallAt = Date.now(); this.state.command = undefined; this.refreshControl(eventAt, wallAt); } }
+  error(message: string) { const eventAt = performance.now(), wallAt = Date.now(); this.state.banner = message; this.refreshControl(eventAt, wallAt); }
   open() {
     if (this.panel) { this.panel.reveal(vscode.ViewColumn.Beside); return; }
     const media = vscode.Uri.joinPath(vscode.Uri.file(__dirname), '..', 'media');
@@ -132,7 +143,7 @@ export class AgentPanel implements vscode.Disposable {
       try {
         switch (m.action) {
           case 'ready': this.refreshControl(); break;
-          case 'rendered': this.acknowledgeRender(m.sequence); break;
+          case 'rendered': this.acknowledgeRender(m.sequence, m.frameMs, m.domMs, m.visibility, m.eventToFrameMs, m.textEventToFrameMs); break;
           case 'send':
             if (!this.state.busy && typeof m.text === 'string' && m.text.trim() && m.text.length <= 32000)
               await this.actions.send(m.text);
@@ -140,7 +151,10 @@ export class AgentPanel implements vscode.Disposable {
           case 'stop': await this.actions.stop(); break;
           case 'review': this.actions.review(); break;
           case 'allow': case 'deny':
-            if (this.state.command) { const eventAt = performance.now(); this.state.command = undefined; this.actions.command(m.action === 'allow'); this.refreshControl(eventAt); }
+            if (this.state.command) {
+              const eventAt = performance.now(), wallAt = Date.now();
+              this.state.command = undefined; this.actions.command(m.action === 'allow'); this.refreshControl(eventAt, wallAt);
+            }
             break;
           case 'trace': {
             const uri = vscode.Uri.parse(this.state.trace, true);
@@ -188,12 +202,12 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
     }, 16);
   }
 
-  private refreshControl(eventAt?: number) {
+  private refreshControl(eventAt?: number, wallAt?: number) {
     this.clearTextTimer();
-    this.postRender('control', eventAt);
+    this.postRender('control', eventAt, wallAt);
   }
 
-  private postRender(kind: 'control' | 'text', controlEventAt?: number) {
+  private postRender(kind: 'control' | 'text', controlEventAt?: number, controlEventWallAt?: number) {
     const panel = this.panel;
     if (!panel) return;
     const sequence = ++this.renderSequence;
@@ -203,12 +217,18 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
       const oldest = this.pendingRenders.keys().next().value;
       if (oldest !== undefined) this.pendingRenders.delete(oldest);
     }
+    const textEvents = this.pendingTextEvents.splice(0);
     this.pendingRenders.set(sequence, {
       kind,
       ...(controlEventAt === undefined ? {} : { controlEventAt }),
-      textEvents: this.pendingTextEvents.splice(0)
+      textEvents
     });
-    const state = { ...this.state, renderSequence: sequence };
+    const state = {
+      ...this.state,
+      renderSequence: sequence,
+      ...(controlEventWallAt === undefined ? {} : { renderEventWallAt: controlEventWallAt }),
+      ...(textEvents.length ? { renderTextEventWallAt: textEvents[0]!.wallAt } : {})
+    };
     try {
       void Promise.resolve(panel.webview.postMessage(state)).then(sent => {
         if (!sent) this.pendingRenders.delete(sequence);
@@ -216,15 +236,26 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
     } catch { this.pendingRenders.delete(sequence); }
   }
 
-  private acknowledgeRender(sequence: unknown) {
+  private acknowledgeRender(sequence: unknown, frameMs?: unknown, domMs?: unknown, visibility?: unknown, eventToFrameMs?: unknown, textEventToFrameMs?: unknown) {
     if (typeof sequence !== 'number' || !Number.isInteger(sequence)) return;
     const render = this.pendingRenders.get(sequence);
     if (!render) return;
     this.pendingRenders.delete(sequence);
     const frameAt = performance.now();
-    if (render.kind === 'control' && render.controlEventAt !== undefined)
-      this.recordLatency(this.controlLatencies, frameAt - render.controlEventAt);
-    for (const eventAt of render.textEvents) this.recordLatency(this.textLatencies, frameAt - eventAt);
+    if (render.controlEventAt !== undefined) this.recordLatency(this.controlHostAcks, frameAt - render.controlEventAt);
+    for (const event of render.textEvents) this.recordLatency(this.textHostAcks, frameAt - event.eventAt);
+    if (typeof eventToFrameMs === 'number' && Number.isFinite(eventToFrameMs) && eventToFrameMs >= 0)
+      this.recordLatency(this.controlLatencies, eventToFrameMs);
+    if (render.textEvents.length && typeof textEventToFrameMs === 'number' && Number.isFinite(textEventToFrameMs) && textEventToFrameMs >= 0)
+      this.recordLatency(this.textLatencies, textEventToFrameMs);
+    if (typeof frameMs === 'number' && Number.isFinite(frameMs) && frameMs >= 0) {
+      if (render.kind === 'control' && render.controlEventAt !== undefined) this.recordLatency(this.controlWebviewFrames, frameMs);
+      else if (render.textEvents.length) this.recordLatency(this.textWebviewFrames, frameMs);
+    }
+    if (typeof domMs === 'number' && Number.isFinite(domMs) && domMs >= 0) {
+      if (render.kind === 'control' && render.controlEventAt !== undefined) this.recordLatency(this.controlWebviewDom, domMs);
+      else if (render.textEvents.length) this.recordLatency(this.textWebviewDom, domMs);
+    }
   }
 
   private recordLatency(samples: number[], value: number) {
@@ -242,7 +273,20 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
 
   /** Numeric event-to-animation-frame latency only; message text is never retained in these metrics. */
   getRenderMetrics() {
-    return { control: this.summarize(this.controlLatencies), text: this.summarize(this.textLatencies) };
+    return {
+      control: {
+        ...this.summarize(this.controlLatencies),
+        webviewFrame: this.summarize(this.controlWebviewFrames),
+        webviewDom: this.summarize(this.controlWebviewDom),
+        hostAck: this.summarize(this.controlHostAcks)
+      },
+      text: {
+        ...this.summarize(this.textLatencies),
+        webviewFrame: this.summarize(this.textWebviewFrames),
+        webviewDom: this.summarize(this.textWebviewDom),
+        hostAck: this.summarize(this.textHostAcks)
+      }
+    };
   }
 
   dispose() {

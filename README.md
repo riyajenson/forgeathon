@@ -1,5 +1,9 @@
 # Forge: a VS Code coding agent on TrueForge
 
+Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
+Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all `<COLLEGE>` · Demo video: `<VIDEO_URL>` ·
+Write-up: [`docs/writeup/WRITEUP.pdf`](docs/writeup/WRITEUP.pdf)
+
 Forge is a VS Code-native coding agent whose entire agent loop (sessions, turns, model calls and tool
 approvals) runs on **[TrueForge](https://github.com/truefoundry/trueforge) 0.185.1** in local mode. The agent
 works through MCP editor tools. You review every change hunk by hunk. The context is assembled within a token

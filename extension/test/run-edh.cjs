@@ -11,6 +11,7 @@ const path = require('node:path');
   // FORGE_EDH_WORKSPACE: open this folder instead of an empty temporary one (it is not deleted).
   const given = process.env.FORGE_EDH_WORKSPACE;
   const workspace = given || fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-'));
+  const profile = process.env.FORGE_TEST_CDP_PROFILE || fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-profile-'));
   try {
     await runTests({
       version: process.env.FORGE_VSCODE_VERSION || '1.146.0',
@@ -23,7 +24,7 @@ const path = require('node:path');
       // FORGE_TEST_CDP_PROFILE (live.cjs): that profile directory, with a DevTools port so the test can drive native UI.
       launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', '--disable-gpu',
         ...(process.env.FORGE_TEST_CDP_PROFILE ? ['--remote-debugging-port=0'] : []),
-        '--user-data-dir', process.env.FORGE_TEST_CDP_PROFILE || fs.mkdtempSync(path.join(os.tmpdir(), 'forge-edh-profile-'))],
+        '--user-data-dir', profile],
     });
     console.log(`EDH TESTS PASSED: ${path.basename(test)}`);
   } catch (error) {
@@ -31,5 +32,7 @@ const path = require('node:path');
     process.exitCode = 1;
   } finally {
     if (!given) fs.rmSync(workspace, { recursive: true, force: true });
+    // The temporary VS Code profile (~20 MB) is removed too, so repeated runs do not fill a small /tmp.
+    if (!process.env.FORGE_TEST_CDP_PROFILE) fs.rmSync(profile, { recursive: true, force: true });
   }
 })();

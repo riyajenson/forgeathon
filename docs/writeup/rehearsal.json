@@ -1,6 +1,6 @@
 {
-  "$comment": "Real-model rehearsal of the submitted commit (repositoryCommit) on 2026-11-20 with the video settings (auto-approve safe commands, command budget 3, deny Unrestricted), profile nvidia-free, fresh TrueForge 0.185.1 database, requests paced at >= 1.6 s through scripts/model-meter.mjs, run by scripts/smoke-real-model.mjs as A, C (one attempt each), then B (first attempt; no second attempt was needed). Pre-flight first: NVIDIA ready (HTTP 200). Session URLs point at the local TrueForge used for the run. videoUrl and videoTimestamp are filled in after recording. Earlier rehearsals (19 Nov, other commits) are history in docs/STATUS.md.",
-  "repositoryCommit": "f67c719e6d929d3f39a07af35560619fcc4060bc",
+  "$comment": "Real-model rehearsal of the hybrid branch merged into main (merge 56d330e; tree of b6f49d7) on 2026-11-20 with the video settings (auto-approve safe commands, deny Unrestricted; agent command budget 5, the new default), profile nvidia-free, run by scripts/smoke-real-model.mjs against the local TrueForge 0.185.1 on :8790. Task B: b6f49d7 (third attempt, see tasks[B].attempts). Tasks A and C: run at 3414ff6, whose inline prompt, inline command budget (1) and fallback path are identical to b6f49d7; each task records its testedCommit. Model requests were not metered in these runs. videoUrl and videoTimestamp are filled in after recording. The earlier rehearsal of f67c719 is history in docs/STATUS.md and git.",
+  "repositoryCommit": "b6f49d78bde1033b4893a2e8f32bf5b9d67fc176",
   "flaskCommit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
   "repositoryUrl": "https://github.com/riyajenson/forgeathon",
   "videoUrl": "<public video URL>",
@@ -33,14 +33,14 @@
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w92rxf4jqm82sfsswz3dw1",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7wywfgq759fcfsjtf87kvcq",
       "verification": "diff accepted and saved to src/flask/helpers.py; FLASK_DEBUG=off and N return False, 1 returns True; docstring lists 0, false, no, off, n",
-      "recordedAt": "2026-11-20T10:47:19.917Z",
+      "recordedAt": "2026-11-20T17:08:22.349Z",
       "videoTimestamp": "[mm:ss]",
-      "inputTokens": 11071,
-      "outputTokens": 663,
-      "firstDiffSeconds": 10.1,
-      "turnSeconds": 13.9,
+      "inputTokens": 11330,
+      "outputTokens": 641,
+      "firstDiffSeconds": 12.7,
+      "turnSeconds": 14.8,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -54,30 +54,57 @@
         "refusedByBudget": 0
       },
       "modelRequests": {
-        "total": 3,
-        "status429": 0,
-        "otherErrors": 0,
-        "byModel": {
-          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 3
-        }
+        "note": "not metered in this run (no scripts/model-meter.mjs log)"
       },
-      "checks": "6/6 passed"
+      "checks": [
+        {
+          "name": "A: turn done",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "A: exactly one applied edit, saved to helpers.py",
+          "ok": true,
+          "detail": "1 review(s); src/flask/helpers.py: saved"
+        },
+        {
+          "name": "A: FLASK_DEBUG=off → False",
+          "ok": true,
+          "detail": "False"
+        },
+        {
+          "name": "A: FLASK_DEBUG=N → False (case-insensitive)",
+          "ok": true,
+          "detail": "False"
+        },
+        {
+          "name": "A: FLASK_DEBUG=1 → True (unchanged)",
+          "ok": true,
+          "detail": "True"
+        },
+        {
+          "name": "A: docstring lists every false value (0, false, no, off, n)",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "testedCommit": "3414ff655fe59c3a11cf43f06287ba86fee50126"
     },
     {
       "task": "B",
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w94129s064h8qres8fnd87",
-      "verification": "no files named; the agent edited src/flask/cli.py, tests/test_cli.py and docs/cli.rst (5 reviews, all saved); pytest tests/test_cli.py -q: 57 passed, 3 skipped; flask --help lists config; flask config prints JSON with SECRET/PASSWORD/TOKEN/KEY values masked",
-      "recordedAt": "2026-11-20T10:48:01.019Z",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7wzvhacaf1cmdya1kn6ppzx",
+      "verification": "no files named; the agent edited src/flask/cli.py, tests/test_cli.py and docs/cli.rst (6 reviews, all saved); pytest tests/test_cli.py -q: 57 passed, 3 skipped; flask --help lists config; flask config prints JSON with SECRET/PASSWORD/TOKEN/KEY values masked",
+      "recordedAt": "2026-11-20T17:25:20.008Z",
       "videoTimestamp": "[mm:ss]",
-      "inputTokens": 1097214,
-      "outputTokens": 6090,
-      "firstDiffSeconds": 42,
-      "turnSeconds": 97.8,
+      "inputTokens": 2105006,
+      "outputTokens": 16626,
+      "firstDiffSeconds": 67.3,
+      "turnSeconds": 310.5,
       "reviews": {
-        "src/flask/cli.py": 2,
+        "src/flask/cli.py": 3,
         "tests/test_cli.py": 2,
         "docs/cli.rst": 1
       },
@@ -85,39 +112,67 @@
         "src/flask/cli.py: saved",
         "src/flask/cli.py: saved",
         "tests/test_cli.py: saved",
-        "docs/cli.rst: saved",
-        "tests/test_cli.py: saved"
+        "src/flask/cli.py: saved",
+        "tests/test_cli.py: saved",
+        "docs/cli.rst: saved"
       ],
       "commands": {
-        "autoApproved": 2,
+        "autoApproved": 4,
         "prompted": 1,
         "deniedUnrestricted": 1,
-        "refusedByBudget": 3
+        "refusedByBudget": 1
       },
       "modelRequests": {
-        "total": 37,
-        "status429": 0,
-        "otherErrors": 0,
-        "byModel": {
-          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 37
-        }
+        "note": "not metered in this run (no scripts/model-meter.mjs log)"
       },
-      "checks": "6/6 passed",
-      "attempts": 1
+      "checks": [
+        {
+          "name": "B: turn done",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "B: ≥3 files changed incl. cli.py, test_cli.py, cli.rst",
+          "ok": true,
+          "detail": "docs/cli.rst, src/flask/cli.py, tests/test_cli.py"
+        },
+        {
+          "name": "B: context report includes src/flask/cli.py",
+          "ok": true,
+          "detail": "7456/8000 tokens, 28 items, 7 skipped"
+        },
+        {
+          "name": "B: pytest tests/test_cli.py -q passes",
+          "ok": true,
+          "detail": "57 passed, 3 skipped in 0.36s"
+        },
+        {
+          "name": "B: flask --help lists config",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "B: flask config prints JSON with secrets masked",
+          "ok": true,
+          "detail": "{\n  \"API_TOKEN\": \"***\",\n  \"APPLICATION_ROOT\": \"/\",\n  \"DB_PASSWORD\": \"***\",\n  \"DEBUG\": false,\n  \"EXPLAIN_TEMPLATE_LOADING\": false,\n  \"MAX_CONTENT_LENGTH\": null,\n  \"MAX_COOKIE_SIZE\": 4093,\n  \"MAX_FORM_M"
+        }
+      ],
+      "attempts": "3 real runs on the hybrid branch, 2026-11-20 (IST evening): (1) 3414ff6 with the branch coder prompt: failed (pytest 3 failed, flask config crashed, 9 commands, 3 Unrestricted denied, 6 refused by budget 3); (2) main coder prompt, budget 3: 5/6 (1 test failed, budget exhausted before the rerun); (3) b6f49d7, main coder prompt + pytest-only verify line, agent budget 5: 6/6 (recorded here).",
+      "testedCommit": "b6f49d78bde1033b4893a2e8f32bf5b9d67fc176"
     },
     {
       "task": "C",
       "mode": "real",
       "model": "openrouter/nemotron-3-ultra-free",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w937mfsxq3q3p7w526a4xn",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7wz2wvxrrzbak2jgtpva03h",
       "verification": "invalid NVIDIA key: 401, automatic fallback to openrouter/nemotron-3-ultra-free in a new session, proposal rejected, git status clean",
-      "recordedAt": "2026-11-20T10:47:35.085Z",
+      "recordedAt": "2026-11-20T17:11:52.556Z",
       "videoTimestamp": "[mm:ss]",
-      "inputTokens": 10995,
-      "outputTokens": 589,
-      "firstDiffSeconds": 9.6,
-      "turnSeconds": 11,
+      "inputTokens": 11341,
+      "outputTokens": 667,
+      "firstDiffSeconds": 10.7,
+      "turnSeconds": 12.1,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -129,16 +184,27 @@
         "refusedByBudget": 0
       },
       "modelRequests": {
-        "total": 4,
-        "status429": 0,
-        "otherErrors": 1,
-        "byModel": {
-          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 1,
-          "openrouter nvidia/nemotron-3-ultra-550b-a55b:free": 3
-        }
+        "note": "not metered in this run (no scripts/model-meter.mjs log)"
       },
-      "checks": "3/3 passed",
-      "fallback": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (401): Unauthorized"
+      "checks": [
+        {
+          "name": "C: primary failed and the fallback model took over",
+          "ok": true,
+          "detail": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (401): Unauthorized"
+        },
+        {
+          "name": "C: turn finished without an error",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "C: git status clean (no changed files)",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "fallback": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (401): Unauthorized",
+      "testedCommit": "3414ff655fe59c3a11cf43f06287ba86fee50126"
     }
   ]
 }

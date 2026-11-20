@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const headings = ['Team', 'Starting point', 'Architecture on TrueForge', 'How context is selected', 'Model setup', 'Scorecard', 'Tools used', 'Known limitations and what you would do with another month'];
 const filled = value => typeof value === 'string' && value.trim().length > 0 && !/<[^>]+>|\[mm:ss\]|\bTODO\b|\bTBD\b/i.test(value);
@@ -55,6 +56,10 @@ export function main(args = process.argv.slice(2)) {
   try { evidence = JSON.parse(readFileSync(evidencePath, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error(`Cannot parse rehearsal evidence: ${evidencePath}`); }
   const errors = checkSubmission(writeup, evidence);
+  if (evidence?.repositoryCommit) {
+    const currentCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+    if (evidence.repositoryCommit.toLowerCase() !== currentCommit.toLowerCase()) errors.push(`Real-model evidence was recorded for ${evidence.repositoryCommit}; rehearse A/B/C on the current commit ${currentCommit}.`);
+  }
   if (errors.length) {
     console.error('Submission evidence is incomplete:\n' + errors.map(e => `- ${e}`).join('\n'));
     return 1;

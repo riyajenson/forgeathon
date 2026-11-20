@@ -509,6 +509,25 @@ test('hybrid context keeps explicit references first and stays within its token 
   assert.ok(result.report.estimatedTokens <= result.report.budgetTokens);
 });
 
+test('semantic search on without its runtime: lexical ranking, and the context report says why', async () => {
+  const engine = require('./engine') as HybridEngineApi;
+  const { SEMANTIC_RUNTIME_MISSING } = require('./semantic-runtime') as typeof import('./semantic-runtime');
+  const index = await buildIndex(port);
+  const ranker = { unavailable: undefined as Error | undefined, rank: async () => { ranker.unavailable = new Error(`${SEMANTIC_RUNTIME_MISSING} (looked in /x)`); return new Map<string, number>(); } };
+  const request = { instruction: 'mystery account login transaction permission orchestrator routes command', budgetTokens: 2000, mode: 'agent' as const, semanticSearch: true };
+  const result = await engine.assembleContext(port, request, index, { semanticRanker: ranker }) as Awaited<ReturnType<HybridEngineApi['assembleContext']>> & { report: { skipped: Array<{ path: string; reason: string }> } };
+  assert.deepEqual(result.report.skipped.filter((s) => s.path === '(semantic search)').map((s) => s.reason), [SEMANTIC_RUNTIME_MISSING]);
+  const lexical = await engine.assembleContext(port, { ...request, semanticSearch: false }, index) as typeof result;
+  assert.deepEqual(result.report.selections.map((s) => s.path), lexical.report.selections.map((s) => s.path), 'same selections as lexical-only');
+  assert.equal(lexical.report.skipped.some((s) => s.path === '(semantic search)'), false, 'off by default: nothing reported');
+});
+
+test('the semantic runtime is found in src/harness/semantic-runtime, or where FORGE_SEMANTIC_RUNTIME points', () => {
+  const { semanticRuntimeDir } = require('./semantic-runtime') as typeof import('./semantic-runtime');
+  assert.match(semanticRuntimeDir({}), /src[\\/]harness[\\/]semantic-runtime$/);
+  assert.equal(semanticRuntimeDir({ FORGE_SEMANTIC_RUNTIME: '/opt/forge-sem' }), path.resolve('/opt/forge-sem'));
+});
+
 test('hybrid context packs overlapping chunks at most once', async () => {
   let engine: HybridEngineApi | undefined;
   try { engine = require('./engine') as HybridEngineApi; } catch { engine = undefined; }

@@ -8,6 +8,7 @@ import { isBinaryText, isSecretPath, modelPathRefusal } from './files';
 import { estimateTokens } from './text';
 import { buildIndex, type IndexedChunk, type IndexedFile, type WorkspaceIndex } from './workspace-index';
 import { LocalSemanticRanker, type SemanticProgressHandler } from './semantic';
+import { SEMANTIC_RUNTIME_MISSING } from './semantic-runtime';
 
 export interface ContextRequest {
   instruction: string;
@@ -215,6 +216,10 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
     if (chunks.length) {
       const ranker = options.semanticRanker ?? defaultSemanticRanker();
       semanticRanks = await ranker.rank(task, chunks, req.signal, options.onSemanticProgress);
+      const unavailable = (ranker as Partial<Pick<LocalSemanticRanker, 'unavailable'>>).unavailable;
+      if (!semanticRanks.size && unavailable && !req.signal?.aborted) {
+        skipped.push({ path: '(semantic search)', reason: unavailable.message.startsWith(SEMANTIC_RUNTIME_MISSING) ? SEMANTIC_RUNTIME_MISSING : `semantic search unavailable (${unavailable.message.slice(0, 160)}); ranking stayed lexical`, estimatedTokens: 0 });
+      }
     }
   }
   const { files: ranked } = rankFiles(index, task, semanticRanks);

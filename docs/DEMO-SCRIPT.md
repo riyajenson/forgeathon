@@ -43,7 +43,7 @@ bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protec
 8. Settings in the Extension Development Host for the recording:
    - `"forge.autoApproveSafeCommands": true`. This auto-approves only `pytest`, `python -m pytest`,
      `git status` and `git diff`.
-   - `forge.commandBudget.agent` at its default of `3`.
+   - `forge.commandBudget.agent` at its default of `5`.
    - Every diff is still reviewed. `python -c`, `flask` and ⚠ Unrestricted commands still ask.
 
 ## Task B: what to expect
@@ -90,7 +90,7 @@ without a warning (`python -c …`, `flask …`; 0–3). Deny any ⚠ Unrestrict
 | Each diff | **Accept All** |
 | Command prompt **without** a warning (`python -c …`, `flask …`) | **Allow once** |
 | Command prompt with **⚠ Unrestricted** (`cd …`, pipes, here-docs, `python -m flask …`) | **Deny**. The refusal goes back to the model; tested on the mock (`e2e-mock.sh --deny-unrestricted`) |
-| "auto-approved: …" and "command budget reached (3 per turn): …" lines | Nothing; they are shown only |
+| "auto-approved: …" and "command budget reached (5 per turn): …" lines | Nothing; they are shown only |
 
 Earlier runs (before the sandbox merge; STATUS.md): first diff 39–53 s, whole turn 133–259 s, 6–12 reviews.
 

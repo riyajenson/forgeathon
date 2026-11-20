@@ -12,7 +12,7 @@ export type TurnRequest = TurnRef & PromptContext & {
    * commands and edits are never auto-approved. */
   autoApproveSafeCommands?: boolean;
   /** 0.4.4: most run_command calls this turn may present (prompted or auto-approved); later ones are refused to
-   * the model without prompting and reported with command_budget_reached. Default 3 for agent, 1 for inline. */
+   * the model without prompting and reported with command_budget_reached. Default 5 for agent, 1 for inline. */
   commandBudget?: number;
 };
 export type SessionStatus = {

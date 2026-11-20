@@ -462,7 +462,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `forge.context.budgetTokens` | `8000` | Agent-mode context budget |
 | `forge.context.semanticSearch` | `false` | Opt in to local semantic reranking when keyword evidence is weak |
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
-| `forge.commandBudget.agent` | `3` | Most commands per agent turn |
+| `forge.commandBudget.agent` | `5` | Most commands per agent turn |
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
 | `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY` | (none) | Provider keys, read by the setup script; only those your config uses are needed (default: NVIDIA and OpenRouter) |
 | `OUTBOUND_URL_ALLOWED_HOSTS` | (none) | TrueForge: must include `127.0.0.1` so it can call the editor's MCP server |

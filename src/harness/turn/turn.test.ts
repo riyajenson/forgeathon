@@ -226,13 +226,14 @@ test('coder and inline prompts use the ranked evidence workflow', async () => {
   const repoRoot = path.resolve(__dirname, '../../../../../../');
   const coder = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-coder.json'), 'utf8')) as { manifest: { instructions: string } };
   const inline = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-inline.json'), 'utf8')) as { manifest: { instructions: string } };
-  assert.match(coder.manifest.instructions, /ranked context shortlist/i);
-  assert.match(coder.manifest.instructions, /one focused gather_context/i);
-  assert.match(coder.manifest.instructions, /short file plan/i);
-  assert.match(coder.manifest.instructions, /do not guess file paths/i);
+  // The coder prompt is main's (ecd4a06) verbatim: explore / edit / verify with the explicit command rules.
+  assert.match(coder.manifest.instructions, /Work in three phases/);
+  assert.match(coder.manifest.instructions, /context the editor ranked for this task/i);
   assert.match(coder.manifest.instructions, /exactly ONE propose_edit per file/i);
-  assert.match(coder.manifest.instructions, /smallest relevant test/i);
-  assert.match(coder.manifest.instructions, /explicit @file\/@symbol references remain pinned/i);
+  assert.match(coder.manifest.instructions, /You have 2 run_command calls/);
+  assert.match(coder.manifest.instructions, /no cd, no pipes or redirection/);
+  assert.match(coder.manifest.instructions, /read-only host filesystem/);
+  assert.match(coder.manifest.instructions, /never use shell commands to edit source files/);
   assert.match(inline.manifest.instructions, /ranked context/i);
   assert.match(inline.manifest.instructions, /selected file only/i);
 });
@@ -548,7 +549,7 @@ async function userDeniesCommands(run: TurnRun, asked: HarnessEvent[]): Promise<
 test('command budget: after 3 commands in an agent turn, run_command is refused without asking', async () => {
   const commands = ['python -m pytest tests/a.py', 'git diff', 'flask routes', 'python -m pytest', 'ls'];
   const tf = stepwise(commands.map((command) => ['run_command', { command }]));
-  const run = makeRun(tf);
+  const run = makeRun(tf, {}, { commandBudget: 3 });
   const asked: HarnessEvent[] = [];
   void userAnswers(run, asked);
   await run.start();
@@ -590,12 +591,12 @@ test('command budget: 0 refuses every command; edits are never limited', async (
   assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'allow']);
 });
 
-test('command budget defaults: 3 for agent, 1 for inline; invalid values use the default', () => {
-  assert.equal(commandBudgetOf({ mode: 'agent' }), 3);
+test('command budget defaults: 5 for agent, 1 for inline; invalid values use the default', () => {
+  assert.equal(commandBudgetOf({ mode: 'agent' }), 5);
   assert.equal(commandBudgetOf({ mode: 'inline' }), 1);
   assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: 0 }), 0);
   assert.equal(commandBudgetOf({ mode: 'inline', commandBudget: 5 }), 5);
-  for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 3);
+  for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 5);
 });
 
 test('autoApproveSafeCommands is narrowed: python -c, flask and path- or env-prefixed pytest still ask (not as unrestricted)', async () => {

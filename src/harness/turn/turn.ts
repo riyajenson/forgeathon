@@ -49,7 +49,7 @@ export type ReviewSubmitResult = { ok: true } | { ok: false; error: ProtocolErro
 const FALLBACK_SUFFIX = '-fallback';
 
 /** Default most run_command calls per turn (presented to the user or auto-approved), by mode. */
-export const DEFAULT_COMMAND_BUDGET = { agent: 3, inline: 1 } as const;
+export const DEFAULT_COMMAND_BUDGET = { agent: 5, inline: 1 } as const;
 
 export function commandBudgetOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>): number {
   const b = req.commandBudget;

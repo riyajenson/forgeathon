@@ -92,7 +92,7 @@
         },
         "forge.commandBudget.agent": {
           "type": "integer",
-          "default": 3,
+          "default": 5,
           "minimum": 0,
           "description": "Most commands the agent may run in one turn (asked or auto-approved). Further run_command calls are refused by the harness without asking, and the panel shows \"command budget reached\"."
         },

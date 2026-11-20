@@ -1,4 +1,4 @@
-# Demo video script (target 3:50, hard limit 4:00)
+# Demo video script (target ≤ 3:55, hard limit 4:00)
 
 Rules from the problem statement: Tasks **A, B, C in this order**; show every verification; briefly show the
 TrueForge session for Task B; model waiting time may be cut, but **never cut between giving an instruction
@@ -49,8 +49,8 @@ bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protec
 ## Task B: what to expect
 
 Models (profile `nvidia-free`): NVIDIA `nemotron-3-ultra-550b-a55b` (primary), the same model on OpenRouter's free
-tier (`nvidia/nemotron-3-ultra-550b-a55b:free`, fallback). Groq `qwen3.8-27b` is a configured spare; it was the
-fallback until the rehearsal below showed its free tier cannot take Task B.
+tier (`nvidia/nemotron-3-ultra-550b-a55b:free`, fallback). Groq `qwen3.8-27b` is a configured spare; it was used as the
+fallback in earlier rehearsals, before OpenRouter replaced it (its free tier cannot take Task B).
 
 **TrueForge's rate-limit cushion:** the start command's `MODEL_HTTP_MAX_RETRIES=4` makes TrueForge resend a 429'd
 model request up to 4 times (waits 1, 2, 4, 8 s when there is no `Retry-After`) before the turn sees an error.
@@ -94,31 +94,50 @@ without a warning (`python -c …`, `flask …`; 0–3). Deny any ⚠ Unrestrict
 
 Earlier runs (before the sandbox merge; STATUS.md): first diff 39–53 s, whole turn 133–259 s, 6–12 reviews.
 
+**Timing on the submitted build** (`f67c719`, 20 Nov). Harness rehearsal (`rehearsal.json`; times to the review
+request, no editor on screen): A 10.1 s, B 42.0 s (turn 97.8 s), C 9.6 s. An independent run in VS Code measured
+instruction → visible diff **28.1 s for A** and 12.6 s for C. Plan for the slower figures: the shot list below
+keeps A's uncut slot at 37 s and C's at 33 s.
+
 ## Shot list
 
-Total 3:50. **Never cut between an instruction and its diff** (A, B and C). Cuts are allowed only in model
-waiting *after* a diff has appeared; every such cut gets an on-screen caption **"model waiting time cut"**
-(added in the video editor, held ~2 s over the cut). Optional: a small "uncut" label during the B segment.
+Total **3:55**. **Never cut between an instruction and its diff** (A, B and C). Cuts are allowed only in model
+waiting *after* a diff has appeared; each cut gets the on-screen caption **"model waiting time cut"** (added in the
+video editor, held ~2 s over the cut). The "Cut" column says where. Optional: a small "uncut" label on the uncut
+waits. Required proof (never trimmed): each task's instruction → diff uncut, each verification readable, Task B's
+three files, the TrueForge session for B, Task C's banner and clean `git status`.
 
-| Time | Shot | Say / show |
-|---|---|---|
-| 0:00–0:04 | **Setup glimpse**: terminal 1 (TrueForge 0.185.1 running), `git -C ~/flask-demo log -1 --oneline` → `22d9247` | "VS Code extension; the agent loop runs on TrueForge in local mode." |
-| 0:04–0:24 | **Task A, uncut from instruction to diff** (11 s measured): `src/flask/helpers.py`, select `get_debug_flag`, `Ctrl+Alt+I`, paste instruction A, Enter → diff editor + "Review N hunk(s)" → **Choose Hunks...** (show the per-hunk picker, all ticked) → accept | Point at the per-hunk picker. |
-| 0:24–0:30 | **Task A verification**: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` → `False` | |
-| 0:30–0:42 | **Undo (12 s)**: `Ctrl+Shift+P` → **Forge-a-thon: Undo Last Reviewed Edit** → the editor shows the original function → terminal `git status --short` (empty: file restored) → editor `Ctrl+Z`, `Ctrl+S` (change back) → `git status --short` shows `M src/flask/helpers.py` | "Every reviewed edit can be undone exactly." (Tested: `scripts/test-extension-e2e.sh`, Task A.) |
-| 0:42–2:34 | **Task B, uncut from instruction to the first diff** (105 s measured) — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: used/budget tokens, `src/flask/cli.py` ranked with its reason, skipped items) → tool calls (read_file, search_workspace, …) → first diff → **Accept All** | "No file names in the request; the agent finds the files itself." Talk over the wait: context, tools. |
-| 2:34–2:48 | **Task B, rest of the turn, model waiting cut** (≈ 55 s of real time) — each further diff → **Accept All** (measured: 4 more over `cli.py`, `tests/test_cli.py`, `docs/cli.rst`); "auto-approved: python -m pytest …" lines; any `python -c` prompt → **Allow once**; any ⚠ Unrestricted → **Deny**; "command budget reached" line; summary, then hold ~2 s on **Files changed in this turn: 3** (the three paths together, with review and accepted-hunk counts) | Caption **"model waiting time cut"** at every cut. "Test runs are auto-approved; anything else asks; at most three commands per turn." |
-| 2:48–2:56 | **TrueForge session (required for eligibility)**: panel **Open TrueForge session** → hold ~8 s on Task B's turn with its tool calls (read/search/propose_edit/run_command) and approvals | Note this timestamp for the write-up. |
-| 2:56–3:08 | **Task B verification**: `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (lists `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | |
-| 3:08–3:14 | **Stop**: panel, send "Add type hints to every function in src/flask/cli.py", press **Stop** while it streams → status cancelled, no edits listed | "Stop cancels the TrueForge turn; nothing half-applied." |
-| 3:14–3:50 | **Task C, uncut from instruction to diff**: `git checkout -- . && git status --short` (empty) → terminal 2 `scripts/use-models.sh nvidia-free --break-primary` (the profile you are using) → repeat Task A → banner "Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to openrouter/nemotron-3-ultra-free" (on `openrouter-free`: "… → switched to nvidia/nemotron-3-ultra") → fallback's diff (≈ 8 s measured) → **Reject All** → `git status --short` (empty) | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." Repo URL on the last frame. |
+| Time | Shot | Cut | Say / show |
+|---|---|---|---|
+| 0:00–0:03 | **Setup glimpse**: terminal 1 (TrueForge 0.185.1 running), `git -C ~/flask-demo log -1 --oneline` → `22d9247` | — | "VS Code extension; the agent loop runs on TrueForge in local mode." |
+| 0:03–0:40 | **Task A, uncut from instruction to diff** (up to ~28 s of model waiting): `src/flask/helpers.py`, select `get_debug_flag`, `Ctrl+Alt+I`, paste instruction A, Enter → diff editor + "Review N hunk(s)" → **Choose Hunks...** (the per-hunk picker, all ticked) → accept | None before the diff. After accepting, the turn's closing seconds may be cut: caption | Point at the per-hunk picker. |
+| 0:40–0:47 | **Task A verification**: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` → `False` | — | |
+| 0:47–0:55 | **Undo (8 s)**: `Ctrl+Shift+P` → **Forge-a-thon: Undo Last Reviewed Edit** → the editor shows the original function → terminal `git status --short` (empty: file restored) | — | "Every reviewed edit can be undone." |
+| 0:55–2:40 | **Task B, uncut from instruction to the first diff** (42 s in the rehearsal, up to 105 s measured earlier) — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: used/budget tokens, `src/flask/cli.py` ranked with its reason, skipped items) → tool calls (read_file, search_workspace, …) → first diff → **Accept All**. If the diff comes early, keep filming the next reviews in this slot | None before the first diff | "No file names in the request; the agent finds the files itself." Talk over the wait: context, tools. |
+| 2:40–2:52 | **Task B, rest of the turn** (≈ 55 s of real time shown in 12 s) — each further diff → **Accept All** (measured: 4 more over `cli.py`, `tests/test_cli.py`, `docs/cli.rst`); "auto-approved: python -m pytest …" lines; any `python -c` prompt → **Allow once**; any ⚠ Unrestricted → **Deny**; summary, then hold ~2 s on **Files changed in this turn: 3** (the three paths together, with review and accepted-hunk counts) | **Cut model waiting between reviews**: caption at every cut | "Test runs are auto-approved; anything else asks; at most three commands per turn." |
+| 2:52–3:00 | **TrueForge session (required for eligibility)**: panel **Open TrueForge session** → hold ~8 s on Task B's turn with its tool calls (read/search/propose_edit/run_command) and approvals | — | Note this timestamp for the write-up. |
+| 3:00–3:22 | **Task B verification, 22 s readable** (commands pre-typed; let each output stay on screen ~7 s): `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (lists `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | — | |
+| 3:22–3:55 | **Task C, uncut from instruction to diff**: `git checkout -- . && git status --short` (empty) → terminal 2 `scripts/use-models.sh nvidia-free --break-primary` (pre-typed; use the profile you are recording with) → repeat Task A → banner "Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to openrouter/nemotron-3-ultra-free" (on `openrouter-free`: "… → switched to nvidia/nemotron-3-ultra") → fallback's diff (9.6–12.6 s measured) → **Reject All** → `git status --short` (empty) | None before the diff | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." Repo URL on the last frame. |
 
-Timing check: the C slot leaves ~22 s for instruction → diff. If the rehearsal's C wait is longer (QA measured
-29.5 s), take the difference from the 2:34–2:48 cut segment; never from an uncut segment. The hard limit is 4:00.
+Trimmed to fit (optional material): the Stop shot (Stop is proven by tests, not by the video), Undo's re-apply, and
+2 s of setup. If B's first diff came early and time is left, an optional 6 s Stop shot can go after the B
+verification (send "Add type hints to every function in src/flask/cli.py", press **Stop** while it streams → status
+cancelled, no edits listed). Timing check: if C's wait runs longer than ~13 s (QA once measured 29.5 s), take the
+difference from the 2:40–2:52 cut segment or the optional material; never from an uncut segment or a
+verification. The hard limit is 4:00.
 
-After recording: restore the primary key (`source ~/.forge-keys.env && scripts/use-models.sh nvidia-free`, or the
-profile you recorded with) and
-write the real timestamps of each shot into the write-up scorecard (`docs/writeup/WRITEUP.md`, section 6).
+After recording:
+
+1. Restore the primary key (`source ~/.forge-keys.env && scripts/use-models.sh nvidia-free`, or the profile you
+   recorded with).
+2. Write the real timestamps of each shot into the write-up scorecard (`docs/writeup/WRITEUP.md`, section 6) and
+   `docs/writeup/rehearsal.json` (`videoUrl`, `videoTimestamp`), with the team block and Team ID.
+3. **Publish the PDF:** `scripts/render-writeup.sh` (must say 1–3 pages), then commit the rendered file (it is
+   gitignored, so force-add it): `git add -f docs/writeup/WRITEUP.pdf && git commit -m "docs: rendered write-up"`.
+   After pushing, use its GitHub link as the public PDF link in the form:
+   `https://github.com/riyajenson/forgeathon/blob/main/docs/writeup/WRITEUP.pdf`. Open it in a private (signed-out)
+   browser window to check that it opens.
+4. `node scripts/check-submission.mjs` must pass.
 
 ## Exact instructions
 

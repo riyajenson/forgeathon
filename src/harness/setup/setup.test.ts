@@ -81,8 +81,10 @@ test('buildAgents makes primary and -fallback variants from each template, with 
     assert.equal(m['config'].askUserQuestions.enabled, false);
     assert.equal(m['config'].sandbox.enabled, false);
     assert.equal(m['config'].contextManagement.largeToolResponse.enabled, false);
-    assert.deepEqual(m['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 60000 } });
   }
+  // Agent mode compacts mid-Task B (its requests reach ~42k input tokens); inline turns never get near 60k.
+  assert.deepEqual(byName['forge-coder']!['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 30000 } });
+  assert.deepEqual(byName['forge-inline']!['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 60000 } });
   assert.equal(byName['forge-coder']!['config'].iterationLimit, 60);
   assert.equal(byName['forge-inline']!['config'].iterationLimit, 8);
   assert.deepEqual(byName['forge-inline']!['mcpServers'][0].enableTools, ['read_file', 'propose_edit']);

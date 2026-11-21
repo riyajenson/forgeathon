@@ -1,5 +1,5 @@
 // Usage:
-//   node scripts/model-meter.mjs --port 47800 --log meter.jsonl --route nvidia=https://integrate.api.nvidia.com/v1 [--route ...] [--min-interval-ms 1600]
+//   node scripts/model-meter.mjs --port 47800 --log meter.jsonl --route nvidia=https://integrate.api.nvidia.com/v1 [--route ...] [--min-interval-ms 1600] [--log-tools]
 //   node scripts/model-meter.mjs --summary meter.jsonl
 // Point a provider's baseUrl at http://127.0.0.1:<port>/<route> (in a copy of config/models.json) and rerun setup.
 import { appendFileSync, readFileSync } from 'node:fs';
@@ -27,7 +27,7 @@ if (summaryFile) {
     process.exit(1);
   }
   const log = opt('--log') ?? 'model-meter.jsonl';
-  void startMeter({ port: Number(opt('--port') ?? 47800), routes, minIntervalMs: Number(opt('--min-interval-ms') ?? 0), onRecord: (r) => appendFileSync(log, `${JSON.stringify(r)}\n`) }).then((m) => {
+  void startMeter({ port: Number(opt('--port') ?? 47800), routes, minIntervalMs: Number(opt('--min-interval-ms') ?? 0), logTools: argv.includes('--log-tools'), onRecord: (r) => appendFileSync(log, `${JSON.stringify(r)}\n`) }).then((m) => {
     console.log(`model meter on http://127.0.0.1:${m.port} → ${Object.entries(routes).map(([k, v]) => `${k}=${new URL(v).origin}`).join(', ')}; log ${log}`);
     const stop = () => void m.close().then(() => process.exit(0));
     process.on('SIGINT', stop);

@@ -268,7 +268,9 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
     const percentile = (p: number) => sorted.length
       ? Math.round(sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)]!)
       : 0;
-    return { count: sorted.length, p50Ms: percentile(0.5), p95Ms: percentile(0.95) };
+    // The two largest samples too: a gate can then allow one outlier (a GC pause, a font load) but not a pattern.
+    const top = (i: number) => sorted.length > i ? Math.round(sorted[sorted.length - 1 - i]!) : 0;
+    return { count: sorted.length, p50Ms: percentile(0.5), p95Ms: percentile(0.95), maxMs: top(0), secondMaxMs: top(1) };
   }
 
   /** Numeric event-to-animation-frame latency only; message text is never retained in these metrics. */

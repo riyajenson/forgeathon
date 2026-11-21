@@ -124,13 +124,13 @@ watchdog stops a turn that streams nothing for 45 s.
 | Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
 | PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
-Timestamps refer to the round-1 video (Accept All / Reject All / Choose Hunks… prompt); the finals build's
-multi-select hunk picker (✓ / ✕ in its title bar) will be re-recorded with `scripts/demo-recording/`.
+Timestamps refer to the submitted round-1 video (Accept All / Reject All / Choose Hunks… prompt); the finals build
+reviews with a multi-select hunk picker (✓ / ✕ in its title bar) instead, covered by the native UI tests.
 
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
-VS Code), 158 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
-renders ≤ 100 ms) passed 3/3 suite runs (peaks 45–53 ms) and fails an injected 200 ms stall; one earlier run had
+VS Code), 161 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
+renders ≤ 100 ms) passed 3/3 suite runs (peaks 52–62 ms) and fails an injected 200 ms stall; one earlier run had
 an unexplained 605 ms block in VS Code's `postMessage`.
 
 ## 7. Tools used

@@ -534,7 +534,7 @@ scripts/dev-mock.sh
 Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
 real model solves the tasks: the scripted model knows the fixed tasks and, in Task B, supplies the file paths
 and edits, so a mock run is no evidence of file discovery. Real-model results: `docs/writeup/rehearsal.json`
-(this branch's head; round 1: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 158 unit and 20 integration tests.
+(this branch's head; round 1: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 161 unit and 20 integration tests.
 
 | Command | What it proves | Needs |
 |---|---|---|

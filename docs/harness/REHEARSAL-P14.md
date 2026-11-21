@@ -129,3 +129,41 @@ Offline work first (scripted model only), then a paced real batch. Changes:
 | Integration (real TrueForge 0.185.1 + mock model) | new: "resume after a rate limit" (edit saved, 429 until the turn stops, `resumable`, Resume in the same TrueForge session with the earlier tool results in view; bad and repeated `resumeOf` refused) and "sub-agents on the mock" (`create_sub_agent` offered, the sub-agent reads and edits through review, its report returns as the tool result) |
 | `scripts/e2e-mock.sh` | new Task R: the scripted model makes Task A's edit, is rate limited until the turn stops, and the smoke resumes it: 24 checks |
 | Extension suite | test-budget label, sub-agent rows, Resume offered and resubmitted with `resumeOf` in the same conversation, `testCommandBudget` reaches the harness |
+
+### Phase 2 real batch (2026-11-21, commit 9883169, new NVIDIA key)
+
+All four runs: profile `nvidia-free`, a fresh TrueForge database per pair (README start command, own `SQLITE_PATH`),
+requests through the meter with `--min-interval-ms 3000` (at most 20 requests per minute), a 1-token pre-flight
+(HTTP 200) before every run, and 15 minutes or more between Task B runs. Records: `rehearsal-p14/phase2-*`.
+Recording settings: safe test commands auto-approved, Unrestricted denied, budgets 3 other + 3 test runs.
+
+| | C1 (17:28, compaction 40k) | C2 (17:48, compaction 40k) | S1 (18:09, sub-agents on) | S2 (18:32, sub-agents on) |
+|---|---|---|---|---|
+| Checks | 3/6 (watchdog, after edits) | **6/6** | **6/6** | 5/6 (its new test fails) |
+| Compactions | 1, request 39, after the first edit (39,433 → 783 in 12.8 s) | 1, request 32, after (39,384 → 995 in 20.2 s) | 1, request 34, after (38,554 → 1,121 in 24.7 s) | 1, request 35, after (38,439 → 872 in 29.6 s) |
+| Sub-agent delegations | (off) | (off) | 0 | 0 |
+| Model requests / 429s | 45+1 (the aborted one is not logged) / 0 | 71 / 0 | 77 / 0 | 43 / 0 |
+| Peak requests in 60 s | 19 | 19 | 20 | 19 |
+| First diff | 74.6 s (request 21) | 114.1 s (request 26) | 99.7 s (request 23) | 84.4 s (request 23) |
+| Turn time | 251.1 s (error) | 334.6 s | 449.4 s | 244.1 s |
+| Malformed / refused edits | 0 / 0 | 11 / 1 | 4 / 0 | 2 / 0 |
+| Warnings (unrelated hunks) | 0 | 0 | 0 | 0 |
+| Test runs / refused by the test budget | 1 / 0 | 3 / 1 | 3 / 1 | 1 / 0 |
+| Other commands shown / refused by the budget | 0 / 0 | 3 / 0 | 3 / 4 | 2 / 0 |
+| Input tokens | 1,132,054 (meter) | 1,875,325 | 1,927,738 | 1,081,294 |
+
+- **No 429s in 236 requests**: the fresh key plus pacing held. The batch never reached the stop rule.
+- **C1 failed on the 45 s silence watchdog, not a rate limit.** The model's `tests/test_cli.py` edit replaced the
+  existing `TestRoutes` class (accepted, as the smoke accepts every hunk), its test run failed, and while it was
+  generating the repair the harness saw no TrueForge event for 45 s and stopped the turn (no retry or fallback after
+  a write). The meter logs a request when it ends, so the aborted one is missing. A long tool-call generation with
+  no streamed deltas, or a stalled NVIDIA stream; the records cannot tell which.
+- **The separate test budget did its job.** In C2 the third test run came after a debug `python -c` and passed; under
+  the old shared budget of 3 it would have been refused. In S1 the final, passing test run came after four other
+  commands had been refused by their own budget. `pytest … | head` counts as another (Unrestricted) command.
+- **Sub-agents were offered but never used** (S1, S2: one thread each; the agent manifest has
+  `dynamic_sub_agents.enabled` and the guidance; the integration test shows TrueForge offers `create_sub_agent` with
+  this configuration). Nemotron chose not to delegate, so this batch measures nothing about delegation; S1 and S2 are
+  effectively two more compaction-40k runs. S2 ran its new test once, got a failure, tried `cd /workspace && pytest`
+  twice (Unrestricted, denied), and ended claiming success.
+- **Compaction at 40k**: once per run, always after the first edit (4/4).

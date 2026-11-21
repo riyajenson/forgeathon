@@ -1,5 +1,12 @@
 # Project status
 
+**2026-11-21, finals branch `harness/p14-trueforge-depth` (phase 2):** protocol 0.4.5 adds a separate test-command
+budget, Resume after a rate limit and sub-agent events (`setup-trueforge.mjs --subagents`, off by default). All 13
+offline suites pass on 9883169 (149 unit, 22 integration, e2e-mock 24/24 in both modes, UI suites). Real batch on a new
+NVIDIA key, paced at 20 requests per minute or fewer: Task B with compaction at 40k scored 3/6 (watchdog after edits)
+and 6/6; with sub-agents on, 6/6 and 5/6, and the model never delegated. 0 × 429 in 236 requests. Details:
+`docs/harness/REHEARSAL-P14.md`, phase 2.
+
 **2026-11-20, judge round (branch `fix/judge-round`):** a blind review scored `f1cf5b6` 76/90 and held it off the
 shortlist for lack of a passing real Task B on the submitted build. Changes: claims scoped to the evidence (README,
 write-up, this file, checklist); Stop after an approved edit reached VS Code now saves that edit and reports it as

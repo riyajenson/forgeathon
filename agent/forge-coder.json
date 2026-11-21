@@ -23,7 +23,7 @@
         "compaction": { "enabled": true, "trigger": { "type": "input_tokens", "value": 40000 } },
         "largeToolResponse": { "enabled": false }
       },
-      "iterationLimit": 60
+      "iterationLimit": 80
     }
   }
 }

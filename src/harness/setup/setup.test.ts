@@ -85,7 +85,7 @@ test('buildAgents makes primary and -fallback variants from each template, with 
   // Agent mode compacts once in Task B, after its first edit (~32-36k input tokens; a run reaches 42k or more); inline turns never get near 60k.
   assert.deepEqual(byName['forge-coder']!['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 40000 } });
   assert.deepEqual(byName['forge-inline']!['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 60000 } });
-  assert.equal(byName['forge-coder']!['config'].iterationLimit, 60);
+  assert.equal(byName['forge-coder']!['config'].iterationLimit, 80);
   assert.equal(byName['forge-inline']!['config'].iterationLimit, 8);
   assert.deepEqual(byName['forge-inline']!['mcpServers'][0].enableTools, ['read_file', 'propose_edit']);
   assert.equal(buildAgents(templates, example, 'vscode-it')[0]!.manifest['mcpServers'] && (buildAgents(templates, example, 'vscode-it')[0]!.manifest['mcpServers'] as Array<{ name: string }>)[0]!.name, 'vscode-it');

@@ -418,6 +418,14 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
   runs back to back could approach it (TrueForge resends a 429 up to 4 times, then the harness retries once, then
   falls back to OpenRouter, whose free tier allows 50 requests/day without credit).
 - Compaction is configured but never triggered by the demo tasks.
+- **Follow-up, not fixed: repeated identical edit rejections.** In the 21 Nov rehearsal's Task B (`f2f87bb`, passed
+  6/6) the model sent 24 `propose_edit` calls whose `old_text` equalled `new_text` (it was trying to add a missing
+  closing quote after `'***`) and 10 with `edits` as a string; each got the same INVALID_EDIT refusal and resent the
+  whole conversation (74 requests, 2.88M input tokens against ~1M in the three B runs). Candidate fix: after a few
+  identical refusals for one file, tell the model to re-read the lines and stop resubmitting the same edit, or end
+  the loop the way the command budget does. Needs real-model runs to measure.
+- **UI e2e Ctrl+Z step was timing-dependent** (failed once in 10 runs on 21 Nov: Undo sent before helpers.py was the
+  active editor). The test now waits for the active editor and polls for the re-applied change; test-only change.
 - A fallback starts a new TrueForge session (no earlier panel history).
 - `run_command` runs in bubblewrap (read-only checkout and host, private /tmp, no network, no keys) on top of
   approval, the ⚠ label and the budget; it needs Linux/WSL with bubblewrap (otherwise commands are refused). Reads are

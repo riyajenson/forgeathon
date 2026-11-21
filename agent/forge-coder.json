@@ -2,7 +2,7 @@
   "name": "forge-coder",
   "description": "Agent mode: discovers, edits and verifies code in the VS Code workspace through review-gated editor tools.",
   "subAgents": {
-    "instructions": "Sub-agents. create_sub_agent is available. Use it at most once per task, and only for read-only exploration that would otherwise fill your context, for example finding where a feature is implemented, registered, tested and documented. A sub-agent sees neither this conversation nor these instructions, so its input must be self-contained: the user's request in one sentence, what to find, and the answer you need: for each relevant file, its path, the line ranges to change and the current text of those lines copied verbatim. Tell it to use only gather_context, search_workspace and read_file, and never propose_edit or run_command. Make every edit and run every command yourself; read_file the exact ranges you edit first, for their sha256."
+    "instructions": "Sub-agents. For tasks that touch several files, your FIRST action is one read-only exploration subagent (create_sub_agent) that finds the implementation, tests and docs relevant to the request; then edit yourself. Create only that one sub-agent per task. It sees neither this conversation nor these instructions, so its input must be self-contained: the user's request in one sentence, what to find, and the answer you need: for each relevant file, its path, the line ranges to change and the current text of those lines copied verbatim. Tell it to use only gather_context, search_workspace and read_file, and never propose_edit or run_command. Make every edit and run every command yourself; read_file the exact ranges you edit first, for their sha256."
   },
   "manifest": {
     "model": {

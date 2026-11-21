@@ -27,7 +27,8 @@ export type AttemptEvent =
   | { t: 'text'; messageId: string; delta: string }
   | { t: 'tool_call'; call: ToolCallInfo }
   | { t: 'tool_result'; callId: string; ok: boolean; content: string }
-  | { t: 'status'; state: 'running' | 'paused' | 'compacting'; detail?: string };
+  | { t: 'status'; state: 'running' | 'paused' | 'compacting'; detail?: string }
+  | { t: 'subagent'; phase: 'started' | 'finished'; threadId: string; name: string; task?: string; ok?: boolean; error?: string };
 
 export interface AttemptResult {
   status: 'done' | 'cancelled' | 'error';
@@ -86,6 +87,8 @@ export function isErrorContent(content: string): boolean {
 
 export class Attempt {
   private readonly messages = new Map<string, TfEvent>();
+  /** Sub-agent threads (thread.created with a parent) → their names. Their text is not the turn's reply. */
+  private readonly childThreads = new Map<string, string>();
   private readonly flushed = new Set<string>();
   private pending: PendingCall[] = [];
   private lastEventId: string | undefined;
@@ -241,7 +244,7 @@ export class Attempt {
         if (base) this.o.sdk.mergeEventDelta(base as never, event as never);
         else this.messages.set(event.id, { ...structuredClone(event), type: 'model.message' });
         const delta = event['content'];
-        if (typeof delta === 'string' && delta) this.o.onEvent({ t: 'text', messageId: event.id, delta });
+        if (typeof delta === 'string' && delta && !this.isChild(event)) this.o.onEvent({ t: 'text', messageId: event.id, delta });
         continue;
       }
       this.lastEventId = event.id;
@@ -255,7 +258,26 @@ export class Attempt {
           this.flushToolCalls();
           this.messages.set(event.id, structuredClone(event));
           const content = event['content'];
-          if (typeof content === 'string' && content) this.o.onEvent({ t: 'text', messageId: event.id, delta: content });
+          if (typeof content === 'string' && content && !this.isChild(event)) this.o.onEvent({ t: 'text', messageId: event.id, delta: content });
+          break;
+        }
+        case 'thread.created': {
+          const parent = event['parent'] as { threadId?: string } | undefined;
+          if (!parent?.threadId) break; // the main thread
+          const threadId = String(event['threadId']);
+          const info = (event['agentInfo'] ?? {}) as { name?: unknown; input?: unknown };
+          const name = typeof info.name === 'string' && info.name ? info.name : String(event['title'] ?? threadId);
+          this.childThreads.set(threadId, name);
+          this.o.onEvent({ t: 'subagent', phase: 'started', threadId, name, ...(typeof info.input === 'string' ? { task: info.input } : {}) });
+          break;
+        }
+        case 'thread.done': {
+          const threadId = String(event['threadId']);
+          const name = this.childThreads.get(threadId);
+          if (name === undefined) break; // the main thread
+          const state = (event['state'] ?? {}) as { status?: unknown; error?: unknown };
+          const ok = state.status === 'done';
+          this.o.onEvent({ t: 'subagent', phase: 'finished', threadId, name, ok, ...(!ok && typeof state.error === 'string' ? { error: state.error } : {}) });
           break;
         }
         case 'tool.response': {
@@ -295,6 +317,11 @@ export class Attempt {
       }
     }
     return { kind: 'ended' };
+  }
+
+  private isChild(event: TfEvent): boolean {
+    const threadId = event['threadId'];
+    return typeof threadId === 'string' && this.childThreads.has(threadId);
   }
 
   /** Emits tool_call once per tool call, after its model.message is complete. */

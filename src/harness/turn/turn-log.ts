@@ -31,6 +31,13 @@ export interface TurnRecord {
   autoApprovedCommands: number;
   /** run_command calls refused because the turn's command budget was used up. */
   budgetRefusedCommands: number;
+  /** Test runs refused because the turn's test-command budget was used up (0.4.5). */
+  budgetRefusedTests?: number;
+  /** Sub-agents TrueForge started in this turn. */
+  subagents?: number;
+  /** The turn this one resumed, and whether this one stopped on a rate limit (resumable). */
+  resumeOf?: string;
+  resumable?: boolean;
   inputTokens: number;
   outputTokens: number;
 }

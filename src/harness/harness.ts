@@ -150,10 +150,23 @@ class ForgeHarnessImpl implements ForgeHarness {
     if (b.commandBudget !== undefined && !(Number.isInteger(b.commandBudget) && b.commandBudget >= 0)) {
       return refuse(req, err('invalid', 'commandBudget must be a non-negative integer'));
     }
+    if (b.testCommandBudget !== undefined && !(Number.isInteger(b.testCommandBudget) && b.testCommandBudget >= 0)) {
+      return refuse(req, err('invalid', 'testCommandBudget must be a non-negative integer'));
+    }
+    if (b.resumeOf !== undefined && (typeof b.resumeOf !== 'string' || !b.resumeOf)) return refuse(req, err('invalid', 'resumeOf must be a turn id'));
     const session = this.sessions.get(b.sessionId);
     if (!session || session.state !== 'open') return refuse(req, err('invalid', 'unknown or closed session'));
     if (session.turns.has(b.turnId)) return refuse(req, err('conflict', 'turnId already exists in this session'));
     if (session.active && !session.active.done) return refuse(req, err('conflict', 'another turn is still running in this session', true));
+    let resumeFrom: ReturnType<() => TurnRun['resumable']>;
+    if (b.resumeOf !== undefined) {
+      const prior = session.turns.get(b.resumeOf);
+      if (!prior) return refuse(req, err('invalid', 'resumeOf names no turn of this session'));
+      if (prior.req.mode !== b.mode) return refuse(req, err('invalid', 'a resumed turn must use the mode of the turn it resumes'));
+      resumeFrom = prior.resumable;
+      if (!resumeFrom) return refuse(req, err('conflict', 'that turn cannot be resumed: it did not stop on a rate limit, or it was already resumed'));
+      prior.markResumed(b.turnId);
+    }
 
     const agentName = b.mode === 'inline' ? (this.options.agents?.inline ?? 'forge-inline') : (this.options.agents?.agent ?? 'forge-coder');
     const client = this.client;
@@ -179,6 +192,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: this.options.settleMs ?? 10000,
       turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,
+      resumeFrom,
     });
     session.turns.set(b.turnId, run);
     session.active = run;

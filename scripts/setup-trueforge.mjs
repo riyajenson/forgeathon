@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Registers model providers, the editor MCP connector and the agents in a running local TrueForge.
-// Usage: node scripts/setup-trueforge.mjs [--config config/models.json] [--url http://127.0.0.1:8790] [--dry-run]
+// Usage: node scripts/setup-trueforge.mjs [--config config/models.json] [--url http://127.0.0.1:8790] [--dry-run] [--subagents]
+// --subagents: enable TrueForge's dynamic sub-agents for forge-coder (off by default).
 // Build the harness first: npm --prefix src/harness ci && npm --prefix src/harness run build
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';

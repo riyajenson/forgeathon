@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { approvalKey, commandTestHooks, FakePort, isAutoApprovableCommand, isListedCommand, runCommandTool, ScopeRegistry, type CommandRun, type SessionScope, type ToolContext } from './index';
+import { approvalKey, commandTestHooks, FakePort, isAutoApprovableCommand, isListedCommand, isTestCommand, runCommandTool, ScopeRegistry, type CommandRun, type SessionScope, type ToolContext } from './index';
 import { checkProtection, confinedCwd, protectedArgs } from './command-protection';
 import type { CommandRuntime } from './command';
 import { EventEmitter } from 'node:events';
@@ -216,6 +216,13 @@ test('auto-approvable: only bare pytest, python -m pytest, git status and git di
     'PYTHONPATH=src pytest', 'PYTEST_ADDOPTS=-p evil pytest', // environment prefixes change what runs
     'pytest | tail -5', 'pytest && rm -rf x', 'git diff --output=src/x.py', 'git diff --ext-diff', 'git log', 'pytestx',
   ]) assert.equal(isAutoApprovableCommand(c), false, c);
+});
+
+test('test runs (separate budget): listed pytest and python -m pytest, with or without a path or NAME=value prefix', () => {
+  for (const c of ['pytest', 'pytest tests/test_cli.py -q', 'python -m pytest -q', 'python3.12 -m pytest tests', '.venv/bin/pytest -q',
+    'PYTHONPATH=src pytest', 'python -m pytest "tests/test_cli.py::test_config"', '  pytest  ']) assert.equal(isTestCommand(c), true, c);
+  for (const c of ['python -c "import flask"', 'flask --help', 'git diff', 'ls', 'pytest | tail -5', 'pytest && rm -rf x',
+    'cd tests && pytest', 'pytestx', 'python -m pytestx', 'make test', 'tox']) assert.equal(isTestCommand(c), false, c);
 });
 
 protectedTest('a virtualenv outside the workspace under /tmp stays visible (read-only) to the command', async () => {

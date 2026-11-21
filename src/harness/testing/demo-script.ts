@@ -121,6 +121,8 @@ const TASK_A_MARK = "'off' and 'n'";
 const TASK_B_MARK = 'flask config';
 /** Not a demo task: the mock e2e's guardrail check (command budget, repeated argument errors). */
 export const GUARD_MARK = 'guardrail check';
+/** Not a demo task: the mock e2e's resume check (a rate limit after an edit, then Resume). */
+export const RESUME_MARK = 'resume check';
 /** Not demo tasks: the UI Stop test's turns (a pending review; a running command). */
 export const STOP_REVIEW_MARK = 'stop check: pending review';
 export const STOP_COMMAND_MARK = 'stop check: running command';
@@ -203,6 +205,21 @@ export function demoScript(req: MockRequest): MockReply {
     const hint = results.filter((t) => t.includes('Expected arguments, exactly this shape')).length;
     const denied = results.filter((t) => t.includes('user refused to run the command')).length;
     return { text: `Guardrail check: ${refused} command(s) refused by the budget; shape hint in ${hint} refusal(s); ${denied} command(s) denied by the user.` };
+  }
+
+  if (user.includes(RESUME_MARK)) {
+    // Task A's edit, then HTTP 429 on every request (TrueForge's own resends included) until the turn is resumed.
+    // retry-after-ms keeps TrueForge's resends short. The resumed turn sees the earlier tool results and finishes.
+    const lastUser = textOf(req.messages.filter((m) => m.role === 'user').at(-1)?.content);
+    if (lastUser.startsWith('Resumed turn:')) {
+      return { text: `Resume check finished: ${step} earlier tool result(s) in view; ${/Already changed in that turn: (.+?)\. Those files/.exec(lastUser)?.[1] ?? 'nothing'} already changed.` };
+    }
+    if (step === 0) return call('read_file', { path: 'src/flask/helpers.py', start_line: 1, end_line: 60 });
+    if (step === 1) {
+      return call('propose_edit', { path: 'src/flask/helpers.py', base_sha256: shaOf(req, 'src/flask/helpers.py'),
+        summary: "treat 'off' and 'n' as false and document every false value", edits: TASK_A_EDITS['src/flask/helpers.py'] });
+    }
+    return { status: 429, message: 'Too Many Requests (scripted rate limit)', headers: { 'retry-after-ms': '50' } };
   }
 
   if (user.includes(STOP_REVIEW_MARK)) {

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createHarness } from '../harness';
-import { PROTOCOL_VERSION, type ForgeHarness, type HarnessEvent, type ReviewDecision } from '../contract-types';
+import { PROTOCOL_VERSION, type ForgeHarness, type HarnessEvent, type ReviewDecision, type TurnRequest } from '../contract-types';
 import { FakePort } from '../mcp/fake-port';
 import { sha256Hex } from '../review';
 import { createClient } from '../trueforge/sdk';
@@ -40,6 +40,9 @@ let rateLimited = 0;
 let harnessRetried = false;
 // 'ratelimit-tf': 429s served per model call (keyed by whether the request carries a tool result).
 const tfLimited = new Map<string, number>();
+// 'resume429': the model call after the edit is rate limited until the test allows the resumed turn.
+let resumeAllowed = false;
+const SUBTASK = 'SUBTASK:explore';
 const TURN_LOG = path.join(os.tmpdir(), `forge-itest-turns-${process.pid}.jsonl`);
 process.env['FORGE_TURN_LOG'] = TURN_LOG;
 function script(req: MockRequest): MockReply {
@@ -55,7 +58,24 @@ function script(req: MockRequest): MockReply {
   }
   const edit1 = { old_text: '    return 1', new_text: '    return 10' };
   const edit2 = { old_text: '    return 2', new_text: '    return 20' };
+  // A sub-agent thread (it-subagents): its only user message is the delegated task, not the scenario.
+  if (req.messages.some((m) => m.role === 'user' && textOf(m.content).includes(SUBTASK))) {
+    const results = req.messages.filter((m) => m.role === 'tool').length;
+    if (results === 0) return { toolCalls: [{ name: 'read_file', args: { path: FILE } }] };
+    if (results === 1) return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit2], summary: 'sub-agent bumps beta' } }] };
+    return { text: `explorer report: ${toolResult?.slice(0, 120) ?? ''}` };
+  }
   switch (scenario) {
+    case 'resume429': {
+      const last = textOf(req.messages.filter((m) => m.role === 'user').at(-1)?.content);
+      if (last.startsWith('Resumed turn:')) return toolResult !== undefined ? { text: 'resumed and finished' } : { text: `resumed with ${req.messages.filter((m) => m.role === 'tool').length} earlier tool result(s) in view` };
+      if (toolResult !== undefined && !resumeAllowed) return { status: 429, message: 'Too Many Requests', headers: { 'retry-after-ms': '50' } };
+      if (toolResult !== undefined) return { text: 'unexpected' };
+      return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
+    }
+    case 'subagent':
+      if (toolResult !== undefined) return { text: `main finished after: ${toolResult.slice(0, 200)}` };
+      return { toolCalls: [{ name: 'create_sub_agent', args: { name: 'explorer', input: `${SUBTASK} read src/app.py, bump beta, and report what alpha returns` } }] };
     case 'edit2':
       if (toolResult !== undefined) return { text: `finished after: ${toolResult.slice(0, 300)}` };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1, edit2], summary: 'bump returns' } }] };
@@ -102,6 +122,7 @@ const AGENTS: Array<[string, string]> = [
   ['it-dead', 'itdead/primary'], ['it-dead-fallback', 'itfb/fb'],
   ['it-both', 'itbad/primary'], ['it-both-fallback', 'itdead/primary'],
   ['it-compact', 'itgood/primary'], ['it-compact-fallback', 'itfb/fb'],
+  ['it-subagents', 'itgood/primary'], ['it-subagents-fallback', 'itfb/fb'],
 ];
 const COMPACT_SUMMARY = 'COMPACTED-SUMMARY:';
 const isSummaryRequest = (req: MockRequest) => /detailed summary of the conversation so far/.test(textOf(req.messages.at(-1)?.content));
@@ -133,7 +154,7 @@ before(async () => {
       instructions: 'Integration test agent.',
       mcpServers: [{ name: CONNECTOR, enableTools: ['@all'], preloadTools: ['read_file', 'search_workspace', 'propose_edit', 'run_command'], requireApprovalForTools: ['propose_edit', 'run_command'] }],
       config: {
-        sandbox: { enabled: false }, dynamicSubAgents: { enabled: false }, generativeUi: { enabled: false }, askUserQuestions: { enabled: false },
+        sandbox: { enabled: false }, dynamicSubAgents: { enabled: name === 'it-subagents' }, generativeUi: { enabled: false }, askUserQuestions: { enabled: false },
         contextManagement: { compaction: { enabled: true, trigger: { type: 'input_tokens' as const, value: name === 'it-compact' ? 2000 : 60000 } }, largeToolResponse: { enabled: false } },
         iterationLimit: 10,
       },
@@ -159,6 +180,7 @@ beforeEach(async () => {
   port.onApplyStart = undefined;
   port.applies.length = 0;
   mock.requests.length = 0;
+  resumeAllowed = false;
 });
 
 async function withHarness<T>(agent: string, fn: (h: ForgeHarness, sessionId: string) => Promise<T>, watchdogMs = 15000): Promise<T> {
@@ -175,9 +197,9 @@ async function withHarness<T>(agent: string, fn: (h: ForgeHarness, sessionId: st
 
 type Ctl = { h: ForgeHarness; sessionId: string; turnId: string };
 
-async function runTurn(h: ForgeHarness, sessionId: string, instruction: string, onEvent?: (e: HarnessEvent, ctl: Ctl) => Promise<void> | void): Promise<HarnessEvent[]> {
+async function runTurn(h: ForgeHarness, sessionId: string, instruction: string, onEvent?: (e: HarnessEvent, ctl: Ctl) => Promise<void> | void, extra: Partial<TurnRequest> = {}): Promise<HarnessEvent[]> {
   const turnId = `turn-${++seq}`;
-  const sub = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId, turnId, mode: 'agent', instruction } });
+  const sub = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId, turnId, mode: 'agent', instruction, ...extra } });
   assert.ok(sub.ok, JSON.stringify(sub));
   const events: HarnessEvent[] = [];
   const deadline = setTimeout(() => { throw new Error(`turn ${turnId} did not finish in time`); }, 45000);
@@ -533,4 +555,75 @@ test('a model switch in TrueForge (scripts/use-models.sh) shows on the next turn
   } finally {
     await client.agents.update(original.id, { description: original.description ?? '', manifest: original.manifest as never });
   }
+});
+
+test('resume after a rate limit: the turn stops after its edit with resumable; Resume continues the same conversation and finishes', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    const instruction = 'SCENARIO:resume429 bump alpha';
+    const first = await runTurn(h, sid, instruction, async (e) => { if (e.t === 'review_request') await review(h, e, () => 'accept'); });
+    assert.equal(doneOf(first).status, 'error');
+    const resumable = ofType(first, 'resumable');
+    assert.equal(resumable.length, 1, JSON.stringify(first.slice(-4)));
+    assert.deepEqual([resumable[0]!.reason, resumable[0]!.changedFiles], ['rate_limited', [FILE]]);
+    assert.ok(first.indexOf(resumable[0]!) < first.findIndex((e) => e.t === 'error'), 'resumable before the error');
+    assert.match(ofType(first, 'error')[0]!.error.message, /429/);
+    assert.equal(ofType(first, 'fallback').length, 0, 'no fallback after a write');
+    assert.equal(await disk(), ORIGINAL.replace('return 1', 'return 10'));
+    const firstTurnId = first[0]!.turnId;
+    const firstSession = ofType(first, 'session')[0]!.runtimeSessionId;
+
+    // Resuming a turn that is not resumable is refused before anything starts.
+    const bogus = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: sid, turnId: `turn-${++seq}`, mode: 'agent', instruction, resumeOf: 'no-such-turn' } });
+    assert.ok(!bogus.ok && bogus.error.code === 'invalid');
+
+    resumeAllowed = true;
+    const before = mock.requests.length;
+    const second = await runTurn(h, sid, instruction, undefined, { resumeOf: firstTurnId });
+    assert.equal(doneOf(second).status, 'done', JSON.stringify(ofType(second, 'error')));
+    assert.equal(ofType(second, 'session')[0]!.runtimeSessionId, firstSession, 'same TrueForge conversation');
+    assert.ok(ofType(second, 'status').some((e) => /^Resuming the turn that stopped on a rate limit \(1 file already changed\)$/.test(e.detail ?? '')));
+    const resumedReq = mock.requests.slice(before).find((r) => textOf(r.messages.filter((m) => m.role === 'user').at(-1)?.content).startsWith('Resumed turn:'))!;
+    assert.ok(resumedReq, 'the model received the resume note');
+    const note = textOf(resumedReq.messages.filter((m) => m.role === 'user').at(-1)?.content);
+    assert.match(note, /Already changed in that turn: src\/app\.py\./);
+    assert.match(note, /Original request:\nSCENARIO:resume429 bump alpha/);
+    assert.ok(resumedReq.messages.some((m) => m.role === 'tool'), 'the interrupted turn\'s tool results are still in the conversation');
+    assert.match(ofType(second, 'text').map((e) => e.delta).join(''), /resumed with [1-9]\d* earlier tool result\(s\) in view/);
+
+    // A turn is resumed once.
+    const again = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: sid, turnId: `turn-${++seq}`, mode: 'agent', instruction, resumeOf: firstTurnId } });
+    assert.ok(!again.ok && again.error.code === 'conflict');
+  });
+});
+
+test('sub-agents on the mock: TrueForge delegates, the sub-agent reads and edits through review, the parent gets its report', async () => {
+  await withHarness('it-subagents', async (h, sid) => {
+    const events = await runTurn(h, sid, 'SCENARIO:subagent bump beta via a helper', async (e) => {
+      if (e.t === 'review_request') await review(h, e, () => 'accept');
+    });
+    assert.equal(doneOf(events).status, 'done', JSON.stringify(ofType(events, 'error')));
+    const subs = ofType(events, 'subagent');
+    assert.deepEqual(subs.map((e) => [e.phase, e.name, e.ok]), [['started', 'explorer', undefined], ['finished', 'explorer', true]]);
+    assert.match(subs[0]!.task ?? '', /^SUBTASK:explore read src\/app\.py/);
+    assert.equal(subs[0]!.threadId, subs[1]!.threadId);
+    const details = ofType(events, 'status').map((e) => e.detail ?? '');
+    assert.ok(details.some((d) => d.startsWith('Delegated to sub-agent "explorer": SUBTASK:explore')), details.join('\n'));
+    assert.ok(details.includes('Sub-agent "explorer" finished'));
+    // The sub-agent's edit went through the same review and was applied.
+    const reviews = ofType(events, 'review_request');
+    assert.equal(reviews.length, 1);
+    assert.equal(reviews[0]!.proposal.summary, 'sub-agent bumps beta');
+    assert.equal(ofType(events, 'edit_applied')[0]!.result.status, 'saved');
+    assert.equal(await disk(), ORIGINAL.replace('return 2', 'return 20'));
+    // Main thread offered create_sub_agent; the child got the same editor tools, and its text stayed out of the reply.
+    const main = mock.requests.find((r) => r.messages.some((m) => m.role === 'user' && textOf(m.content).includes('SCENARIO:subagent')))!;
+    assert.ok(main.toolNames.includes('create_sub_agent'), main.toolNames.join(','));
+    const child = mock.requests.find((r) => r.messages.some((m) => m.role === 'user' && textOf(m.content).includes(SUBTASK)))!;
+    for (const t of ['read_file', 'propose_edit']) assert.ok(child.toolNames.includes(t), child.toolNames.join(','));
+    assert.ok(!child.toolNames.includes('create_sub_agent'), 'sub-agents cannot delegate further');
+    const reply = ofType(events, 'text').map((e) => e.delta).join('');
+    assert.match(reply, /^main finished after: /);
+    assert.match(reply, /explorer report: /, 'the parent received the sub-agent report as the tool result');
+    assert.equal(reply.split('explorer report').length - 1, 1, "the sub-agent's own text is not streamed as the reply");
+  });
 });

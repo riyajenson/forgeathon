@@ -92,6 +92,23 @@ test('buildAgents makes primary and -fallback variants from each template, with 
   assert.equal((templates[0]!.manifest['model'] as Record<string, unknown>)['name'], undefined, 'templates are not mutated');
 });
 
+test('buildAgents --subagents: dynamic sub-agents and the delegation instructions on forge-coder only', () => {
+  const plain = buildAgents(templates, example, 'vscode');
+  const agents = buildAgents(templates, example, 'vscode', { subAgents: true });
+  const byName = Object.fromEntries(agents.map((a) => [a.name, a]));
+  const plainByName = Object.fromEntries(plain.map((a) => [a.name, a]));
+  for (const name of ['forge-coder', 'forge-coder-fallback']) {
+    const m = byName[name]!.manifest as Record<string, any>;
+    assert.equal(m['config'].dynamicSubAgents.enabled, true, name);
+    assert.ok(String(m['instructions']).startsWith(String((plainByName[name]!.manifest as Record<string, any>)['instructions'])), 'own instructions first');
+    assert.match(String(m['instructions']), /\n\nSub-agents\. create_sub_agent is available\. Use it at most once per task/);
+    assert.match(byName[name]!.description, /\(sub-agents on\)$/);
+    assert.equal('subAgents' in m, false, 'the template key is not part of the manifest');
+  }
+  for (const name of ['forge-inline', 'forge-inline-fallback']) assert.deepEqual(byName[name], plainByName[name], 'inline agents unchanged');
+  assert.equal((templates[0]!.manifest['config'] as Record<string, any>)['dynamicSubAgents'].enabled, false, 'templates are not mutated');
+});
+
 test('runSetup dry run touches nothing and never prints keys', async () => {
   const lines: string[] = [];
   const client = new Proxy({}, { get: () => { throw new Error('dry run must not call TrueForge'); } }) as never;

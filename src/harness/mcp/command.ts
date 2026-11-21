@@ -121,6 +121,20 @@ export function isAutoApprovableCommand(command: string): boolean {
   return isListedCommand(c) && AUTO_APPROVABLE_COMMANDS.some((re) => re.test(c));
 }
 
+/** pytest or python -m pytest (any python, optional path before the program, optional NAME=value prefix). */
+const TEST_COMMANDS = VERIFICATION_COMMANDS.slice(0, 2);
+
+/**
+ * A test run, counted against the turn's test-command budget instead of the general command budget (0.4.5):
+ * a listed pytest / python -m pytest command, so it has no shell operators. `pytest … | tail` is not a test run.
+ */
+export function isTestCommand(command: string): boolean {
+  const c = command.trim();
+  if (!isListedCommand(c)) return false;
+  const bare = c.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|[^\s'"]*)\s+)+/, '');
+  return TEST_COMMANDS.some((re) => re.test(bare));
+}
+
 export const UNRESTRICTED_WARNING = 'Unrestricted command: not on the verification list. It runs write-protected and offline, but can read any file you can and run any program.';
 
 function capped(buf: string): string {

@@ -2,12 +2,12 @@
 // and translates everything into the shared HarnessEvent stream.
 import type { CancelStatus, EditProposal, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
-import { isAutoApprovableCommand, isListedCommand, UNRESTRICTED_WARNING } from '../mcp/command';
+import { isAutoApprovableCommand, isListedCommand, isTestCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
 import { Attempt, type AttemptResult, type CallDecision, type PendingCall } from '../trueforge/attempt';
-import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, retryDelayMs, safeMessage } from '../trueforge/errors';
+import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, redactSecrets, retryDelayMs, safeMessage } from '../trueforge/errors';
 import { appendTurnLog, type AttemptRecord } from './turn-log';
 import { traceUrl, type TrueForgeClient, type TrueForgeSdk } from '../trueforge/sdk';
 import { TurnEventBuffer } from './event-buffer';
@@ -34,6 +34,30 @@ export interface TurnDeps {
   settleMs: number;
   /** JSON-lines turn log (no content); undefined disables it. */
   turnLogPath?: string | undefined;
+  /** Set when this turn resumes an interrupted one (TurnRequest.resumeOf). */
+  resumeFrom?: ResumeFrom | undefined;
+}
+
+/** What a resumed turn inherits from the turn that stopped on a rate limit. */
+export interface ResumeFrom {
+  turnId: string;
+  /** Files the interrupted turn changed (applied edits, and files commands changed). */
+  changedFiles: string[];
+  commandsUsed: number;
+  testsUsed: number;
+}
+
+/** Suggested wait before Resume after a rate limit: NVIDIA's free tier sends no Retry-After. */
+export const RESUME_WAIT_MS = 60_000;
+
+/** Put before the original request when a turn resumes one that stopped on a rate limit. */
+export function resumeNote(from: Pick<ResumeFrom, 'changedFiles'>): string {
+  const changed = from.changedFiles.length
+    ? `Already changed in that turn: ${from.changedFiles.join(', ')}. Those files now differ from what you read earlier: ` +
+      're-read only the line ranges you are about to edit (for their exact text and sha256) and do not redo changes that are already there.'
+    : 'No file was changed in that turn.';
+  return 'Resumed turn: your previous turn on this task stopped early because the model provider rate-limited requests (HTTP 429). ' +
+    `${changed} Commands already run in that turn count against this turn's limits. Continue from where it stopped and finish the task.\n\nOriginal request:`;
 }
 
 type ReviewWaiter = {
@@ -59,6 +83,17 @@ export function commandBudgetOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>
 export const COMMAND_BUDGET_EXHAUSTED =
   'command budget for this turn exhausted; stop running commands, finish edits and summarize';
 
+/** Default most test runs (pytest, python -m pytest) per turn, counted separately from other commands (0.4.5). */
+export const DEFAULT_TEST_COMMAND_BUDGET = { agent: 3, inline: 1 } as const;
+
+export function testCommandBudgetOf(req: Pick<TurnRequest, 'mode' | 'testCommandBudget'>): number {
+  const b = req.testCommandBudget;
+  return typeof b === 'number' && Number.isInteger(b) && b >= 0 ? b : DEFAULT_TEST_COMMAND_BUDGET[req.mode];
+}
+
+export const TEST_BUDGET_EXHAUSTED =
+  'test-command budget for this turn exhausted; do not run more tests, finish edits and summarize with the last test result';
+
 /** propose_edit refusals caused by the shape of the arguments rather than by the file's content. */
 const ARGUMENT_ERROR_CODES = new Set(['INVALID_ARGS', 'INVALID_EDIT', 'OUTSIDE_WORKSPACE']);
 
@@ -79,14 +114,37 @@ export class TurnRun {
   private readonly waiters = new Map<string, ReviewWaiter>();
   private readonly decided = new Map<string, ReviewDecision>();
   private finishedPromise: Promise<void> | undefined;
-  private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, commandPrompts: 0, autoApproved: 0, budgetRefused: 0, attempts: [] as AttemptRecord[] };
+  private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, commandPrompts: 0, autoApproved: 0, budgetRefused: 0, testBudgetRefused: 0, subagents: 0, attempts: [] as AttemptRecord[] };
   /** run_command calls presented (prompted or auto-approved) this turn, counted against the command budget. */
   private commandsUsed = 0;
+  /** Test runs presented this turn, counted against the test-command budget. */
+  private testsUsed = 0;
+  /** Files this turn changed: applied edits and files reported changed by commands. */
+  private readonly changedFiles = new Set<string>();
+  /** Set when the turn stopped on a rate limit and emitted `resumable`. */
+  private resumableState: ResumeFrom | undefined;
+  private resumedBy: string | undefined;
   /** Files with a propose_edit refused this turn for an argument error. */
   private readonly argumentErrors = new Set<string>();
 
   constructor(readonly req: TurnRequest, private readonly deps: TurnDeps) {
     this.buffer = new TurnEventBuffer({ sessionId: req.sessionId, turnId: req.turnId });
+    if (deps.resumeFrom) {
+      // A resumed turn continues the interrupted one: same limits used, same files already changed.
+      this.commandsUsed = deps.resumeFrom.commandsUsed;
+      this.testsUsed = deps.resumeFrom.testsUsed;
+      for (const f of deps.resumeFrom.changedFiles) this.changedFiles.add(f);
+    }
+  }
+
+  /** What a Resume of this turn inherits; undefined unless it stopped on a rate limit and was not resumed yet. */
+  get resumable(): ResumeFrom | undefined {
+    return this.done && !this.resumedBy ? this.resumableState : undefined;
+  }
+
+  /** Marks this turn as resumed by `turnId`: a turn can be resumed once. */
+  markResumed(turnId: string): void {
+    this.resumedBy = turnId;
   }
 
   get done(): boolean {
@@ -119,6 +177,8 @@ export class TurnRun {
       status: done && done.t === 'done' ? done.status : 'error', ms, attempts: this.log.attempts,
       retries: this.log.retries, fallback: this.log.fallback, toolCalls: this.log.toolCalls, reviews: this.log.reviews,
       commandPrompts: this.log.commandPrompts, autoApprovedCommands: this.log.autoApproved, budgetRefusedCommands: this.log.budgetRefused,
+      budgetRefusedTests: this.log.testBudgetRefused, subagents: this.log.subagents,
+      ...(this.req.resumeOf ? { resumeOf: this.req.resumeOf } : {}), ...(this.resumableState ? { resumable: true } : {}),
       inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
     });
   }
@@ -187,7 +247,13 @@ export class TurnRun {
     const emit = this.buffer.emit.bind(this.buffer);
     emit({ t: 'turn_started' });
     emit({ t: 'status', state: 'starting' });
-    const { input, context } = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens);
+    const built = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens);
+    const { context } = built;
+    const input = this.deps.resumeFrom ? `${resumeNote(this.deps.resumeFrom)}\n${built.input}` : built.input;
+    if (this.deps.resumeFrom) {
+      const n = this.deps.resumeFrom.changedFiles.length;
+      emit({ t: 'status', state: 'starting', detail: `Resuming the turn that stopped on a rate limit (${n} file${n === 1 ? '' : 's'} already changed)` });
+    }
     if (context) emit({ t: 'context_report', report: context.report });
 
     let agent = this.deps.agentName;
@@ -219,15 +285,21 @@ export class TurnRun {
 
       const scope = this.deps.scopes.open(runtimeSessionId);
       scope.resetForTurn();
-      scope.onApplied = (result) => emit({ t: 'edit_applied', result });
+      scope.onApplied = (result) => {
+        if (result.status === 'saved' || result.status === 'buffer_applied' || result.status === 'save_failed') this.changedFiles.add(result.path);
+        emit({ t: 'edit_applied', result });
+      };
       scope.workspaceRoot = this.deps.workspaceRoot;
       scope.onContext = (report) => emit({ t: 'context_report', report });
-      scope.onCommand = (r) => emit({
-        t: 'status', state: 'running',
-        detail: (r.changedFiles.length
-          ? `command exited ${r.exitCode ?? 'without code'}; it changed files outside review: ${r.changedFiles.join(', ')}`
-          : `command exited ${r.exitCode ?? 'without code'}; no files changed`).slice(0, 300),
-      });
+      scope.onCommand = (r) => {
+        for (const f of r.changedFiles) this.changedFiles.add(f);
+        emit({
+          t: 'status', state: 'running',
+          detail: (r.changedFiles.length
+            ? `command exited ${r.exitCode ?? 'without code'}; it changed files outside review: ${r.changedFiles.join(', ')}`
+            : `command exited ${r.exitCode ?? 'without code'}; no files changed`).slice(0, 300),
+        });
+      };
       this.scope = scope;
       if (this.cancelRequested) scope.cancel();
 
@@ -298,6 +370,11 @@ export class TurnRun {
           continue;
         }
       }
+      if (cls === 'MODEL_UNAVAILABLE' && isRateLimited(result.message) && !this.cancelRequested) {
+        // The editor may offer Resume: a new turn on the same conversation, told what this one already changed.
+        this.resumableState = { turnId: this.req.turnId, changedFiles: [...this.changedFiles].sort(), commandsUsed: this.commandsUsed, testsUsed: this.testsUsed };
+        emit({ t: 'resumable', reason: 'rate_limited', retryAfterMs: Math.max(RESUME_WAIT_MS, retryDelayMs(result.message, 0)), changedFiles: this.resumableState.changedFiles });
+      }
       const code: ProtocolError['code'] = cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';
       const prefix = cls === 'MODEL_AUTH' ? 'Model authentication failed' : cls === 'MODEL_UNAVAILABLE' ? 'Model unavailable' : cls === 'MODEL_OTHER' ? 'Model error' : 'Turn failed';
       const note = wrote ? ' (no retry or fallback: this turn already changed the workspace)'
@@ -335,6 +412,17 @@ export class TurnRun {
           case 'status':
             if (e.state === 'compacting' || e.state === 'running') emit({ t: 'status', state: e.state, ...(e.detail ? { detail: e.detail } : {}) });
             break;
+          case 'subagent': {
+            if (e.phase === 'started') this.log.subagents++;
+            const task = e.task ? redactSecrets(e.task.replace(/\s+/g, ' ').trim()).slice(0, 200) : undefined;
+            const error = e.error ? safeMessage(e.error) : undefined;
+            emit({ t: 'subagent', phase: e.phase, threadId: e.threadId, name: e.name.slice(0, 80), ...(task ? { task } : {}),
+              ...(e.ok === undefined ? {} : { ok: e.ok }), ...(error ? { error } : {}) });
+            emit({ t: 'status', state: 'running', detail: (e.phase === 'started'
+              ? `Delegated to sub-agent "${e.name}"${task ? `: ${task}` : ''}`
+              : `Sub-agent "${e.name}" ${e.ok ? 'finished' : `failed${error ? `: ${error}` : ''}`}`).slice(0, 300) });
+            break;
+          }
           case 'turn_created':
             emit({ t: 'status', state: 'running' });
             break;
@@ -405,15 +493,19 @@ export class TurnRun {
         const command = typeof a.command === 'string' ? a.command : '';
         const cwd = typeof a.cwd === 'string' && a.cwd ? a.cwd : '.';
         if (!command) { deny('INVALID_ARGS: command must be a non-empty string'); continue; }
-        const budget = commandBudgetOf(this.req);
-        if (this.commandsUsed >= budget) {
-          // Hard per-turn limit, enforced here rather than trusted to the instructions: refused without a prompt.
-          this.log.budgetRefused++;
-          this.buffer.emit({ t: 'command_budget_reached', callId: call.id, command, budget });
-          deny(`COMMAND_BUDGET_EXHAUSTED: ${COMMAND_BUDGET_EXHAUSTED} (limit ${budget} per turn; nothing was run)`);
+        // Hard per-turn limits, enforced here rather than trusted to the instructions: refused without a prompt.
+        // Test runs and other commands have separate budgets, so a debug command cannot use up the test reruns.
+        const test = isTestCommand(command);
+        const budget = test ? testCommandBudgetOf(this.req) : commandBudgetOf(this.req);
+        if ((test ? this.testsUsed : this.commandsUsed) >= budget) {
+          if (test) this.log.testBudgetRefused++; else this.log.budgetRefused++;
+          this.buffer.emit({ t: 'command_budget_reached', callId: call.id, command, budget, kind: test ? 'test' : 'other' });
+          deny(test
+            ? `TEST_BUDGET_EXHAUSTED: ${TEST_BUDGET_EXHAUSTED} (limit ${budget} test runs per turn; nothing was run)`
+            : `COMMAND_BUDGET_EXHAUSTED: ${COMMAND_BUDGET_EXHAUSTED} (limit ${budget} per turn, test runs not included; nothing was run)`);
           continue;
         }
-        this.commandsUsed++;
+        if (test) this.testsUsed++; else this.commandsUsed++;
         this.buffer.emit({ t: 'status', state: 'awaiting_review', detail: command.slice(0, 120) });
         const listed = isListedCommand(command);
         if (this.req.autoApproveSafeCommands === true && isAutoApprovableCommand(command)) {

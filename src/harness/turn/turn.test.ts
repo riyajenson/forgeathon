@@ -13,7 +13,7 @@ import { proposeEditTool } from '../mcp/tools';
 import { runCommandTool } from '../mcp/command';
 import { sha256Hex } from '../review';
 import type { TrueForgeClient, TrueForgeSdk } from '../trueforge/sdk';
-import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, TurnRun, type TurnDeps } from './turn';
+import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, RESUME_WAIT_MS, TEST_BUDGET_EXHAUSTED, testCommandBudgetOf, TurnRun, type TurnDeps } from './turn';
 
 /** An async event stream the test feeds by hand. Aborting the request signal ends it with an error. */
 class Channel implements AsyncIterable<unknown> {
@@ -71,13 +71,16 @@ class FakeTrueForge {
   turns = 0;
   cancels = 0;
   /** Every user.tool_approval sent back to TrueForge, in order. */
-  readonly approvals: Array<{ toolCallId: string; approval: { status: string; reason?: string } }> = [];
+  readonly approvals: Array<{ toolCallId: string; threadId?: string; approval: { status: string; reason?: string } }> = [];
+  /** The user message of every turn started, in order. */
+  readonly inputs: string[] = [];
   private active: Channel | undefined;
   constructor(private readonly script: Script) {}
 
   readonly client = {
     sessions: {
-      createTurnStream: async (sessionId: string, _req: unknown, opts?: { abortSignal?: AbortSignal }) => {
+      createTurnStream: async (sessionId: string, req: { input?: Array<{ content?: string }> }, opts?: { abortSignal?: AbortSignal }) => {
+        this.inputs.push(req?.input?.[0]?.content ?? '');
         const ch = new Channel(opts?.abortSignal);
         this.active = ch;
         this.script.onTurn(ch, ++this.turns, sessionId);
@@ -449,8 +452,8 @@ async function userDeniesCommands(run: TurnRun, asked: HarnessEvent[]): Promise<
   }
 }
 
-test('command budget: after 3 commands in an agent turn, run_command is refused without asking', async () => {
-  const commands = ['python -m pytest tests/a.py', 'git diff', 'flask routes', 'python -m pytest', 'ls'];
+test('command budget: after 3 non-test commands in an agent turn, run_command is refused without asking', async () => {
+  const commands = ['git status', 'flask routes', 'python -c "import flask"', 'git diff', 'ls'];
   const tf = stepwise(commands.map((command) => ['run_command', { command }]));
   const run = makeRun(tf);
   const asked: HarnessEvent[] = [];
@@ -458,15 +461,42 @@ test('command budget: after 3 commands in an agent turn, run_command is refused 
   await run.start();
   assert.deepEqual(asked.map((e) => e.t === 'command_request' && e.command), commands.slice(0, 3), 'only the first 3 were shown');
   const reached = events(run).filter((e) => e.t === 'command_budget_reached') as Array<Extract<HarnessEvent, { t: 'command_budget_reached' }>>;
-  assert.deepEqual(reached.map((e) => [e.command, e.budget]), [['python -m pytest', 3], ['ls', 3]]);
+  assert.deepEqual(reached.map((e) => [e.command, e.budget, e.kind]), [['git diff', 3, 'other'], ['ls', 3, 'other']]);
   assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'allow', 'allow', 'deny', 'deny']);
   for (const a of tf.approvals.slice(3)) assert.match(a.approval.reason ?? '', new RegExp(COMMAND_BUDGET_EXHAUSTED));
   assert.equal(terminal(run)[0]!.t === 'done' && terminal(run)[0]!.status, 'done');
 });
 
+test('test-command budget: test runs have their own budget (3 for agent); other commands are counted separately', async () => {
+  const commands = ['python -m pytest tests/a.py', 'git diff', 'pytest -q', 'flask routes', '.venv/bin/pytest tests/a.py', 'pytest tests/b.py', 'ls'];
+  const tf = stepwise(commands.map((command) => ['run_command', { command }]));
+  const run = makeRun(tf);
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.deepEqual(asked.map((e) => e.t === 'command_request' && e.command),
+    ['python -m pytest tests/a.py', 'git diff', 'pytest -q', 'flask routes', '.venv/bin/pytest tests/a.py', 'ls'], 'the 4th test run was not shown');
+  const reached = events(run).filter((e) => e.t === 'command_budget_reached') as Array<Extract<HarnessEvent, { t: 'command_budget_reached' }>>;
+  assert.deepEqual(reached.map((e) => [e.command, e.budget, e.kind]), [['pytest tests/b.py', 3, 'test']]);
+  assert.match(tf.approvals[5]!.approval.reason ?? '', /^TEST_BUDGET_EXHAUSTED: /);
+  assert.match(tf.approvals[5]!.approval.reason ?? '', new RegExp(TEST_BUDGET_EXHAUSTED));
+});
+
+test('test-command budget: a denied debug command does not use up a test rerun (the phase 1b B1 sequence)', async () => {
+  // pytest fails, fix, pytest fails again, a denied debug command, then the third test run still runs.
+  const tf = stepwise([['run_command', { command: 'python -m pytest tests/a.py -q' }], ['run_command', { command: 'python -m pytest tests/a.py -q -x' }],
+    ['run_command', { command: 'python -c "import sys; print(sys.path)" | head' }], ['run_command', { command: 'python -m pytest tests/a.py -q -k config' }]]);
+  const run = makeRun(tf);
+  const asked: HarnessEvent[] = [];
+  void userDeniesCommands(run, asked);
+  await run.start();
+  assert.equal(asked.length, 4, 'all four were shown');
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 0);
+});
+
 test('command budget: denied and unrestricted commands count; auto-approved ones count too', async () => {
   // Denied by the user: still used the budget (the user was asked).
-  let tf = stepwise([['run_command', { command: 'rm -rf build' }], ['run_command', { command: 'pytest' }]]);
+  let tf = stepwise([['run_command', { command: 'rm -rf build' }], ['run_command', { command: 'git status' }]]);
   let run = makeRun(tf, {}, { commandBudget: 1 });
   const asked: HarnessEvent[] = [];
   void userDeniesCommands(run, asked);
@@ -475,31 +505,153 @@ test('command budget: denied and unrestricted commands count; auto-approved ones
   assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'deny']);
   assert.match(tf.approvals[1]!.approval.reason ?? '', /COMMAND_BUDGET_EXHAUSTED/);
 
-  // Auto-approved: counted as well, so auto-approval cannot exceed the budget.
-  tf = stepwise([['run_command', { command: 'git status' }], ['run_command', { command: 'git diff' }]]);
-  run = makeRun(tf, {}, { commandBudget: 1, autoApproveSafeCommands: true });
+  // Auto-approved: counted as well, so auto-approval cannot exceed the budget (other commands and test runs alike).
+  tf = stepwise([['run_command', { command: 'git status' }], ['run_command', { command: 'git diff' }], ['run_command', { command: 'pytest' }], ['run_command', { command: 'pytest -q' }]]);
+  run = makeRun(tf, {}, { commandBudget: 1, testCommandBudget: 1, autoApproveSafeCommands: true });
   void userAnswers(run, []);
   await run.start();
-  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'deny']);
-  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 1);
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'deny', 'allow', 'deny']);
+  assert.deepEqual((events(run).filter((e) => e.t === 'command_budget_reached') as Array<Extract<HarnessEvent, { t: 'command_budget_reached' }>>).map((e) => e.kind), ['other', 'test']);
 });
 
-test('command budget: 0 refuses every command; edits are never limited', async () => {
-  const tf = stepwise([['run_command', { command: 'pytest' }], ['propose_edit', editArgs()]]);
-  const run = makeRun(tf, {}, { commandBudget: 0 });
+test('command budgets: 0 and 0 refuse every command; edits are never limited', async () => {
+  const tf = stepwise([['run_command', { command: 'pytest' }], ['run_command', { command: 'git status' }], ['propose_edit', editArgs()]]);
+  const run = makeRun(tf, {}, { commandBudget: 0, testCommandBudget: 0 });
   const asked: HarnessEvent[] = [];
   void userAnswers(run, asked);
   await run.start();
-  assert.deepEqual(asked.map((e) => e.t), ['review_request'], 'the edit was still reviewed; the command never asked');
-  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'allow']);
+  assert.deepEqual(asked.map((e) => e.t), ['review_request'], 'the edit was still reviewed; the commands never asked');
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'deny', 'allow']);
 });
 
-test('command budget defaults: 3 for agent, 1 for inline; invalid values use the default', () => {
+test('command budget defaults: 3 for agent, 1 for inline (both budgets); invalid values use the default', () => {
   assert.equal(commandBudgetOf({ mode: 'agent' }), 3);
   assert.equal(commandBudgetOf({ mode: 'inline' }), 1);
   assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: 0 }), 0);
   assert.equal(commandBudgetOf({ mode: 'inline', commandBudget: 5 }), 5);
   for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 3);
+  assert.equal(testCommandBudgetOf({ mode: 'agent' }), 3);
+  assert.equal(testCommandBudgetOf({ mode: 'inline' }), 1);
+  assert.equal(testCommandBudgetOf({ mode: 'agent', testCommandBudget: 0 }), 0);
+  for (const bad of [-1, 2.5, Number.NaN]) assert.equal(testCommandBudgetOf({ mode: 'inline', testCommandBudget: bad }), 1);
+});
+
+/** An approved edit is applied through the MCP tool, then TrueForge ends the turn with `message`. */
+function editThenError(message: string): FakeTrueForge {
+  return new FakeTrueForge({
+    onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'propose_edit', editArgs())),
+    onApproval: (sub, sessionId) => {
+      void proposeEditTool({ port, scope: scopeOf(sessionId) }, editArgs()).then(() => sub.push(done('error', message)));
+    },
+  });
+}
+
+test('resume: a rate limit after an applied edit emits resumable (changed files, wait) before the error; no retry or fallback', async () => {
+  const tf = editThenError('[Model Error] Request failed (429): Too Many Requests');
+  const run = makeRun(tf);
+  void clickThrough(run);
+  await run.start();
+  assert.equal(tf.turns, 1, 'no retry or fallback after a write');
+  const kinds = events(run).map((e) => e.t);
+  assert.ok(kinds.indexOf('resumable') >= 0 && kinds.indexOf('resumable') < kinds.indexOf('error'), 'resumable comes before the error');
+  const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
+  assert.deepEqual([r.reason, r.changedFiles], ['rate_limited', [FILE]]);
+  assert.ok(r.retryAfterMs >= RESUME_WAIT_MS);
+  assert.equal(lastError(run)!.error.workspaceEffect, 'changed');
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 });
+  run.markResumed('t-next');
+  assert.equal(run.resumable, undefined, 'a turn is resumed once');
+});
+
+test('resume: no resumable event for failures that are not rate limits', async () => {
+  for (const message of ['[Model Error] Request failed (401): Unauthorized', '[Model Error] Request failed (503): overloaded', 'iteration limit reached']) {
+    const run = makeRun(editThenError(message));
+    void clickThrough(run);
+    await run.start();
+    assert.equal(events(run).some((e) => e.t === 'resumable'), false, message);
+    assert.equal(run.resumable, undefined);
+  }
+});
+
+test('resume: the resumed turn opens with the resume note and the original request, and inherits the command usage', async () => {
+  const tf = stepwise([['run_command', { command: 'git status' }], ['run_command', { command: 'pytest tests/a.py' }]]);
+  const run = makeRun(tf, { resumeFrom: { turnId: 't-before', changedFiles: [FILE, 'docs/x.rst'], commandsUsed: 3, testsUsed: 1 } });
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.match(tf.inputs[0]!, /^Resumed turn: your previous turn on this task stopped early because the model provider rate-limited requests \(HTTP 429\)\./);
+  assert.match(tf.inputs[0]!, /Already changed in that turn: src\/app\.py, docs\/x\.rst\./);
+  assert.match(tf.inputs[0]!, /Original request:\nchange alpha/);
+  assert.deepEqual(asked.map((e) => e.t === 'command_request' && e.command), ['pytest tests/a.py'], 'the other-command budget was used up before the resume');
+  assert.ok(events(run).some((e) => e.t === 'status' && /^Resuming the turn that stopped on a rate limit \(2 files already changed\)/.test(e.detail ?? '')));
+});
+
+test('resume: a resumed turn that is rate limited again lists the files of both turns', async () => {
+  const run = makeRun(editThenError('[Model Error] Request failed (429): Too Many Requests'), { resumeFrom: { turnId: 't-before', changedFiles: ['docs/x.rst'], commandsUsed: 1, testsUsed: 2 } });
+  void clickThrough(run);
+  await run.start();
+  const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
+  assert.deepEqual(r.changedFiles, ['docs/x.rst', FILE]);
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, changedFiles: ['docs/x.rst', FILE], commandsUsed: 1, testsUsed: 2 });
+});
+
+test('sub-agents: delegation becomes subagent events and status lines; its edit is reviewed and approved on its own thread; its text is not the reply', async () => {
+  let eventsSent = false;
+  const child = ev('model.message', { threadId: 'th-sub', content: 'child notes', toolCalls: [{ id: 'cc1', function: { name: 'propose_edit', arguments: JSON.stringify(editArgs()) }, toolInfo: { type: 'mcp', name: 'propose_edit', serverName: 'vscode' } }] });
+  const tf = new FakeTrueForge({
+    onTurn: (ch) => ch.push(
+      ev('turn.created', { turnId: 'rt-1' }),
+      ev('model.message', { threadId: 'th-1', content: 'Delegating. ', toolCalls: [{ id: 'cs', function: { name: 'create_sub_agent', arguments: JSON.stringify({ name: 'explorer', input: 'Find where alpha is defined\nand tested' }) }, toolInfo: { type: 'truefoundry-system', name: 'create_sub_agent' } }] }),
+      ev('thread.created', { threadId: 'th-sub', title: 'explorer', parent: { threadId: 'th-1', toolCallId: 'cs' }, agentInfo: { type: 'dynamic', name: 'explorer', input: 'Find where alpha is defined\nand tested' } }),
+      child,
+      ev('tool.approval_required', { threadId: 'th-sub', toolCalls: [{ id: 'cc1', sourceEventId: child.id }] }),
+      ev('turn.update', { state: { status: 'paused' } }),
+    ),
+    onApproval: (sub, sessionId) => {
+      if (eventsSent) return;
+      eventsSent = true;
+      void proposeEditTool({ port, scope: scopeOf(sessionId) }, editArgs()).then(() => sub.push(
+        ev('thread.done', { threadId: 'th-sub', title: 'explorer', parent: { threadId: 'th-1', toolCallId: 'cs' }, state: { status: 'done', output: {} } }),
+        ev('model.message', { threadId: 'th-1', content: 'All done.' }),
+        done('done'),
+      ));
+    },
+  });
+  const run = makeRun(tf);
+  void clickThrough(run);
+  await run.start();
+  const subs = events(run).filter((e) => e.t === 'subagent') as Array<Extract<HarnessEvent, { t: 'subagent' }>>;
+  assert.deepEqual(subs.map((e) => [e.phase, e.name, e.threadId, e.task, e.ok]), [
+    ['started', 'explorer', 'th-sub', 'Find where alpha is defined and tested', undefined],
+    ['finished', 'explorer', 'th-sub', undefined, true],
+  ]);
+  const details = events(run).filter((e) => e.t === 'status' && e.detail).map((e) => (e as { detail: string }).detail);
+  assert.ok(details.includes('Delegated to sub-agent "explorer": Find where alpha is defined and tested'));
+  assert.ok(details.includes('Sub-agent "explorer" finished'));
+  assert.equal(events(run).filter((e) => e.t === 'review_request').length, 1, "the sub-agent's edit was reviewed");
+  assert.deepEqual(tf.approvals.map((a) => [a.toolCallId, a.threadId, a.approval.status]), [['cc1', 'th-sub', 'allow']]);
+  const text = events(run).filter((e) => e.t === 'text').map((e) => (e as { delta: string }).delta).join('');
+  assert.equal(text, 'Delegating. All done.');
+  assert.equal(await fs.readFile(path.join(root, FILE), 'utf8'), 'def alpha():\n    return 10\n');
+  const call = events(run).find((e) => e.t === 'tool_call' && e.displayName === 'create_sub_agent') as Extract<HarnessEvent, { t: 'tool_call' }>;
+  assert.equal(call.tool, 'internal');
+  assert.equal(call.summary, 'explorer: Find where alpha is defined and tested');
+});
+
+test('sub-agents: a failed sub-agent is reported with its error', async () => {
+  const tf = new FakeTrueForge({
+    onTurn: (ch) => ch.push(
+      ev('turn.created', { turnId: 'rt-1' }),
+      ev('thread.created', { threadId: 'th-sub', title: 'x', parent: { threadId: 'th-1', toolCallId: 'cs' }, agentInfo: { type: 'dynamic', name: 'scout', input: 'look' } }),
+      ev('thread.done', { threadId: 'th-sub', title: 'x', parent: { threadId: 'th-1', toolCallId: 'cs' }, state: { status: 'error', error: '[Model Error] Request failed (429): slow down' } }),
+      done('done'),
+    ),
+  });
+  const run = makeRun(tf);
+  await run.start();
+  const fin = events(run).find((e) => e.t === 'subagent' && e.phase === 'finished') as Extract<HarnessEvent, { t: 'subagent' }>;
+  assert.deepEqual([fin.ok, fin.error], [false, '[Model Error] Request failed (429): slow down']);
+  assert.ok(events(run).some((e) => e.t === 'status' && e.detail === 'Sub-agent "scout" failed: [Model Error] Request failed (429): slow down'));
 });
 
 test('autoApproveSafeCommands is narrowed: python -c, flask and path- or env-prefixed pytest still ask (not as unrestricted)', async () => {

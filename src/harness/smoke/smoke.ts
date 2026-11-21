@@ -11,6 +11,12 @@
 // and spell out the propose_edit argument shape in the second refusal.
 // --meter-log: the log of scripts/model-meter.mjs, to report model requests and 429s per task (TrueForge's
 // internal retries included).
+// --resume-after-rate-limit: when Task B stops on a rate limit (a resumable event), wait --resume-wait-sec (default:
+// the harness's suggestion, 60 s) and resume it once in the same session (TurnRequest.resumeOf); the checks then
+// judge the resumed turn's result. Off by default.
+// Task R (mock model only, scripts/e2e-mock.sh): the resume path. The scripted model makes Task A's edit, then
+// answers 429 until the turn stops with resumable; the smoke resumes it after 1 s and checks the outcome.
+// --subagents: Task C's temporary re-setup keeps dynamic sub-agents on (use it when the agents were set up with it).
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -31,6 +37,8 @@ export const TASK_A = "Treat the values 'off' and 'n' as false as well, case-ins
 export const TASK_B = 'Add a new built-in CLI command flask config that prints the loaded application\'s configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "***". It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.';
 /** Mock model only: the scripted model's guardrail check (src/harness/testing/demo-script.ts). */
 const GUARD_TASK = 'guardrail check: try a malformed edit twice, then run five commands.';
+/** Mock model only: the scripted model's resume check. */
+const RESUME_TASK = 'resume check: make get_debug_flag treat the values off and n as false (the scripted model is rate limited after its edit).';
 /** Flask 3.1.3 pins pytest 9.0.2 (uv.lock); newer pytest removed an internal tests/test_cli.py imports. */
 const PYTEST = 'pytest==9.0.2';
 
@@ -54,8 +62,20 @@ interface TurnStats {
   /** Prompts flagged unrestricted, and how many of them were denied (--deny-unrestricted). */
   unrestrictedPrompts: number;
   deniedCommands: number;
-  /** run_command calls refused by the turn's command budget (command_budget_reached). */
+  /** run_command calls refused by the turn's command budget (command_budget_reached, other commands). */
   budgetReached: number;
+  /** Test runs refused by the turn's test-command budget (command_budget_reached kind 'test'). */
+  testBudgetReached: number;
+  /** Sub-agents TrueForge started (dynamic sub-agents), with how each ended. */
+  subagents: Array<{ name: string; task?: string; ok?: boolean; error?: string }>;
+  /** Set when the turn stopped on a rate limit (resumable event). */
+  resumable?: { retryAfterMs: number; changedFiles: string[] };
+  /** The resumed turn (--resume-after-rate-limit, Task R). */
+  resumed?: TurnStats;
+  sessionId?: string;
+  turnId?: string;
+  /** TrueForge sessions the turn ran in (more than one after a fallback). */
+  runtimeSessions: string[];
   /** The model's reply text. */
   text: string;
   fallback?: string;
@@ -92,17 +112,20 @@ async function sh(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessE
   }
 }
 
-async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit<TurnRequest, 'sessionId' | 'turnId'>, decide: 'accept' | 'reject', meterLog?: string): Promise<TurnStats> {
+async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit<TurnRequest, 'sessionId' | 'turnId'>, decide: 'accept' | 'reject', meterLog?: string, inSession?: string): Promise<TurnStats> {
   const meterStart = (await meterRecordsSince(meterLog, 0)).lines;
   const req = <T>(b: T) => ({ version: PROTOCOL_VERSION, requestId: randomUUID(), body: b });
-  const s = await h.createSession(req({ workspaceRoot: workspace }));
-  if (!s.ok) throw new Error(s.error.message);
-  const sessionId = s.body.sessionId;
+  let sessionId = inSession;
+  if (!sessionId) {
+    const s = await h.createSession(req({ workspaceRoot: workspace }));
+    if (!s.ok) throw new Error(s.error.message);
+    sessionId = s.body.sessionId;
+  }
   const turnId = randomUUID();
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [], compactions: [], malformedEdits: 0, refusedEdits: 0, warnings: [] };
+  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, testBudgetReached: 0, subagents: [], runtimeSessions: [], sessionId, turnId, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [], compactions: [], malformedEdits: 0, refusedEdits: 0, warnings: [] };
   const toolNames = new Map<string, string>();
   const proposals = new Map<string, { path: string; summary: string; hunks: readonly { hunkId: string; oldText: string; newText: string }[] }>();
   const compactionTimes: number[] = [];
@@ -111,7 +134,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
     if (!r.ok) { stats.error = r.error.message; break; }
     const e: HarnessEvent = r.body;
     switch (e.t) {
-      case 'session': stats.session = e.traceUrl; console.log(`  [${task}] session ${e.agentName} (${e.model}) ${e.traceUrl}`); break;
+      case 'session': stats.session = e.traceUrl; stats.runtimeSessions.push(e.runtimeSessionId); console.log(`  [${task}] session ${e.agentName} (${e.model}) ${e.traceUrl}`); break;
       case 'context_report':
         stats.contextFiles = [...new Set(e.report.selections.map((x) => x.path))];
         stats.contextUsed = `${e.report.estimatedTokens}/${e.report.budgetTokens} tokens, ${e.report.selections.length} items, ${e.report.skipped.length} skipped`;
@@ -150,7 +173,18 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
         await h.submitReview(req({ sessionId, turnId, callId: e.callId, kind: 'command' as const, allow }));
         break;
       }
-      case 'command_budget_reached': stats.budgetReached++; console.log(`  [${task}] command ${e.command} → refused: command budget (${e.budget}) reached`); break;
+      case 'command_budget_reached':
+        if (e.kind === 'test') stats.testBudgetReached++; else stats.budgetReached++;
+        console.log(`  [${task}] command ${e.command} → refused: ${e.kind === 'test' ? 'test-command' : 'command'} budget (${e.budget}) reached`);
+        break;
+      case 'subagent':
+        if (e.phase === 'started') stats.subagents.push({ name: e.name, ...(e.task ? { task: e.task } : {}) });
+        else {
+          const sa = [...stats.subagents].reverse().find((x) => x.name === e.name && x.ok === undefined);
+          if (sa) { sa.ok = e.ok === true; if (e.error) sa.error = e.error; }
+        }
+        break;
+      case 'resumable': stats.resumable = { retryAfterMs: e.retryAfterMs, changedFiles: e.changedFiles }; console.log(`  [${task}] RESUMABLE (rate limited; ${e.changedFiles.length} file(s) changed)`); break;
       case 'text': stats.text = (stats.text + e.delta).slice(-4000); break;
       case 'edit_applied': {
         stats.edits.push(`${e.result.path}: ${e.result.status}`);
@@ -268,9 +302,17 @@ async function main(): Promise<void> {
       check('A: docstring lists every false value (0, false, no, off, n)', docstring !== '' && missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : '');
     }
     if (tasks.includes('B')) {
-      const b = await turn(h, ws, 'B', { mode: 'agent', instruction: TASK_B, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) }, 'accept', meterLog);
+      const bBody = { mode: 'agent' as const, instruction: TASK_B, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) };
+      const b = await turn(h, ws, 'B', bBody, 'accept', meterLog);
       results.push(b);
-      check('B: turn done', b.status === 'done', b.error ?? '');
+      if (b.resumable && process.argv.includes('--resume-after-rate-limit')) {
+        const waitMs = process.argv.includes('--resume-wait-sec') ? Number(arg('--resume-wait-sec', '60')) * 1000 : b.resumable.retryAfterMs;
+        console.log(`  [B] waiting ${Math.round(waitMs / 1000)} s, then resuming the turn once`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        b.resumed = await turn(h, ws, 'B+resume', { ...bBody, resumeOf: b.turnId! }, 'accept', meterLog, b.sessionId);
+      }
+      const bFinal = b.resumed ?? b;
+      check(b.resumed ? 'B: turn done (after one Resume)' : 'B: turn done', bFinal.status === 'done', bFinal.error ?? '');
       const changed = (await sh('git', ['diff', '--name-only'], ws)).out.trim().split('\n').filter(Boolean);
       const needed = ['src/flask/cli.py', 'tests/test_cli.py', 'docs/cli.rst'];
       check('B: ≥3 files changed incl. cli.py, test_cli.py, cli.rst', needed.every((f) => changed.includes(f)), changed.join(', '));
@@ -306,6 +348,24 @@ async function main(): Promise<void> {
         new RegExp(`2 command\\(s\\) refused by the budget; shape hint in 1 refusal\\(s\\); ${denyUnrestricted ? 1 : 0} command\\(s\\) denied`).test(g.text), g.text.trim().slice(-200));
       check('G: no file changed', (await status()) === '', '');
     }
+    if (tasks.includes('R')) {
+      await sh('git', ['checkout', '--', '.'], ws);
+      const rBody = { mode: 'agent' as const, instruction: RESUME_TASK };
+      const r1 = await turn(h, ws, 'R', rBody, 'accept', meterLog);
+      results.push(r1);
+      check('R: the turn stopped on the rate limit with resumable, after saving helpers.py',
+        r1.status === 'error' && JSON.stringify(r1.resumable?.changedFiles) === '["src/flask/helpers.py"]' && r1.edits.join() === 'src/flask/helpers.py: saved', `${r1.status}; ${JSON.stringify(r1.resumable)}; ${r1.edits.join('; ')}`);
+      if (r1.resumable) {
+        await new Promise((r) => setTimeout(r, 1000));
+        r1.resumed = await turn(h, ws, 'R+resume', { ...rBody, resumeOf: r1.turnId! }, 'accept', meterLog, r1.sessionId);
+        const r2 = r1.resumed;
+        check('R: Resume finished in the same TrueForge session, with the earlier tool results in view',
+          r2.status === 'done' && r2.runtimeSessions[0] === r1.runtimeSessions[0] && /Resume check finished: [1-9]\d* earlier tool result\(s\) in view; src\/flask\/helpers\.py already changed\./.test(r2.text),
+          `${r2.status}; ${r2.text.trim().slice(-160)}`);
+      }
+      const off = await debugFlag('off');
+      check('R: the edit from before the rate limit is in place (FLASK_DEBUG=off → False)', off === 'False', off);
+    }
     if (tasks.includes('C')) {
       await sh('git', ['checkout', '--', '.'], ws);
       const cfg = JSON.parse(await fs.readFile(configPath, 'utf8')) as ModelsConfig;
@@ -315,7 +375,8 @@ async function main(): Promise<void> {
       const templates = await loadTemplates(repo);
       const { client } = await createClient(url);
       const quiet = () => undefined;
-      await runSetup({ client, cfg, templates, env: { ...process.env, [prov.apiKeyEnv]: 'invalid-key-for-task-c' }, log: quiet });
+      const subAgents = process.argv.includes('--subagents');
+      await runSetup({ client, cfg, templates, env: { ...process.env, [prov.apiKeyEnv]: 'invalid-key-for-task-c' }, log: quiet, subAgents });
       try {
         const selection = await selectionOf(ws, 'src/flask/helpers.py', 'get_debug_flag');
         // Reject the fallback's proposal so the workspace check shows no change.
@@ -326,7 +387,7 @@ async function main(): Promise<void> {
         const st = await status();
         check('C: git status clean (no changed files)', st === '', st);
       } finally {
-        await runSetup({ client, cfg, templates, env: process.env, log: quiet });
+        await runSetup({ client, cfg, templates, env: process.env, log: quiet, subAgents });
         console.log('  [C] primary provider key restored');
       }
     }
@@ -335,7 +396,7 @@ async function main(): Promise<void> {
   }
 
   console.log('\n=== turns');
-  for (const s of results) {
+  for (const s of results.flatMap((x) => (x.resumed ? [x, x.resumed] : [x]))) {
     console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, ${s.budgetReached} refused by the budget, ${s.unrestrictedPrompts} unrestricted (${s.deniedCommands} denied), tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
     if (s.firstDiffMs !== undefined) console.log(`   first diff after ${(s.firstDiffMs / 1000).toFixed(1)} s`);
     if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
@@ -347,6 +408,8 @@ async function main(): Promise<void> {
     for (const c of s.compactions) console.log(`   compaction at request ${c.request ?? '?'} after ${c.afterToolCalls} tool calls, ${c.beforeFirstEdit ? 'BEFORE' : 'after'} the first edit`);
     if (s.firstDiffRequest !== undefined) console.log(`   first diff from request ${s.firstDiffRequest}`);
     console.log(`   propose_edit failures: ${s.malformedEdits} malformed, ${s.refusedEdits} refused; warnings: ${s.warnings.length}`);
+    console.log(`   test runs refused by the test-command budget: ${s.testBudgetReached}; sub-agent delegations: ${s.subagents.length}${s.subagents.length ? ` ${JSON.stringify(s.subagents.map((x) => ({ name: x.name, ok: x.ok, task: x.task?.slice(0, 120) })))}` : ''}`);
+    if (s.resumable) console.log(`   stopped on a rate limit: resumable (${s.resumable.changedFiles.join(', ') || 'no files changed'})`);
     for (const w of s.warnings) console.log(`   WARNING ${w}`);
     if (s.error) console.log(`   error: ${s.error}`);
     if (s.session) console.log(`   trace: ${s.session}`);

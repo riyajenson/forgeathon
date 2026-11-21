@@ -1,6 +1,6 @@
 {
-  "$comment": "Real-model rehearsal of the submitted commit (repositoryCommit) on 2026-11-20 with the video settings (auto-approve safe commands, command budget 3, deny Unrestricted), profile nvidia-free, fresh TrueForge 0.185.1 database, requests paced at >= 1.6 s through scripts/model-meter.mjs, run by scripts/smoke-real-model.mjs as A, C (one attempt each), then B (first attempt; no second attempt was needed). Pre-flight first: NVIDIA ready (HTTP 200). Session URLs point at the local TrueForge used for the run. videoUrl and videoTimestamp are filled in after recording. Earlier rehearsals (19 Nov, other commits) are history in docs/STATUS.md.",
-  "repositoryCommit": "f67c719e6d929d3f39a07af35560619fcc4060bc",
+  "$comment": "Real-model rehearsal of the finals branch head (repositoryCommit) on 2026-11-21 with the video settings (auto-approve safe commands, agent command budget 5 plus one rerun after a fix, deny Unrestricted), profile nvidia-free, fresh TrueForge 0.185.1 database, requests counted (not paced) by scripts/model-meter.mjs, run by scripts/smoke-real-model.mjs. Order: three Task B runs (taskBRuns), then one A, B, C rehearsal (tasks), one attempt each. The rehearsal's B failed on NVIDIA rate limiting (23 of 34 requests answered 429 without Retry-After; peak 22 requests/min across the session) after it had changed the workspace, so it was neither retried nor sent to the fallback. Pre-flight: NVIDIA ready (HTTP 200). Session URLs point at the local TrueForge used for the run. videoUrl and videoTimestamp refer to the round-1 video, which is final. Round-1 evidence: tag round1-submission.",
+  "repositoryCommit": "6b21d390b4a8b624ad76f55e3c2e1454419a4b40",
   "flaskCommit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
   "repositoryUrl": "https://github.com/riyajenson/forgeathon",
   "videoUrl": "https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing",
@@ -33,14 +33,14 @@
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w92rxf4jqm82sfsswz3dw1",
-      "verification": "diff accepted and saved to src/flask/helpers.py; FLASK_DEBUG=off and N return False, 1 returns True; docstring lists 0, false, no, off, n",
-      "recordedAt": "2026-11-20T10:47:19.917Z",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7ybferrs0r0ypxqr2f9065x",
+      "verification": "PASS turn done; PASS exactly one applied edit, saved to helpers.py (1 review(s); src/flask/helpers.py: saved); PASS FLASK_DEBUG=off → False (False); PASS FLASK_DEBUG=N → False (case-insensitive) (False); PASS FLASK_DEBUG=1 → True (unchanged) (True); PASS docstring lists every false value (0, false, no, off, n)",
+      "recordedAt": "2026-11-21T06:07:41.639Z",
       "videoTimestamp": "00:03",
-      "inputTokens": 11071,
-      "outputTokens": 663,
-      "firstDiffSeconds": 10.1,
-      "turnSeconds": 13.9,
+      "inputTokens": 11134,
+      "outputTokens": 638,
+      "firstDiffSeconds": 9.9,
+      "turnSeconds": 12.1,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -51,7 +51,9 @@
         "autoApproved": 0,
         "prompted": 0,
         "deniedUnrestricted": 0,
-        "refusedByBudget": 0
+        "refusedByBudget": 0,
+        "refusedShape": 0,
+        "list": []
       },
       "modelRequests": {
         "total": 3,
@@ -61,63 +63,64 @@
           "nvidia nvidia/nemotron-3-ultra-550b-a55b": 3
         }
       },
-      "checks": "6/6 passed"
+      "checks": "6/6 passed",
+      "attempts": 1
     },
     {
       "task": "B",
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
-      "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w94129s064h8qres8fnd87",
-      "verification": "no files named; the agent edited src/flask/cli.py, tests/test_cli.py and docs/cli.rst (5 reviews, all saved); pytest tests/test_cli.py -q: 57 passed, 3 skipped; flask --help lists config; flask config prints JSON with SECRET/PASSWORD/TOKEN/KEY values masked",
-      "recordedAt": "2026-11-20T10:48:01.019Z",
+      "passed": false,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7ybfv1ax4sae1ttq8y9nqhj",
+      "verification": "FAIL turn done (Model unavailable: [Model Error] Request failed (429): Too Many Requests (no retry or fall); FAIL ≥3 files changed incl. cli.py, test_cli.py, cli.rst (src/flask/cli.py, src/flask/helpers.py, tests/test_cli.py); PASS context report includes src/flask/cli.py (7456/8000 tokens, 28 items, 7 skipped); FAIL pytest tests/test_cli.py -q passes (1 failed, 55 passed, 3 skipped in 0.17s); PASS flask --help lists config; FAIL flask config prints JSON with secrets masked (Traceback (most recent call last):)",
+      "recordedAt": "2026-11-21T06:07:54.352Z",
       "videoTimestamp": "00:52",
-      "inputTokens": 1097214,
-      "outputTokens": 6090,
-      "firstDiffSeconds": 42,
-      "turnSeconds": 97.8,
+      "inputTokens": 350055,
+      "outputTokens": 4385,
+      "firstDiffSeconds": 116.5,
+      "turnSeconds": 150.6,
       "reviews": {
-        "src/flask/cli.py": 2,
-        "tests/test_cli.py": 2,
-        "docs/cli.rst": 1
+        "src/flask/cli.py": 1,
+        "tests/test_cli.py": 1
       },
       "edits": [
         "src/flask/cli.py: saved",
-        "src/flask/cli.py: saved",
-        "tests/test_cli.py: saved",
-        "docs/cli.rst: saved",
         "tests/test_cli.py: saved"
       ],
       "commands": {
-        "autoApproved": 2,
-        "prompted": 1,
-        "deniedUnrestricted": 1,
-        "refusedByBudget": 3
+        "autoApproved": 0,
+        "prompted": 0,
+        "deniedUnrestricted": 0,
+        "refusedByBudget": 0,
+        "refusedShape": 0,
+        "list": []
       },
       "modelRequests": {
-        "total": 37,
-        "status429": 0,
+        "total": 34,
+        "status429": 23,
         "otherErrors": 0,
         "byModel": {
-          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 37
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 34
         }
       },
-      "checks": "6/6 passed",
-      "attempts": 1
+      "checks": "2/6 passed",
+      "attempts": 1,
+      "error": "Model unavailable: [Model Error] Request failed (429): Too Many Requests (no retry or fallback: this turn already changed the workspace)",
+      "usageSource": "TrueForge turn metrics (the harness reports no usage for a failed turn)"
     },
     {
       "task": "C",
       "mode": "real",
-      "model": "openrouter/nemotron-3-ultra-free",
+      "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7w937mfsxq3q3p7w526a4xn",
-      "verification": "invalid NVIDIA key: 401, automatic fallback to openrouter/nemotron-3-ultra-free in a new session, proposal rejected, git status clean",
-      "recordedAt": "2026-11-20T10:47:35.085Z",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7ybmf8p6z1rppf10s5gwha8",
+      "verification": "PASS primary failed and the fallback model took over (nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (); PASS turn finished without an error; PASS git status clean (no changed files)",
+      "recordedAt": "2026-11-21T06:10:26.042Z",
       "videoTimestamp": "03:17",
-      "inputTokens": 10995,
-      "outputTokens": 589,
-      "firstDiffSeconds": 9.6,
-      "turnSeconds": 11,
+      "inputTokens": 11315,
+      "outputTokens": 641,
+      "firstDiffSeconds": 8.1,
+      "turnSeconds": 10.1,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -126,7 +129,9 @@
         "autoApproved": 0,
         "prompted": 0,
         "deniedUnrestricted": 0,
-        "refusedByBudget": 0
+        "refusedByBudget": 0,
+        "refusedShape": 0,
+        "list": []
       },
       "modelRequests": {
         "total": 4,
@@ -138,7 +143,175 @@
         }
       },
       "checks": "3/3 passed",
+      "attempts": 1,
       "fallback": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (401): Unauthorized"
+    }
+  ],
+  "taskBRuns": [
+    {
+      "task": "B",
+      "mode": "real",
+      "model": "nvidia/nemotron-3-ultra",
+      "passed": true,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7yaz4kkcjmf0ckqfsdv2t55",
+      "verification": "PASS turn done; PASS ≥3 files changed incl. cli.py, test_cli.py, cli.rst (docs/cli.rst, src/flask/cli.py, tests/test_cli.py); PASS context report includes src/flask/cli.py (7456/8000 tokens, 28 items, 7 skipped); PASS pytest tests/test_cli.py -q passes (57 passed, 3 skipped in 0.17s); PASS flask --help lists config; PASS flask config prints JSON with secrets masked ({)",
+      "recordedAt": "2026-11-21T05:58:46.913Z",
+      "videoTimestamp": "00:52",
+      "inputTokens": 1069372,
+      "outputTokens": 4413,
+      "firstDiffSeconds": 38.9,
+      "turnSeconds": 88.2,
+      "reviews": {
+        "src/flask/cli.py": 2,
+        "docs/cli.rst": 1,
+        "tests/test_cli.py": 1
+      },
+      "edits": [
+        "src/flask/cli.py: saved",
+        "src/flask/cli.py: saved",
+        "docs/cli.rst: saved",
+        "tests/test_cli.py: saved"
+      ],
+      "commands": {
+        "autoApproved": 2,
+        "prompted": 3,
+        "deniedUnrestricted": 2,
+        "refusedByBudget": 1,
+        "refusedShape": 1,
+        "list": [
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -m pytest tests/test_cli.py -q → auto-approved",
+          "python -m flask --help → denied (unrestricted)",
+          "python -m flask --help → denied (unrestricted)",
+          "cd /tmp && python -c \"from flask.cli import cli; from click.testing import CliRu … → refused: shape",
+          "python -c \"from flask.cli import cli; from click.testing import CliRunner; r = C … → allowed",
+          "python -c \" … → refused: budget"
+        ]
+      },
+      "modelRequests": {
+        "total": 28,
+        "status429": 0,
+        "otherErrors": 0,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 28
+        }
+      },
+      "checks": "6/6 passed",
+      "attempts": 1,
+      "run": "B1"
+    },
+    {
+      "task": "B",
+      "mode": "real",
+      "model": "nvidia/nemotron-3-ultra",
+      "passed": true,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7yb27fcayesnpa0y49m2xzb",
+      "verification": "PASS turn done; PASS ≥3 files changed incl. cli.py, test_cli.py, cli.rst (docs/cli.rst, src/flask/cli.py, tests/test_cli.py); PASS context report includes src/flask/cli.py (7456/8000 tokens, 28 items, 7 skipped); PASS pytest tests/test_cli.py -q passes (58 passed, 3 skipped in 0.16s); PASS flask --help lists config; PASS flask config prints JSON with secrets masked ({)",
+      "recordedAt": "2026-11-21T06:00:28.135Z",
+      "videoTimestamp": "00:52",
+      "inputTokens": 1374365,
+      "outputTokens": 8320,
+      "firstDiffSeconds": 31.6,
+      "turnSeconds": 173.5,
+      "reviews": {
+        "src/flask/cli.py": 2,
+        "tests/test_cli.py": 5,
+        "docs/cli.rst": 1
+      },
+      "edits": [
+        "src/flask/cli.py: saved",
+        "src/flask/cli.py: saved",
+        "tests/test_cli.py: saved",
+        "docs/cli.rst: saved",
+        "tests/test_cli.py: saved",
+        "tests/test_cli.py: saved",
+        "tests/test_cli.py: saved",
+        "tests/test_cli.py: saved"
+      ],
+      "commands": {
+        "autoApproved": 4,
+        "prompted": 1,
+        "deniedUnrestricted": 0,
+        "refusedByBudget": 3,
+        "refusedShape": 1,
+        "list": [
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -m pytest tests/test_cli.py -q → auto-approved",
+          "cd /tmp && python -c \"import flask; from flask import Flask; app = Flask(__name_ … → refused: shape",
+          "python -c \"import flask; from flask import Flask; app = Flask(__name__); app.con … → allowed",
+          "python -c \" … → refused: budget",
+          "python -m pytest tests/test_cli.py::TestConfig -q → refused: budget",
+          "python -m pytest tests/test_cli.py::TestConfig -q → refused: budget"
+        ]
+      },
+      "modelRequests": {
+        "total": 31,
+        "status429": 0,
+        "otherErrors": 0,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 31
+        }
+      },
+      "checks": "6/6 passed",
+      "attempts": 1,
+      "run": "B2"
+    },
+    {
+      "task": "B",
+      "mode": "real",
+      "model": "nvidia/nemotron-3-ultra",
+      "passed": false,
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7yb890qsg5dm20hysj11nav",
+      "verification": "PASS turn done; PASS ≥3 files changed incl. cli.py, test_cli.py, cli.rst (docs/cli.rst, src/flask/cli.py, tests/test_cli.py); PASS context report includes src/flask/cli.py (7456/8000 tokens, 28 items, 7 skipped); FAIL pytest tests/test_cli.py -q passes (1 failed, 56 passed, 3 skipped in 0.16s); PASS flask --help lists config; PASS flask config prints JSON with secrets masked ({)",
+      "recordedAt": "2026-11-21T06:03:46.384Z",
+      "videoTimestamp": "00:52",
+      "inputTokens": 1271408,
+      "outputTokens": 8344,
+      "firstDiffSeconds": 24.0,
+      "turnSeconds": 107.9,
+      "reviews": {
+        "src/flask/cli.py": 1,
+        "tests/test_cli.py": 3,
+        "docs/cli.rst": 1
+      },
+      "edits": [
+        "src/flask/cli.py: saved",
+        "tests/test_cli.py: saved",
+        "tests/test_cli.py: saved",
+        "tests/test_cli.py: saved",
+        "docs/cli.rst: saved"
+      ],
+      "commands": {
+        "autoApproved": 2,
+        "prompted": 4,
+        "deniedUnrestricted": 0,
+        "refusedByBudget": 2,
+        "refusedShape": 1,
+        "list": [
+          "cd /workspace && python -c \" from flask import Flask from flask.cli import confi … → refused: shape",
+          "python -c \" … → allowed",
+          "python -c \" … → allowed",
+          "python -c \" … → allowed",
+          "python -c \" … → allowed",
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -c \" … → refused: budget",
+          "python -m pytest tests/test_cli.py::TestConfig -q → refused: budget"
+        ]
+      },
+      "modelRequests": {
+        "total": 31,
+        "status429": 2,
+        "otherErrors": 0,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 31
+        }
+      },
+      "checks": "5/6 passed",
+      "attempts": 1,
+      "run": "B3"
     }
   ]
 }

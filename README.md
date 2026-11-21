@@ -35,7 +35,7 @@ Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 | TrueForge in local mode | `npx @truefoundry/trueforge@0.185.1` with SQLite | [Quickstart](#quickstart-with-real-models) |
 | Agent definition in the repository | `forge-coder` (agent mode) and `forge-inline` (inline edit), plus `-fallback` variants created by the setup | `agent/forge-coder.json`, `agent/forge-inline.json` |
 | Inline edit with in-editor diff, accept/reject, no copy-paste | Diff editor with a multi-select hunk picker (✓ accept all, ✕ reject all), undo | `extension/src/review.ts`, Task A |
-| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; every proposed change is reviewed before it is written (a file can get several reviews). Passed on real models in earlier rehearsals; the result on the submitted commit is in `docs/writeup/rehearsal.json`. The mock B is scripted (it supplies the paths and edits) | `agent/forge-coder.json`, Task B |
+| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; every proposed change is reviewed before it is written (a file can get several reviews). Passed on real models in round 1 (tag `round1-submission`); on this build 2 of 3 real runs passed (21 Nov), details in `docs/writeup/rehearsal.json`. The mock B is scripted (it supplies the paths and edits) | `agent/forge-coder.json`, Task B |
 | Context: `@file`, `@symbol`, automatic retrieval, budget, visible rationale | Context engine and the panel's Context block | `src/harness/context/`, [How context is selected](#how-context-is-selected) |
 | Diff safety: preview, per-hunk accept/reject, no silent writes, undo | Review before write, stale-base refusal, guarded undo | [Safety model](#safety-model) |
 | Streaming and cancellation, workspace consistent | Streamed text and tool calls; Stop cancels the TrueForge turn and closes the review; an approved edit already handed to VS Code is saved and reported before the turn ends | `src/harness/turn/turn.ts`, `extension/src/agentPanel.ts` |
@@ -316,7 +316,7 @@ FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; p
   accepted-hunk counts.
 - At most 5 commands per turn (`forge.commandBudget.agent`). After that, one rerun of a test command that already
   ran is still allowed once a fix was accepted, so a failing test can always be fixed and checked; any other
-  command appears as "command budget reached". A `cd <dir> && …` command is refused before any prompt, without
+  command appears as "command budget reached". A `cd … && …` command is refused before any prompt, without
   using the budget, and the model is told the corrected call.
 
 **What to click:**
@@ -532,7 +532,7 @@ scripts/dev-mock.sh
 Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
 real model solves the tasks: the scripted model knows the fixed tasks and, in Task B, supplies the file paths
 and edits, so a mock run is no evidence of file discovery. Real-model results: `docs/writeup/rehearsal.json`
-(the submitted commit) and `docs/STATUS.md` (history). Current counts: 158 unit and 20 integration tests.
+(this branch's head; round 1: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 158 unit and 20 integration tests.
 
 | Command | What it proves | Needs |
 |---|---|---|

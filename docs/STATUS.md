@@ -1,5 +1,23 @@
 # Project status
 
+**2026-11-21, finals branch (`feature/hybrid-efficiency-native` at `6b21d39`), real models, profile nvidia-free, video
+settings:** three Task B runs, then one A/B/C rehearsal (`docs/writeup/rehearsal.json`).
+
+| Run | Checks | Requests (429) | Input tokens | Turn | Files (reviews) | Commands |
+|---|---|---|---|---|---|---|
+| B1 | 6/6 | 28 (0) | 1.07M | 88 s | cli.py 2, test_cli.py 1, cli.rst 1 | 7: 2 auto-approved pytest, 2 Unrestricted denied, 1 `cd` refused (free), 1 prompted, 1 refused by budget |
+| B2 | 6/6 | 31 (0) | 1.37M | 174 s | cli.py 2, test_cli.py 5, cli.rst 1 | 9: 4 auto-approved pytest, 1 `cd` refused, 1 prompted, 3 refused by budget |
+| B3 | 5/6: final `pytest tests/test_cli.py -q` 1 failed | 31 (2) | 1.27M | 108 s | cli.py 1, test_cli.py 3, cli.rst 1 | 9: 1 `cd` refused, 4 prompted `python -c` checks, 2 auto-approved pytest (one the rerun after a fix), 2 refused by budget |
+| A | 6/6 | 3 (0) | 11k | 12 s | helpers.py 1 | 0 |
+| B | 2/6: turn error | 34 (23) | 0.35M | 151 s | cli.py 1, test_cli.py 1 | 0 |
+| C | 3/3: NVIDIA 401 → OpenRouter | 4 (0) | 11k | 10 s | helpers.py 1 (rejected) | 0 |
+
+B3: the agent spent 4 of its 5 commands on `python -c` checks before writing a test (the prompt says to verify only
+with pytest), wrote assertions that `TEST_KEY`/`NORMAL_KEY` stay visible although any key containing KEY is masked,
+fixed it once, used the rerun, and had no command left to check the second fix. The rehearsal's B was throttled by
+NVIDIA (429 without Retry-After, peak 22 requests/min, right after the three B runs) after it had changed the
+workspace, so the harness neither retried nor fell back. Token use per B matches round 1 (1.10M, 37 requests).
+
 **2026-11-20, judge round (branch `fix/judge-round`):** a blind review scored `f1cf5b6` 76/90 and held it off the
 shortlist for lack of a passing real Task B on the submitted build. Changes: claims scoped to the evidence (README,
 write-up, this file, checklist); Stop after an approved edit reached VS Code now saves that edit and reports it as

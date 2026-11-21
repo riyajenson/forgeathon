@@ -27,7 +27,7 @@ used unmodified as the harness (`npx @truefoundry/trueforge@0.185.1`, local mode
 **TrueForge owns the agent loop.** Two agent definitions live in the repo (`agent/forge-inline.json`,
 `agent/forge-coder.json`); the setup script registers them with the primary model and generates
 `-fallback` variants with the fallback model. Subagents, generative UI, ask-user and the sandbox are off;
-agent-mode compaction fires at 30k input tokens (inline: 60k), its start and finish shown as panel status lines; iteration limits 8 (inline) and 60 (agent).
+agent-mode compaction fires at 40k input tokens (inline: 60k), its start and finish shown as panel status lines; iteration limits 8 (inline) and 60 (agent).
 
 **Harness (`forge-harness`).** Maps each editor turn to a TrueForge session/turn via the TrueForge SDK
 (`createTurnStream`, `subscribeToTurn`, `createTurnEvents`, `sessions.cancel`), normalises the event stream
@@ -149,8 +149,8 @@ makes the checkout read-only and cuts the network, but an approved command can r
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
 9–15 requests/min, Groq's free tier (7,000 tokens/min) cannot take B's ~11k-token requests, and the OpenRouter
-fallback allows 50 requests/day without credit (one B takes 40–70). Compaction summarizes Task B before its first edit, so
-the model re-reads files: first diff 129–150 s instead of 42 s. One workspace
+fallback allows 50 requests/day without credit (one B takes 40–70). Compaction fires once in Task B, after the first edit; the
+model then re-reads the ranges it still has to edit. One workspace
 folder; tested on WSL only.
 
 **With another month:** embeddings and language-server symbols for retrieval, evaluated across repositories and

@@ -97,16 +97,16 @@ exports.run = async () => {
     const reviewTurn = ui.run('agent', 'stop check: pending review of src/flask/helpers.py', {}).catch((e) => e);
     await until(() => ui.panel.state.reviewing, 'a pending review', 30000);
     await until(() => previewTabs().length === 1, 'the review diff tab', 10000);
-    await until(() => ui.reviewControlsOpen(), 'the review prompt showing before Stop', 5000);
+    await until(() => ui.reviewControlsOpen(), 'the hunk picker showing before Stop', 5000);
     await ui.stop();
     await reviewTurn;
     assert.equal(ui.panel.state.outcome, 'cancelled', 'the turn ended cancelled');
     assert.ok(!ui.panel.state.busy && !ui.panel.state.reviewing, 'panel idle after Stop');
     await until(() => previewTabs().length === 0, 'diff tab closed', 5000);
-    assert.ok(!ui.reviewControlsOpen(), 'no review prompt or Accept All control left after Stop');
+    assert.ok(!ui.reviewControlsOpen(), 'no hunk picker or other review control left after Stop');
     assert.equal(await fs.readFile(helpers.fsPath, 'utf8'), helpersBefore, 'helpers.py unchanged');
     assert.equal(await git(root, 'status', '--porcelain'), '', 'Stop during review leaves no edits');
-    console.log('PASS Stop during a pending review: turn cancelled, diff tab and review prompt closed, file unchanged');
+    console.log('PASS Stop during a pending review: turn cancelled, diff tab and hunk picker closed, file unchanged');
 
     // ---------------- Stop (2): an approved command is certainly running, then Stop → cancelled, process gone
     const running = async () => (await run('pgrep', ['-f', 'forge-stop-check']).catch(() => ({ stdout: '' }))).stdout.trim().split('\n').filter(Boolean).length;

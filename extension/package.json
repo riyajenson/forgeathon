@@ -89,13 +89,25 @@
           "type": "integer",
           "default": 3,
           "minimum": 0,
-          "description": "Most commands the agent may run in one turn (asked or auto-approved). Further run_command calls are refused by the harness without asking, and the panel shows \"command budget reached\"."
+          "description": "Most commands other than test runs the agent may run in one turn (asked or auto-approved). Further run_command calls are refused by the harness without asking, and the panel shows \"command budget reached\". Test runs have forge.testCommandBudget.agent."
         },
         "forge.commandBudget.inline": {
           "type": "integer",
           "default": 1,
           "minimum": 0,
           "description": "Most commands an inline edit may run in one turn (the inline agent does not run commands today)."
+        },
+        "forge.testCommandBudget.agent": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 0,
+          "description": "Most test runs (pytest, python -m pytest) the agent may make in one turn, counted separately from other commands, so a denied or extra command never uses up a test rerun. Further test runs are refused without asking (\"test-command budget reached\")."
+        },
+        "forge.testCommandBudget.inline": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 0,
+          "description": "Most test runs an inline edit may make in one turn."
         }
       }
     }

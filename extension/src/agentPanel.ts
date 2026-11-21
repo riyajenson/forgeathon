@@ -21,6 +21,8 @@ export class AgentViewState {
   /** Set when the turn ends: every file the turn changed (then reviewed files left unchanged), on one screen. */
   summary: string[] = [];
   command?: {command: string; cwd: string; warning?: string};
+  /** Set when the turn stopped on a rate limit: Resume is offered from `at` (ms since epoch). */
+  resume?: {at: number; files: string[]};
   private compaction?: {id: string; label: string; detail: string};
 
   update(e: HarnessEvent) {
@@ -60,11 +62,22 @@ export class AgentViewState {
           break;
         }
         this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
-      case 'command_budget_reached':
-        // Refused by the harness without a prompt: the model was told to stop running commands.
-        this.status = 'command budget reached';
-        this.tools.push({id:'budget:' + e.callId, label:'command budget reached (' + e.budget + ' per turn): ' + e.command, detail:'not run'});
+      case 'command_budget_reached': {
+        // Refused by the harness without a prompt: the model was told to stop running commands (or tests).
+        const which = e.kind === 'test' ? 'test-command budget' : 'command budget';
+        this.status = which + ' reached';
+        this.tools.push({id:'budget:' + e.callId, label:which + ' reached (' + e.budget + ' per turn): ' + e.command, detail:'not run'});
         break;
+      }
+      case 'subagent':
+        if (e.phase === 'started') this.tools.push({id:'subagent:' + e.threadId, label:'Sub-agent: ' + e.name, detail:e.task || 'running'});
+        else {
+          const item = this.tools.find(tool => tool.id === 'subagent:' + e.threadId);
+          const detail = e.ok ? 'Done' : 'Failed' + (e.error ? ': ' + e.error : '');
+          if (item) item.detail = detail; else this.tools.push({id:'subagent:' + e.threadId, label:'Sub-agent: ' + e.name, detail});
+        }
+        break;
+      case 'resumable': this.resume = {at: Date.now() + e.retryAfterMs, files: e.changedFiles}; break;
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);
@@ -93,7 +106,7 @@ export class AgentViewState {
   }
 }
 
-type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void };
+type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void> };
 export class AgentPanel implements vscode.Disposable {
   state = new AgentViewState();
   private panel?: vscode.WebviewPanel;
@@ -123,6 +136,10 @@ export class AgentPanel implements vscode.Disposable {
               await this.actions.send(m.text);
             break;
           case 'stop': await this.actions.stop(); break;
+          case 'resume':
+            // Offered only after a rate limit, once the suggested wait has passed.
+            if (!this.state.busy && this.state.resume && Date.now() >= this.state.resume.at) await this.actions.resume();
+            break;
           case 'review': this.actions.review(); break;
           case 'allow': case 'deny':
             if (this.state.command) { this.state.command = undefined; this.actions.command(m.action === 'allow'); this.refresh(); }
@@ -145,7 +162,7 @@ button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
 <section id="context" hidden><h2>Context</h2><p id="budget"></p><ul id="selected"></ul><h2 id="skippedTitle">Skipped</h2><ul id="skipped"></ul></section>

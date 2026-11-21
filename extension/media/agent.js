@@ -1,7 +1,20 @@
 (() => {
   const vscode = acquireVsCodeApi();
   const el = id => document.getElementById(id);
-  for (const id of ['stop','review','trace','allow','deny']) el(id).onclick = () => vscode.postMessage({action:id});
+  for (const id of ['stop','review','trace','allow','deny','resume']) el(id).onclick = () => vscode.postMessage({action:id});
+  let resumeTimer;
+  // Resume is enabled once the suggested wait after a rate limit has passed; the label counts down until then.
+  const showResume = s => {
+    clearTimeout(resumeTimer);
+    el('resumeBox').hidden = !s.resume || s.busy;
+    if (!s.resume || s.busy) return;
+    const files = s.resume.files.length ? ' Already changed: ' + s.resume.files.join(', ') + '.' : ' No file was changed.';
+    el('resumeText').textContent = 'Stopped by a model rate limit (HTTP 429).' + files + ' Resume continues the task in this conversation.';
+    const wait = s.resume.at - Date.now();
+    el('resume').disabled = wait > 0;
+    el('resume').textContent = wait > 0 ? 'Resume (in ' + Math.ceil(wait / 1000) + ' s)' : 'Resume';
+    if (wait > 0) resumeTimer = setTimeout(() => showResume(s), Math.min(wait, 1000));
+  };
   el('send').onclick = () => {
     const text = el('task').value;
     if (text.trim()) vscode.postMessage({action:'send',text});
@@ -18,6 +31,7 @@
     el('stop').disabled = !s.busy;
     el('review').hidden = !s.reviewing;
     el('status').textContent = s.status;
+    showResume(s);
     el('model').textContent = s.model ? 'Model: ' + s.model + (s.usage ? ' | ' + s.usage : '') : '';
     el('banner').textContent = s.banner;
     el('banner').hidden = !s.banner;

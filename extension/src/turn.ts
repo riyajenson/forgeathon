@@ -10,16 +10,23 @@ export type TurnView = {
   notice(text: string): void;
 };
 type Active = { stopped: boolean; ref?: TurnRef; last: number; submitted: boolean };
+export type TurnOptions = {autoApproveSafeCommands?: boolean; commandBudget?: number; testCommandBudget?: number; resumeOf?: string};
+/** The last agent turn, when it stopped on a rate limit: what Resume sends again. */
+export type ResumeTarget = { turnId: string; instruction: string; context: PromptContext };
 export class TurnController {
   private active?: Active;
   private conversation?: string;
+  private resumable?: ResumeTarget;
   constructor(private harness: ForgeHarness, private version: Version, private root: string,
     private edits: EditReview, private view: TurnView) {}
   /** The next agent turn starts a new TrueForge session instead of continuing the conversation. */
-  newConversation() { if (!this.active) this.conversation = undefined; }
+  newConversation() { if (!this.active) { this.conversation = undefined; this.resumable = undefined; } }
+  /** Set after an agent turn stopped on a rate limit (a resumable event), until the next turn starts. */
+  get resumeTarget(): ResumeTarget | undefined { return this.resumable; }
   private envelope<T>(body: T): Request<T> { return { version: this.version, requestId: randomUUID(), body }; }
-  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: {autoApproveSafeCommands?: boolean; commandBudget?: number} = {}) {
+  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, options: TurnOptions = {}) {
     if (this.active) throw new Error('A turn is already in progress');
+    this.resumable = undefined;
     const a: Active = { stopped: false, last: 0, submitted: false };
     this.active = a;
     let sessionId = mode === 'agent' ? this.conversation : undefined;
@@ -36,7 +43,9 @@ export class TurnController {
       this.edits.begin(ref);
       const turn = await this.harness.submitTurn(this.envelope({...ref, ...context, mode, instruction,
         ...(options.autoApproveSafeCommands === true ? {autoApproveSafeCommands: true} : {}),
-        ...(options.commandBudget === undefined ? {} : {commandBudget: options.commandBudget})}));
+        ...(options.commandBudget === undefined ? {} : {commandBudget: options.commandBudget}),
+        ...(options.testCommandBudget === undefined ? {} : {testCommandBudget: options.testCommandBudget}),
+        ...(options.resumeOf === undefined ? {} : {resumeOf: options.resumeOf})}));
       if (!turn.ok) throw new Error(turn.error.message);
       a.submitted = true;
       if (a.stopped) await this.stop();
@@ -67,6 +76,7 @@ export class TurnController {
         if (e.sequence <= a.last) continue;
         if (e.sequence !== ++a.last) throw new Error('Missing turn events');
         if (e.t === 'done') { this.view.event(e); if (reviewError) throw reviewError; return; }
+        if (e.t === 'resumable' && mode === 'agent') this.resumable = {turnId: ref.turnId, instruction, context};
         if (a.stopped && e.t !== 'edit_applied' && e.t !== 'error') continue;
         this.view.event(e);
         // An auto-approved command was already allowed by the harness: it is only shown, never prompted.

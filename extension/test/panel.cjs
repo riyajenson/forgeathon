@@ -26,6 +26,21 @@ exports.run = async () => {
   assert.equal(budget.command, undefined, 'a command refused by the budget opens no prompt');
   assert.equal(budget.status, 'command budget reached');
   assert.deepEqual(budget.tools, [{id:'budget:b',label:'command budget reached (3 per turn): python -m pytest',detail:'not run'}]);
+  budget.update({t:'command_budget_reached',callId:'t',command:'pytest -q',budget:3,kind:'test'});
+  assert.equal(budget.status, 'test-command budget reached');
+  assert.deepEqual(budget.tools[1], {id:'budget:t',label:'test-command budget reached (3 per turn): pytest -q',detail:'not run'}, 'the test budget is named');
+  const subs = new AgentViewState();
+  subs.update({t:'subagent',phase:'started',threadId:'th2',name:'explorer',task:'Find where commands are registered'});
+  assert.deepEqual(subs.tools, [{id:'subagent:th2',label:'Sub-agent: explorer',detail:'Find where commands are registered'}]);
+  subs.update({t:'subagent',phase:'finished',threadId:'th2',name:'explorer',ok:true});
+  assert.deepEqual(subs.tools, [{id:'subagent:th2',label:'Sub-agent: explorer',detail:'Done'}], 'one row per sub-agent, updated when it ends');
+  subs.update({t:'subagent',phase:'finished',threadId:'th3',name:'scout',ok:false,error:'Model unavailable'});
+  assert.deepEqual(subs.tools[1], {id:'subagent:th3',label:'Sub-agent: scout',detail:'Failed: Model unavailable'});
+  const limited = new AgentViewState();
+  const t0 = Date.now();
+  limited.update({t:'resumable',reason:'rate_limited',retryAfterMs:60000,changedFiles:['src/flask/cli.py']});
+  assert.deepEqual(limited.resume.files, ['src/flask/cli.py']);
+  assert.ok(limited.resume.at >= t0 + 60000 && limited.resume.at <= Date.now() + 60000, 'Resume is offered after the suggested wait');
   const compact = new AgentViewState();
   compact.update({t:'status',state:'compacting',detail:'Compacting context: 30,412 tokens reached the 30,000-token threshold'});
   assert.equal(compact.status, 'Compacting context: 30,412 tokens reached the 30,000-token threshold', 'compaction start on the status line');
@@ -139,6 +154,41 @@ exports.run = async () => {
     await forgeCfg.update('commandBudget.agent', undefined, vscode.ConfigurationTarget.Global);
   }
 
+  // Resume after a rate limit: the controller remembers the turn; Workbench.resume() resubmits the same instruction
+  // and context in the same conversation with resumeOf. Both budgets reach the harness (test budget default 3).
+  {
+    const bodies = [];
+    const resumeHarness = {...harness,
+      submitTurn:async({body})=>{bodies.push(body);return {ok:true,body}},
+      stream:async function*({body}) {
+        const h={version,sessionId:body.sessionId,turnId:body.turnId}; let s=0;
+        const events = bodies.length === 1
+          ? [{t:'turn_started'},{t:'resumable',reason:'rate_limited',retryAfterMs:0,changedFiles:['src/a.py']},
+            {t:'error',error:{code:'unavailable',message:'Model unavailable: [Model Error] Request failed (429)',retryable:false,workspaceEffect:'changed'}},{t:'done',status:'error'}]
+          : [{t:'turn_started'},{t:'done',status:'done'}];
+        for (const e of events) yield {ok:true,body:{...h,...e,sequence:++s}};
+      },
+      dispose:async()=>{}};
+    const wb3 = new Workbench(folder,()=>({version,harness:resumeHarness}));
+    const state3 = new AgentViewState(); const original3 = wb3.events.bind(wb3);
+    wb3.events=e=>{state3.update(e);original3(e)};
+    try {
+      await wb3.run('agent','resumable task',{activeFile:'src/a.py'});
+      assert.deepEqual(state3.resume.files, ['src/a.py'], 'the panel offers Resume');
+      assert.equal(bodies[0].testCommandBudget, 3, 'forge.testCommandBudget.agent defaults to 3 and reaches the harness');
+      assert.equal(bodies[0].commandBudget, 3);
+      assert.equal(bodies[0].resumeOf, undefined);
+      await wb3.resume();
+      assert.equal(bodies.length, 2);
+      assert.equal(bodies[1].resumeOf, bodies[0].turnId, 'resumeOf names the interrupted turn');
+      assert.equal(bodies[1].instruction, 'resumable task');
+      assert.equal(bodies[1].sessionId, bodies[0].sessionId, 'same conversation');
+      assert.equal(bodies[1].activeFile, 'src/a.py');
+      await wb3.resume();
+      assert.equal(bodies.length, 2, 'nothing to resume once the resumed turn ran');
+    } finally { await wb3.shutdown(); }
+  }
+
   const gate = new EditReview(folder);
   let cancelled=false, start, go;
   const ready=new Promise(r=>start=r), released=new Promise(r=>go=r);
@@ -155,5 +205,5 @@ exports.run = async () => {
   const slowRun=ctrl.run('agent','stop',{});
   await ready;await ctrl.stop();await slowRun;
   assert.ok(cancelled);assert.deepEqual(displayed,['turn_started','done']);gate.dispose();
-  console.log('PASS simulated panel stream, tool summaries, selection/skips, fallback/error, command denial, Stop and late-event filtering');
+  console.log('PASS simulated panel stream, tool summaries, selection/skips, fallback/error, command denial, Stop and late-event filtering, test budget, sub-agents, Resume');
 };

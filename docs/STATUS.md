@@ -1,13 +1,31 @@
 # Project status
 
-**2026-11-21, after the real runs (scripted model only, not yet measured on real models):** agent turns with a
-command budget of at least 4 keep the last 2 runs for pytest (B3's failure mode), the responsiveness DOM gate
-allows one outlier (the 16 ms flake) but not two over 10 ms or one over 50 ms (6 of 6 runs passed; the 200 ms stall
-still fails), and the agent context budget default is 4000 instead of 8000 (Task B keeps cli.py, cli.rst and
-test_cli.py; about 100k fewer input tokens per B run, estimated from B3's trace).
+**2026-11-21 (second batch), finals branch at `f2f87bb`, real models, profile nvidia-free, video settings:** three
+Task B runs at least 10 minutes apart, a 10-minute pause, then one A/B/C rehearsal (`docs/writeup/rehearsal.json`).
+Changes since the first batch: agent turns with a command budget of at least 4 keep the last 2 runs for pytest
+(the first batch's B3 failure mode), the agent context budget default is 4000 instead of 8000, and the
+responsiveness DOM gate allows one outlier up to 50 ms but not two over 10 ms. Every run passed; no 429 in the
+batch (peak 16 NVIDIA requests/min), so no redo was needed.
 
-**2026-11-21, finals branch (`feature/hybrid-efficiency-native` at `6b21d39`), real models, profile nvidia-free, video
-settings:** three Task B runs, then one A/B/C rehearsal (`docs/writeup/rehearsal.json`).
+| Run | Checks | Requests (429) | Input tokens | Turn | Files (reviews) | Commands |
+|---|---|---|---|---|---|---|
+| B1 | 6/6 | 25 (0) | 0.97M | 124 s | cli.py 2, test_cli.py 2, cli.rst 1 | 8: 4 auto-approved pytest, 1 Unrestricted denied, 1 `cd` refused (free), 2 refused by budget (a `python -c` check held back by the test reserve, then one pytest past the budget) |
+| B2 | 6/6 | 27 (0) | 1.07M | 92 s | cli.py 3, test_cli.py 1, cli.rst 1 | 7: 4 auto-approved pytest, 1 Unrestricted denied, 2 refused by budget (a `python -c` check held back by the reserve, then one pytest) |
+| B3 | 6/6 | 25 (0) | 0.94M | 114 s | cli.py 2, test_cli.py 3, cli.rst 1 | 9: 5 auto-approved pytest, 1 `cd` refused, 3 refused by budget (a `python -c` check held back by the reserve, then two past the budget) |
+| A | 6/6 | 3 (0) | 11k | 10 s | helpers.py 1 | 0 |
+| B | 6/6 | 74 (0) | 2.88M | 440 s | cli.py 5, test_cli.py 2, cli.rst 1 | 8: 2 auto-approved pytest, 2 prompted `python3 -c` (approved by the smoke script), 1 Unrestricted denied, 1 `cd` refused, 2 refused by budget |
+| C | 3/3: NVIDIA 401 → OpenRouter | 5 (0) | 11k | 12 s | helpers.py 1 (rejected) | 0 |
+
+The three B runs averaged 0.99M input tokens and 26 requests, against 1.07–1.37M and 28–31 requests in the first
+batch (B3 there: 1.27M). In each run the reserve refused one `python -c` check, and the agent ran pytest instead.
+The rehearsal's B passed but was the outlier: 36 of its 44 `propose_edit` calls were rejected as malformed (24 with
+`old_text` identical to `new_text` while it tried to add a missing closing quote after `'***`, 10 with `edits` sent
+as a string, 2 failing schema validation), and each rejection resent the whole conversation. Requests in the batch:
+155 NVIDIA (one 401, C's injected failure), 4 OpenRouter (one 502, resent by TrueForge). The pre-flight sent one
+1-token request per configured NVIDIA key; the first that answered 200 was used for the whole batch.
+
+**2026-11-21 (first batch), finals branch at `6b21d39`, real models, profile nvidia-free, video settings:** three
+Task B runs, then one A/B/C rehearsal.
 
 | Run | Checks | Requests (429) | Input tokens | Turn | Files (reviews) | Commands |
 |---|---|---|---|---|---|---|
@@ -78,7 +96,7 @@ verification commands. "Real run" = `scripts/smoke-real-model.mjs` (same checks)
 | Cancel: Stop ends the turn, review closes, nothing applied after Stop | ✅ | UI e2e + harness integration (cancel while paused / streaming / racing an apply) + unit races (Stop before a command spawns; silent TrueForge ends the turn once, bounded) + extension suite (Stop after the edit reached VS Code: saved, reported as saved). Edits saved earlier in the turn stay |
 | TrueForge session link | ✅ | UI e2e (link present); opening it is manual |
 | Demo without keys | ✅ | `scripts/dev-mock.sh` |
-| Real model (Tasks A, B, C) | ✅ earlier builds · see rehearsal.json | Real runs 2026-11-19 on earlier builds: A 6/6 (twice), C 3/3, B 6/6 (three times) (see "Real-model run", "Task B tuning round"); B failed in the 19 Nov rehearsal (429). The submitted commit's result: `docs/writeup/rehearsal.json` |
+| Real model (Tasks A, B, C) | ✅ `f2f87bb` · see rehearsal.json | 2026-11-21 on `f2f87bb`: Task B 6/6 in 3 of 3 runs, then A 6/6, B 6/6, C 3/3 (top of this file). Earlier builds: real runs 2026-11-19 (see "Real-model run", "Task B tuning round"); round 1: tag `round1-submission` |
 | Optional auto-approval (`forge.autoApproveSafeCommands`, default off), narrowed to bare `pytest`, `python -m pytest`, `git status`, `git diff` | ✅ | Harness unit tests (these auto-approved and run; `python -c`, `flask`, path/env-prefixed pytest, pipes, `cd`, edits always ask; off unless `true`); extension suite; `e2e-mock.sh --auto-approve-safe-commands` 20/20 (Task G: `git status`/`git diff` auto-approved, `python -c` asked) |
 | Command budget per turn (`forge.commandBudget.agent` 5 since the hybrid branch, was 3; `.inline` 1), enforced by the harness | ✅ | Unit tests (4th and 5th command refused without a prompt with the exact message; denied, unrestricted and auto-approved commands count; 0 refuses all, edits unaffected; defaults); extension suite ("command budget reached" in the panel, settings reach the harness); `e2e-mock.sh` Task G (3 shown, 2 refused, refusal reached the model). Not yet measured with a real model |
 | Guardrails with the real models (video settings) | ✅ | Real run 4 (2026-11-19): Task B 6/6, 3 commands shown (1 auto-approved, 2 asked), 4 refused by the budget, 6 reviews; A 6/6, C 3/3 (see "Real-model validation of the guardrails") |

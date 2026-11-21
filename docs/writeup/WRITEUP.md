@@ -100,8 +100,8 @@ Models are configured only in TrueForge, from `config/models.json` via `node scr
 DeepSeek model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
 fastest with correct streamed tool calls. Gemini,
 Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** round 1 passed
-A, B, C (tag `round1-submission`). This build, 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 2 of 3
-runs (88–174 s, 28–31 requests); then A and C passed, and B stopped on NVIDIA 429s (23 of 34 requests). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
+A, B, C (tag `round1-submission`). This build (`f2f87bb`), 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
+runs (92–124 s, 25–27 requests, ~1M input tokens), then A, B, C passed (B: 74 requests, 36 malformed edits). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
 turn. Then the harness's policy, for failures before any write: authentication errors fall back immediately;
 unreachable/timeouts/5xx/429 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and
 then fall back to the `-fallback` agent, which **starts a fresh TrueForge session**. There is **no retry or
@@ -115,7 +115,7 @@ watchdog stops a turn that streams nothing for 45 s.
 | Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
 |---|---|---|
 | Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | 00:03 |
-| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests); this build: 2 of 3 runs | 00:52 |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests); this build: 3 of 3 runs and the rehearsal | 00:52 |
 | Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
 | Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
 | Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
@@ -152,7 +152,7 @@ an unexplained 605 ms block in VS Code's `postMessage`.
 
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
-instructions (one run spent its budget on `python -c` checks, then left a failing test), hence the harness command budget; each step resends the whole conversation. Retrieval is
+instructions (one run spent its budget on `python -c` checks, then left a failing test), hence the harness command budget (last 2 runs kept for pytest); each step resends the whole conversation. Retrieval is
 lexical by default (semantic reranking is ~178× slower). The symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the

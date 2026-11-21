@@ -1,5 +1,23 @@
 # Project status
 
+**2026-11-21 (Stop fix and final rehearsal), finals branch at `d1f4c68`:** the native UI test failed once in 20 runs
+with "Stop ended the turn in 60041 ms, not after the 60 s command". Cause: a Stop within a few ms of a command's start
+killed bwrap's process group before the sandbox process (its own session, `--new-session`) had armed
+`--die-with-parent`; the sandbox kept running the command and holding stdout/stderr, so the turn waited for the
+command to end. Logging every hop (panel → controller → harness → turn → scope → command runner) showed the cancel
+reaching the command runner in under 1 ms; only the kill missed. Standalone with real bwrap, a SIGTERM 0–5 ms after
+spawn left the sandbox running in 35 of 60 tries. Not a regression: `round1-submission` hung in 5 of 6 fast Stops,
+this branch in 2 of 6. Fix (`src/harness/mcp/command.ts` only): bwrap reports the sandbox pid on `--info-fd`, Stop
+waits for that report (bounded at 1 s) and then SIGKILLs the sandbox by pid as `--die-with-parent` would, besides the
+existing SIGTERM/SIGKILL of bwrap's group. Two unit tests reproduce the race deterministically with a stand-in
+sandbox that leaves the process group (both took ~8 s before the fix). After: 0 of 300 slow Stops with real bwrap
+at 0–40 ms; the native UI test file passed 20 of 20 (Ctrl+Z needed no retry; focus was in `helpers.py`'s text before
+every Undo; Stop 39–92 ms); 50 + 50 iterations of the Stop check (normal and immediate Stop) passed, longest 40 ms;
+stubbing out the Ctrl+Z re-apply or the cancel makes the respective check fail. Real A/B/C rehearsal on `d1f4c68`
+(key check: HTTP 200; no 429): A 6/6 (3 requests, 11k input tokens), B 6/6 (30 requests, 1.32M, 244 s; `cli.py` 1
+review, `test_cli.py` 2, `cli.rst` 1; 4 malformed edit calls), C 3/3 (NVIDIA 401 → OpenRouter, 4 requests). The
+three Task B runs below (`f2f87bb`) were not repeated: the fix changes only how a command is started and killed.
+
 **2026-11-21 (second batch), finals branch at `f2f87bb`, real models, profile nvidia-free, video settings:** three
 Task B runs at least 10 minutes apart, a 10-minute pause, then one A/B/C rehearsal (`docs/writeup/rehearsal.json`).
 Changes since the first batch: agent turns with a command budget of at least 4 keep the last 2 runs for pytest
@@ -96,7 +114,7 @@ verification commands. "Real run" = `scripts/smoke-real-model.mjs` (same checks)
 | Cancel: Stop ends the turn, review closes, nothing applied after Stop | ✅ | UI e2e + harness integration (cancel while paused / streaming / racing an apply) + unit races (Stop before a command spawns; silent TrueForge ends the turn once, bounded) + extension suite (Stop after the edit reached VS Code: saved, reported as saved). Edits saved earlier in the turn stay |
 | TrueForge session link | ✅ | UI e2e (link present); opening it is manual |
 | Demo without keys | ✅ | `scripts/dev-mock.sh` |
-| Real model (Tasks A, B, C) | ✅ `f2f87bb` · see rehearsal.json | 2026-11-21 on `f2f87bb`: Task B 6/6 in 3 of 3 runs, then A 6/6, B 6/6, C 3/3 (top of this file). Earlier builds: real runs 2026-11-19 (see "Real-model run", "Task B tuning round"); round 1: tag `round1-submission` |
+| Real model (Tasks A, B, C) | ✅ `d1f4c68` · see rehearsal.json | 2026-11-21: Task B 6/6 in 3 of 3 runs on `f2f87bb`; A 6/6, B 6/6, C 3/3 on `d1f4c68` (top of this file). Earlier builds: real runs 2026-11-19 (see "Real-model run", "Task B tuning round"); round 1: tag `round1-submission` |
 | Optional auto-approval (`forge.autoApproveSafeCommands`, default off), narrowed to bare `pytest`, `python -m pytest`, `git status`, `git diff` | ✅ | Harness unit tests (these auto-approved and run; `python -c`, `flask`, path/env-prefixed pytest, pipes, `cd`, edits always ask; off unless `true`); extension suite; `e2e-mock.sh --auto-approve-safe-commands` 20/20 (Task G: `git status`/`git diff` auto-approved, `python -c` asked) |
 | Command budget per turn (`forge.commandBudget.agent` 5 since the hybrid branch, was 3; `.inline` 1), enforced by the harness | ✅ | Unit tests (4th and 5th command refused without a prompt with the exact message; denied, unrestricted and auto-approved commands count; 0 refuses all, edits unaffected; defaults); extension suite ("command budget reached" in the panel, settings reach the harness); `e2e-mock.sh` Task G (3 shown, 2 refused, refusal reached the model). Not yet measured with a real model |
 | Guardrails with the real models (video settings) | ✅ | Real run 4 (2026-11-19): Task B 6/6, 3 commands shown (1 auto-approved, 2 asked), 4 refused by the budget, 6 reviews; A 6/6, C 3/3 (see "Real-model validation of the guardrails") |
@@ -424,8 +442,9 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
   whole conversation (74 requests, 2.88M input tokens against ~1M in the three B runs). Candidate fix: after a few
   identical refusals for one file, tell the model to re-read the lines and stop resubmitting the same edit, or end
   the loop the way the command budget does. Needs real-model runs to measure.
-- **UI e2e Ctrl+Z step was timing-dependent** (failed once in 10 runs on 21 Nov: Undo sent before helpers.py was the
-  active editor). The test now waits for the active editor and polls for the re-applied change; test-only change.
+- **UI e2e Ctrl+Z step was timing-dependent** (failed once in 10 runs on 21 Nov: Undo did nothing). The test now
+  focuses the editor group, logs where focus is before each Undo, retries once only when focus was not in
+  `helpers.py`'s text, and checks the re-applied file byte for byte; no retry was needed in 27 runs since.
 - A fallback starts a new TrueForge session (no earlier panel history).
 - `run_command` runs in bubblewrap (read-only checkout and host, private /tmp, no network, no keys) on top of
   approval, the ⚠ label and the budget; it needs Linux/WSL with bubblewrap (otherwise commands are refused). Reads are

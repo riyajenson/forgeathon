@@ -1,6 +1,6 @@
 {
-  "$comment": "Real-model rehearsal of the finals branch head (repositoryCommit) on 2026-11-21 with the video settings (auto-approve safe commands, agent command budget 5 with the last 2 kept for pytest, plus one rerun after a fix; deny Unrestricted; agent context budget 4000 tokens), profile nvidia-free, fresh TrueForge 0.185.1 database, requests counted (not paced) by scripts/model-meter.mjs, run by scripts/smoke-real-model.mjs. Order: three Task B runs (taskBRuns) at least 10 minutes apart, 10 minutes' pause, then one A, B, C rehearsal (tasks), one attempt each; no redo was needed. No 429 in the batch (peak 16 NVIDIA requests/min). The rehearsal's B passed but was costly (74 requests, 2.88M input tokens): 36 of its 44 propose_edit calls were rejected as malformed (24 with old_text identical to new_text while fixing a missing quote in '***', 10 with edits sent as a string, 2 failing schema validation) before the model recovered. Pre-flight: one 1-token request on nvidia/nemotron-3-ultra-550b-a55b per configured NVIDIA key, first HTTP 200 used. Session URLs point at the local TrueForge used for the run. videoUrl and videoTimestamp refer to the round-1 video, which is final. Round-1 evidence: tag round1-submission.",
-  "repositoryCommit": "f2f87bbea506630514ab4ace53839d65c0639458",
+  "$comment": "Real-model evidence for the finals branch, profile nvidia-free, video settings (auto-approve safe commands, agent command budget 5 with the last 2 kept for pytest, plus one rerun after a fix; deny Unrestricted; agent context budget 4000 tokens), fresh TrueForge 0.185.1 database per batch, requests counted (not paced) by scripts/model-meter.mjs, run by scripts/smoke-real-model.mjs, one attempt each, no 429s. tasks: one A, B, C rehearsal of repositoryCommit (2026-11-21 13:05, after the Stop fix: commands are killed even when Stop lands within a few ms of their start; 37 requests, peak 10 NVIDIA requests/min). taskBRuns: three Task B runs of f2f87bb (2026-11-21 10:19-10:46, at least 10 minutes apart), the same agent code except the Stop fix, which only changes how a command is started and killed. An earlier rehearsal of f2f87bb passed A, B, C too, but its B took 74 requests after 36 malformed edit calls (follow-up in docs/STATUS.md). Pre-flight: one 1-token request on nvidia/nemotron-3-ultra-550b-a55b per NVIDIA key, first HTTP 200 used. Session URLs point at the local TrueForge used for the run. videoUrl and videoTimestamp refer to the round-1 video, which is final. Round-1 evidence: tag round1-submission.",
+  "repositoryCommit": "d1f4c6864f2460323625e9e3dc44f36268e78c82",
   "flaskCommit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
   "repositoryUrl": "https://github.com/riyajenson/forgeathon",
   "videoUrl": "https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing",
@@ -33,14 +33,14 @@
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7yw0bwkaeey6snwxks4e2r3",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7z3bt5jhaxsahwhetgykpzw",
       "verification": "PASS turn done; PASS exactly one applied edit, saved to helpers.py (1 review(s); src/flask/helpers.py: saved); PASS FLASK_DEBUG=off → False (False); PASS FLASK_DEBUG=N → False (case-insensitive) (False); PASS FLASK_DEBUG=1 → True (unchanged) (True); PASS docstring lists every false value (0, false, no, off, n)",
-      "recordedAt": "2026-11-21T10:56:32.921Z",
+      "recordedAt": "2026-11-21T13:05:07.937Z",
       "videoTimestamp": "00:03",
-      "inputTokens": 11338,
-      "outputTokens": 647,
-      "firstDiffSeconds": 8.8,
-      "turnSeconds": 9.9,
+      "inputTokens": 11385,
+      "outputTokens": 698,
+      "firstDiffSeconds": 9.9,
+      "turnSeconds": 12.8,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -71,52 +71,47 @@
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7yw0p1j7wpnrvq09xzhx5ty",
-      "verification": "PASS turn done; PASS ≥3 files changed incl. cli.py, test_cli.py, cli.rst (docs/cli.rst, src/flask/cli.py, src/flask/helpers.py, tests/test_cli.py); PASS context report includes src/flask/cli.py (3975/4000 tokens, 21 items, 14 skipped); PASS pytest tests/test_cli.py -q passes (59 passed, 3 skipped in 0.18s); PASS flask --help lists config; PASS flask config prints JSON with secrets masked ({)",
-      "recordedAt": "2026-11-21T10:56:43.493Z",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7z3c774685rr24t80apwh5y",
+      "verification": "PASS turn done; PASS ≥3 files changed incl. cli.py, test_cli.py, cli.rst (docs/cli.rst, src/flask/cli.py, src/flask/helpers.py, tests/test_cli.py); PASS context report includes src/flask/cli.py (3975/4000 tokens, 21 items, 14 skipped); PASS pytest tests/test_cli.py -q passes (58 passed, 3 skipped in 0.17s); PASS flask --help lists config; PASS flask config prints JSON with secrets masked ({)",
+      "recordedAt": "2026-11-21T13:05:21.505Z",
       "videoTimestamp": "00:52",
-      "inputTokens": 2884405,
-      "outputTokens": 22903,
-      "firstDiffSeconds": 22.6,
-      "turnSeconds": 440.2,
+      "inputTokens": 1315732,
+      "outputTokens": 10736,
+      "firstDiffSeconds": 129.3,
+      "turnSeconds": 243.6,
       "reviews": {
-        "src/flask/cli.py": 5,
-        "tests/test_cli.py": 2,
-        "docs/cli.rst": 1
+        "src/flask/cli.py": 1,
+        "docs/cli.rst": 1,
+        "tests/test_cli.py": 2
       },
       "edits": [
         "src/flask/cli.py: saved",
-        "src/flask/cli.py: saved",
-        "src/flask/cli.py: saved",
-        "src/flask/cli.py: saved",
-        "src/flask/cli.py: saved",
-        "tests/test_cli.py: saved",
         "docs/cli.rst: saved",
+        "tests/test_cli.py: saved",
         "tests/test_cli.py: saved"
       ],
       "commands": {
-        "autoApproved": 2,
-        "prompted": 3,
-        "deniedUnrestricted": 1,
-        "refusedByBudget": 2,
+        "autoApproved": 5,
+        "prompted": 0,
+        "deniedUnrestricted": 0,
+        "refusedByBudget": 1,
         "refusedShape": 1,
         "list": [
-          "sed -n '1127,1136p' src/flask/cli.py | cat -A → denied (unrestricted)",
-          "python3 -c \" … → allowed",
-          "python3 -c \" … → allowed",
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
           "python -m pytest tests/test_cli.py -q → auto-approved",
-          "python -m pytest tests/test_cli.py -q → auto-approved",
-          "cd /tmp && mkdir -p test_flask && cd test_flask && echo 'from flask import Flask … → refused: shape",
+          "cd /tmp && python -c \" import flask from flask.cli import FlaskGroup from click. … → refused: shape",
           "python -c \" … → refused: budget",
-          "python -m flask --help → refused: budget"
+          "python -m pytest tests/test_cli.py::TestConfig -q → auto-approved",
+          "python -m pytest tests/test_cli.py -q → auto-approved"
         ]
       },
       "modelRequests": {
-        "total": 74,
+        "total": 30,
         "status429": 0,
         "otherErrors": 0,
         "byModel": {
-          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 74
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 30
         }
       },
       "checks": "6/6 passed",
@@ -127,14 +122,14 @@
       "mode": "real",
       "model": "nvidia/nemotron-3-ultra",
       "passed": true,
-      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7ywe54tj5rwy87nvh3ra01a",
+      "sessionUrl": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7z3kp9xtaw64m262g9shvbd",
       "verification": "PASS primary failed and the fallback model took over (nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (); PASS turn finished without an error; PASS git status clean (no changed files)",
-      "recordedAt": "2026-11-21T11:04:04.812Z",
+      "recordedAt": "2026-11-21T13:09:26.235Z",
       "videoTimestamp": "03:17",
-      "inputTokens": 11163,
-      "outputTokens": 665,
-      "firstDiffSeconds": 10.3,
-      "turnSeconds": 11.8,
+      "inputTokens": 11113,
+      "outputTokens": 615,
+      "firstDiffSeconds": 9.7,
+      "turnSeconds": 12.1,
       "reviews": {
         "src/flask/helpers.py": 1
       },
@@ -148,12 +143,12 @@
         "list": []
       },
       "modelRequests": {
-        "total": 5,
+        "total": 4,
         "status429": 0,
-        "otherErrors": 2,
+        "otherErrors": 1,
         "byModel": {
           "nvidia nvidia/nemotron-3-ultra-550b-a55b": 1,
-          "openrouter nvidia/nemotron-3-ultra-550b-a55b:free": 4
+          "openrouter nvidia/nemotron-3-ultra-550b-a55b:free": 3
         }
       },
       "checks": "3/3 passed",
@@ -214,7 +209,8 @@
       },
       "checks": "6/6 passed",
       "attempts": 1,
-      "run": "B1"
+      "run": "B1",
+      "repositoryCommit": "f2f87bbea506630514ab4ace53839d65c0639458"
     },
     {
       "task": "B",
@@ -267,7 +263,8 @@
       },
       "checks": "6/6 passed",
       "attempts": 1,
-      "run": "B2"
+      "run": "B2",
+      "repositoryCommit": "f2f87bbea506630514ab4ace53839d65c0639458"
     },
     {
       "task": "B",
@@ -323,7 +320,8 @@
       },
       "checks": "6/6 passed",
       "attempts": 1,
-      "run": "B3"
+      "run": "B3",
+      "repositoryCommit": "f2f87bbea506630514ab4ace53839d65c0639458"
     }
   ]
 }

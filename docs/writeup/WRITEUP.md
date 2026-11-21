@@ -100,8 +100,8 @@ Models are configured only in TrueForge, from `config/models.json` via `node scr
 DeepSeek model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
 fastest with correct streamed tool calls. Gemini,
 Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** round 1 passed
-A, B, C (tag `round1-submission`). This build (`f2f87bb`), 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
-runs (92–124 s, 25–27 requests, ~1M input tokens), then A, B, C passed (B: 74 requests, 36 malformed edits). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
+A, B, C (tag `round1-submission`). This build, 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
+runs (92–124 s, 25–27 requests, ~1M input tokens), then A, B, C passed on the final commit (B: 30 requests, 244 s). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
 turn. Then the harness's policy, for failures before any write: authentication errors fall back immediately;
 unreachable/timeouts/5xx/429 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and
 then fall back to the `-fallback` agent, which **starts a fresh TrueForge session**. There is **no retry or
@@ -129,8 +129,8 @@ reviews with a multi-select hunk picker (✓ / ✕ in its title bar) instead, co
 
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
-VS Code), 161 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
-renders ≤ 100 ms) passed 3/3 suite runs (peaks 52–62 ms) and fails an injected 200 ms stall; one earlier run had
+VS Code), 163 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
+renders ≤ 100 ms) passed 3/3 suite runs (peaks 49–106 ms) and fails an injected 200 ms stall; one earlier run had
 an unexplained 605 ms block in VS Code's `postMessage`.
 
 ## 7. Tools used

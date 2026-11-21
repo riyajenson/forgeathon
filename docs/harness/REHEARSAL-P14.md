@@ -96,3 +96,36 @@ Verdict: targets not met, so Phase 2 was not started. Compaction at 40k behaves 
 edit, with no unrelated hunks. The misses are the turn time (test-fix loop and generation latency in B1) and
 NVIDIA's free-tier throttling (B2, redo). The first-diff time also varies with exploration: B2 reached its first
 diff at request 31 with no compaction at all.
+
+## Phase 2: test-command budget, Resume after a rate limit, sub-agents (2026-11-21, protocol 0.4.5)
+
+Offline work first (scripted model only), then a paced real batch. Changes:
+
+- **Separate test-command budget.** Test runs (`pytest`, `python -m pytest`, listed: no shell operators; a path or
+  `NAME=value` prefix is allowed) count against `TurnRequest.testCommandBudget` (default 3 agent, 1 inline;
+  setting `forge.testCommandBudget.*`). `commandBudget` now covers every other command. In phase 1b B1, a denied
+  debug `python -c … | head` used the last slot of the shared budget and the next three test runs were refused; now
+  the third test run would still run. `command_budget_reached.kind` says which budget refused a call, and the panel
+  names it ("test-command budget reached"). The agent instructions are unchanged ("2 run_command calls").
+- **Resume after a rate limit.** When a turn stops on a 429 (after TrueForge's own resends, and with no retry or
+  fallback left, typically because edits were already saved), the harness emits `resumable` (files changed so far,
+  suggested wait 60 s) before the error. The panel shows **Resume** once the wait has passed; it submits the same
+  instruction with `resumeOf` in the same session. The harness continues the same TrueForge conversation, puts a
+  note before the request ("Resumed turn: … Already changed in that turn: … re-read only the line ranges you are about
+  to edit …"), and carries over what the interrupted turn used of both budgets. A turn can be resumed once. Verified
+  against TrueForge 0.185.1: a turn that ended in error keeps its tool calls and results in the conversation, so the
+  resumed turn sees them. The smoke has `--resume-after-rate-limit` (off; not used in this batch).
+- **Sub-agents.** `setup-trueforge.mjs --subagents` enables TrueForge's dynamic sub-agents for `forge-coder` only
+  and appends the template's `subAgents.instructions`: at most one read-only exploration sub-agent per task, with a
+  self-contained brief, asking for paths, line ranges and verbatim text; edits and commands stay with the main agent.
+  TrueForge gives the sub-agent the same MCP tools, so its edits and commands still go through review, the budgets
+  and cancellation (approvals carry its thread id). The harness turns `thread.created`/`thread.done` of child threads
+  into `subagent` events and status lines ("Delegated to sub-agent "explorer": …", "Sub-agent "explorer" finished"),
+  keeps the sub-agent's own text out of the reply, and the smoke records each delegation.
+
+| Offline check | Result |
+|---|---|
+| Unit (`npm --prefix src/harness test`) | new: test-command classification, split budgets (incl. the B1 sequence), resumable/no resumable, resume note and inherited budgets, a resumed turn rate-limited again, sub-agent events, child-thread approval, child text filtered, failed sub-agent, setup `--subagents` |
+| Integration (real TrueForge 0.185.1 + mock model) | new: "resume after a rate limit" (edit saved, 429 until the turn stops, `resumable`, Resume in the same TrueForge session with the earlier tool results in view; bad and repeated `resumeOf` refused) and "sub-agents on the mock" (`create_sub_agent` offered, the sub-agent reads and edits through review, its report returns as the tool result) |
+| `scripts/e2e-mock.sh` | new Task R: the scripted model makes Task A's edit, is rate limited until the turn stops, and the smoke resumes it: 24 checks |
+| Extension suite | test-budget label, sub-agent rows, Resume offered and resubmitted with `resumeOf` in the same conversation, `testCommandBudget` reaches the harness |

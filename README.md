@@ -94,6 +94,15 @@ How one turn runs:
    write**, or while a tool call is unsettled: the turn ends with the error. Errors are classified from the
    provider's status and wording. The free OpenRouter fallback serves the same model from NVIDIA's backend and
    has a daily cap (50 requests without credit), so it covers throttling and key problems, not an NVIDIA outage.
+   **Resume (branch `harness/p14-trueforge-depth`):** when a turn stops on a rate limit (429), for example after
+   edits were saved, the panel offers **Resume** after about a minute. Resume sends the same request as a new turn
+   in the same TrueForge conversation, tells the model which files are already changed, and carries over what the
+   interrupted turn used of the command budgets. A turn can be resumed once.
+7. **Sub-agents (optional, off by default).** `node scripts/setup-trueforge.mjs --subagents` enables TrueForge's
+   dynamic sub-agents for `forge-coder` (not inline) and adds delegation guidance: at most one read-only
+   exploration sub-agent per task, with edits and commands left to the main agent. A sub-agent's edits and
+   commands still go through the same review and budgets. The panel lists each one as "Sub-agent: <name>" with
+   its task and outcome, and the status line shows "Delegated to sub-agent …".
 
 ## Quickstart with real models
 
@@ -469,8 +478,10 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token, generated each time the server starts) |
 | `forge.context.budgetTokens` | `8000` | Agent-mode context budget |
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
-| `forge.commandBudget.agent` | `3` | Most commands per agent turn |
+| `forge.commandBudget.agent` | `3` | Most commands per agent turn, test runs not included |
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
+| `forge.testCommandBudget.agent` | `3` | Most test runs (`pytest`, `python -m pytest`) per agent turn, counted separately, so a denied or extra command never uses up a test rerun ("test-command budget reached") |
+| `forge.testCommandBudget.inline` | `1` | Most test runs per inline turn |
 | `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY` | (none) | Provider keys, read by the setup script; only those your config uses are needed (default: NVIDIA and OpenRouter) |
 | `OUTBOUND_URL_ALLOWED_HOSTS` | (none) | TrueForge: must include `127.0.0.1` so it can call the editor's MCP server |
 | `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults (5000, 2) | We use `3000` and `4`: a short connect timeout, and TrueForge resends a rate-limited (429) model request up to 4 times (about 15 s) before the turn sees the error |
@@ -522,7 +533,7 @@ and edits, so a mock run is no evidence of file discovery. Real-model results: `
 |---|---|---|
 | `npm --prefix src/harness test` | Harness unit tests, and turn races against an in-memory TrueForge stand-in (late writes against retry and fallback; a silent server against Stop) | Nothing. The Flask ranking test needs `FORGE_FLASK_DIR`, otherwise it is skipped |
 | `npm --prefix src/harness run test:integration` | Turns through a real TrueForge 0.185.1: approvals, partial accept, deny, cancel races, 401/429/watchdog → retry or fallback, two 429s per model call absorbed by TrueForge's own retries (no harness retry, no duplicate tool call), run_command, setup | TrueForge on :8790 (`scripts/dev-mock.sh --background`) |
-| `scripts/e2e-mock.sh` | Tasks A, B, C and G (guardrails) through the harness on a copy of Flask 3.1.3, with the verification commands: 21 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
+| `scripts/e2e-mock.sh` | Tasks A, B, C, G (guardrails) and R (Resume after a scripted 429) through the harness on a copy of Flask 3.1.3, with the verification commands: 24 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
 | `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
 | `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, Stop during an apply, panel (incl. the turn-end file summary), settings | A display (WSLg, or X/Wayland on Linux). Fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A (incl. undo and re-apply), B, Stop during a pending review and during a running command, and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |
@@ -546,7 +557,11 @@ The smoke script also accepts these options:
 
 - `--auto-approve-safe-commands` and `--deny-unrestricted` answer prompts as in the video.
 - `--meter-log` reports requests and 429s per task. It needs `scripts/model-meter.mjs`, a loopback proxy that
-  records status, timing, `Retry-After` and tokens, never bodies or keys (usage in the script's header).
+  records status, timing, `Retry-After` and tokens, never bodies or keys (usage in the script's header). Its
+  `--min-interval-ms 3000` spaces request starts per provider, which keeps a run at 20 requests per minute or fewer.
+- `--resume-after-rate-limit` resumes Task B once if it stops on a rate limit, after `--resume-wait-sec` (default:
+  the harness's suggestion, 60 s). The run record lists sub-agent delegations and test runs refused by the
+  test-command budget.
 
 ## Troubleshooting
 
@@ -570,7 +585,7 @@ The smoke script also accepts these options:
 ```text
 agent/        TrueForge agent definitions (forge-coder.json, forge-inline.json)
 config/       models.example.json (real providers), models.mock.example.json (demo model)
-contracts/    shared TypeScript contract between extension and harness (protocol 0.4.4)
+contracts/    shared TypeScript contract between extension and harness (protocol 0.4.5)
 extension/    VS Code extension: commands, inline review, agent panel, EditorPort
 src/harness/  forge-harness: TrueForge adapter, MCP server and tools, context engine,
               review core, command budget, demo model, model meter

@@ -78,7 +78,7 @@ exports.run = async () => {
     assert.ok(b.reviews >= 3, `three reviews (saw ${b.reviews})`);
     assert.ok(b.commands >= 1, 'the pytest command was approved');
     const st = ui.panel.state;
-    assert.ok(st.context.estimatedTokens > 0 && st.context.budgetTokens === 8000, 'context budget visible');
+    assert.ok(st.context.estimatedTokens > 0 && st.context.budgetTokens === 4000, 'context budget visible');
     assert.ok(st.context.selections.some((s) => s.path === 'src/flask/cli.py' && s.rationale), 'cli.py chosen with a reason');
     assert.ok(Array.isArray(st.context.skipped), 'skipped items visible');
     assert.ok(st.tools.some((t) => t.label === 'propose_edit') && st.tools.some((t) => t.label === 'run_command'), 'tool activity listed');

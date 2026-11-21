@@ -31,7 +31,8 @@ export interface HarnessOptions {
   settleMs?: number;
   /** Delay before the single retry of an unavailable model. Default 2000 ms. */
   retryDelayMs?: number;
-  /** Token budget for automatically assembled context in agent mode (setting forge.context.budgetTokens). Default 8000. */
+  /** Token budget for automatically assembled context in agent mode (setting forge.context.budgetTokens). Default 4000:
+   * every agent request resends it, and on Task B 4000 still holds the outlines of cli.py, cli.rst and test_cli.py. */
   contextBudgetTokens?: number;
   /** Name of the MCP connector registered in TrueForge. Default "vscode". */
   connectorName?: string;
@@ -183,7 +184,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       agentModel: (agent) => this.modelOf(agent),
       cancelTimeoutMs: this.options.cancelTimeoutMs ?? 5000,
       watchdogMs: this.options.watchdogMs ?? 45000,
-      contextBudgetTokens: this.options.contextBudgetTokens ?? 8000,
+      contextBudgetTokens: this.options.contextBudgetTokens ?? 4000,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: this.options.settleMs ?? 10000,
       turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,

@@ -35,7 +35,7 @@ hand. Run it once with the demo model and once with the real models before recor
 |---|---|---|
 | B.1 | **Forge-a-thon: Open Agent Panel** | Panel "Forge Agent" beside the editor: Task box, Send, Stop (disabled) |
 | B.2 | Paste instruction B, **Send** | Stop enabled; status running; text streams in |
-| B.3 | Look at **Context** | "N / 8000 estimated tokens"; list starts with files such as `src/flask/cli.py` with a reason; **Skipped** list with reasons |
+| B.3 | Look at **Context** | "N / 4000 estimated tokens"; list starts with files such as `src/flask/cli.py` with a reason; **Skipped** list with reasons |
 | B.4 | Look at **Tool activity** | Entries such as `find_symbol | routes_command`, `read_file | src/flask/cli.py lines …` |
 | B.5 | First review (diff + hunk picker) for `src/flask/cli.py` | Diff shows the new `config_command` and its registration; **✓** |
 | B.6 | Reviews for `tests/test_cli.py` and `docs/cli.rst` | Accept each |

@@ -20,7 +20,7 @@
       "generativeUi": { "enabled": false },
       "askUserQuestions": { "enabled": false },
       "contextManagement": {
-        "compaction": { "enabled": true, "trigger": { "type": "input_tokens", "value": 30000 } },
+        "compaction": { "enabled": true, "trigger": { "type": "input_tokens", "value": 40000 } },
         "largeToolResponse": { "enabled": false }
       },
       "iterationLimit": 60

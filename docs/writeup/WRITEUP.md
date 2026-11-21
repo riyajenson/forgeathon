@@ -35,8 +35,8 @@ compaction is on (60k input tokens); iteration limits 8 (inline) and 60 (agent).
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
 the prompt): a per-turn command budget (5 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached"; one rerun of a command after an accepted fix is
-always allowed, and `cd … && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (read-only
+without prompting and the panel shows "command budget reached"; 2 kept for pytest, plus one rerun after a
+fix; `cd … && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (read-only
 checkout and host, private `/tmp`, no network, no provider keys in its environment; refused if unavailable;
 it can still read files, see section 8), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
@@ -70,7 +70,7 @@ every tool call of the failed attempt has settled and no approved edit or comman
    symbol-name, decorator and file-name boosts. A file's score sums its best chunks and term coverage; code
    is weighted above docs and tests, which then rise through **neighbour bonuses**: `src/x.py` →
    `tests/test_x.py`, docs that mention the module or its symbols, and one-hop imports.
-3. **Packing within the budget** (default 8,000 tokens, chars/4): outlines of the top files, then whole
+3. **Packing within the budget** (default 4,000 tokens, chars/4; resent with every request): outlines of the top files, then whole
    functions and sections; anything that does not fit is listed as **skipped** with the reason.
 4. The **context report** (items, ranks, plain-English reasons, used/budget, skipped) is shown in the agent
    panel; the agent can ask for more with `gather_context`.
@@ -152,7 +152,7 @@ an unexplained 605 ms block in VS Code's `postMessage`.
 
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
-instructions (one run spent its budget on `python -c` checks, then left a failing test), hence the harness command budget (5 per turn, plus one rerun after a fix); each step resends the whole conversation. Retrieval is
+instructions (one run spent its budget on `python -c` checks, then left a failing test), hence the harness command budget; each step resends the whole conversation. Retrieval is
 lexical by default (semantic reranking is ~178× slower). The symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the

@@ -1,5 +1,11 @@
 # Project status
 
+**2026-11-21, after the real runs (scripted model only, not yet measured on real models):** agent turns with a
+command budget of at least 4 keep the last 2 runs for pytest (B3's failure mode), the responsiveness DOM gate
+allows one outlier (the 16 ms flake) but not two over 10 ms or one over 50 ms (6 of 6 runs passed; the 200 ms stall
+still fails), and the agent context budget default is 4000 instead of 8000 (Task B keeps cli.py, cli.rst and
+test_cli.py; about 100k fewer input tokens per B run, estimated from B3's trace).
+
 **2026-11-21, finals branch (`feature/hybrid-efficiency-native` at `6b21d39`), real models, profile nvidia-free, video
 settings:** three Task B runs, then one A/B/C rehearsal (`docs/writeup/rehearsal.json`).
 

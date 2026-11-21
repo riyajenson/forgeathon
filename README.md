@@ -314,7 +314,8 @@ FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; p
 - The test run, then a summary.
 - At turn end, **Files changed in this turn: 3**, listing the three paths together with their review and
   accepted-hunk counts.
-- At most 5 commands per turn (`forge.commandBudget.agent`). After that, one rerun of a test command that already
+- At most 5 commands per turn (`forge.commandBudget.agent`); with a budget of 4 or more, the last 2 are kept for
+  test runs (`pytest`, `python -m pytest`), so other commands get at most 3. After that, one rerun of a test command that already
   ran is still allowed once a fix was accepted, so a failing test can always be fixed and checked; any other
   command appears as "command budget reached". A `cd … && …` command is refused before any prompt, without
   using the budget, and the model is told the corrected call.
@@ -387,7 +388,8 @@ source ~/.forge-keys.env && scripts/use-models.sh nvidia-free
 - **Packing:** outlines of the top files come first, then whole functions and sections, until the budget is
   reached. Anything that does not fit is listed as skipped.
 - **More on demand:** the agent can ask for more context with the `gather_context` tool.
-- **Budget:** `forge.context.budgetTokens` (default 8000 tokens, estimated as characters ÷ 4).
+- **Budget:** `forge.context.budgetTokens` (default 4000 tokens, estimated as characters ÷ 4; every agent request resends
+  the context, so a larger budget multiplies across a turn's ~30 requests).
 
 **Reading the Context block** in the agent panel:
 
@@ -468,7 +470,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 |---|---|---|
 | `forge.trueforgeUrl` | `http://127.0.0.1:8790` | TrueForge server |
 | `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token, generated each time the server starts) |
-| `forge.context.budgetTokens` | `8000` | Agent-mode context budget |
+| `forge.context.budgetTokens` | `4000` | Agent-mode context budget |
 | `forge.context.semanticSearch` | `false` | Opt in to local semantic reranking when keyword evidence is weak |
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
 | `forge.commandBudget.agent` | `5` | Most commands per agent turn |

@@ -20,11 +20,11 @@ hand. Run it once with the demo model and once with the real models before recor
 | A.1 | Open `src/flask/helpers.py`, select lines 28–33 (`get_debug_flag`) | Selection visible |
 | A.2 | `Ctrl+Alt+I` | Input box "How should the selection change?" |
 | A.3 | Paste instruction A, Enter | Notification "Forge inline edit — waiting for the model…" with **Cancel** |
-| A.4 | Wait | Diff editor "src/flask/helpers.py - proposed changes" opens; notification "Review N hunks in src/flask/helpers.py" with **Accept All / Reject All / Choose Hunks...** (the demo model makes 2 hunks; a real model may differ) |
-| A.5 | **Choose Hunks...** | Picker lists every hunk (e.g. the docstring and the `{"0", "false", "no", "off", "n"}` line), all checked |
+| A.4 | Wait | Diff editor "src/flask/helpers.py - proposed changes" opens with the hunk picker "Select hunks to accept" above it; its title bar has ✓ and ✕ (the demo model makes 2 hunks; a real model may differ) |
+| A.5 | Look at the picker; hover ✓ and ✕ | Every hunk listed (e.g. the docstring and the `{"0", "false", "no", "off", "n"}` line), all checked; tooltips "Accept all hunks" / "Reject all hunks". Escape hides the picker, **Review hunks** in the status bar reopens it |
 | A.6 | Uncheck one hunk, Enter | Only the checked hunks change `helpers.py`; the file is saved (no dirty dot) |
 | A.7 | Command palette: **Forge-a-thon: Undo Last Reviewed Edit** | `helpers.py` back to the original; `git status` clean |
-| A.8 | Repeat A.1–A.4, **Accept All** | Both hunks applied and saved |
+| A.8 | Repeat A.1–A.4, click **✓** | Both hunks applied and saved |
 | A.9 | Terminal: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` | `False` |
 | A.10 | Same with `FLASK_DEBUG=N` and `FLASK_DEBUG=1` | `False`, `True` |
 | A.11 | `git checkout -- .` | Clean |
@@ -35,9 +35,9 @@ hand. Run it once with the demo model and once with the real models before recor
 |---|---|---|
 | B.1 | **Forge-a-thon: Open Agent Panel** | Panel "Forge Agent" beside the editor: Task box, Send, Stop (disabled) |
 | B.2 | Paste instruction B, **Send** | Stop enabled; status running; text streams in |
-| B.3 | Look at **Context** | "N / 8000 estimated tokens"; list starts with files such as `src/flask/cli.py` with a reason; **Skipped** list with reasons |
+| B.3 | Look at **Context** | "N / 4000 estimated tokens"; list starts with files such as `src/flask/cli.py` with a reason; **Skipped** list with reasons |
 | B.4 | Look at **Tool activity** | Entries such as `find_symbol | routes_command`, `read_file | src/flask/cli.py lines …` |
-| B.5 | First review (diff + notification) for `src/flask/cli.py` | Diff shows the new `config_command` and its registration; **Accept All** |
+| B.5 | First review (diff + hunk picker) for `src/flask/cli.py` | Diff shows the new `config_command` and its registration; **✓** |
 | B.6 | Reviews for `tests/test_cli.py` and `docs/cli.rst` | Accept each |
 | B.7 | **Command approval** section in the panel shows `$ python -m pytest tests/test_cli.py -q` | **Allow once**; tool activity shows the command result |
 | B.8 | Turn ends | Summary text; "Model: … | … input / … output tokens"; **Reviewed edits** lists 3 files `saved` |
@@ -61,7 +61,7 @@ hand. Run it once with the demo model and once with the real models before recor
 |---|---|---|
 | C.1 | Demo: `scripts/dev-mock.sh --break-primary` · real: rerun setup with a wrong value in the primary's key variable | "agent … updated" lines |
 | C.2 | Repeat Task A (A.1–A.4) | Panel/notification banner "Primary model failed: … (401) … → switched to <fallback model>"; the fallback model's diff appears; editor stays responsive |
-| C.3 | **Reject All** | No change; `git status` clean |
+| C.3 | **✕** in the hunk picker | No change; `git status` clean |
 | C.4 | Restore: `scripts/dev-mock.sh --restore` · real: rerun setup with the real key | Task A works with the primary again |
 
 ## Other checks

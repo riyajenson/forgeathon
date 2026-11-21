@@ -34,8 +34,9 @@ compaction is on (60k input tokens); iteration limits 8 (inline) and 60 (agent).
 (text, tool calls, results, context report, review/command requests, fallback, done) and handles approvals:
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
-the prompt): a per-turn command budget (3 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached"), approved commands run in **bubblewrap** (read-only
+the prompt): a per-turn command budget (5 agent, 1 inline; later `run_command` calls are refused to the model
+without prompting and the panel shows "command budget reached"; 2 kept for pytest, plus one rerun after a
+fix; `cd … && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (read-only
 checkout and host, private `/tmp`, no network, no provider keys in its environment; refused if unavailable;
 it can still read files, see section 8), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
@@ -69,18 +70,22 @@ every tool call of the failed attempt has settled and no approved edit or comman
    symbol-name, decorator and file-name boosts. A file's score sums its best chunks and term coverage; code
    is weighted above docs and tests, which then rise through **neighbour bonuses**: `src/x.py` →
    `tests/test_x.py`, docs that mention the module or its symbols, and one-hop imports.
-3. **Packing within the budget** (default 8,000 tokens, chars/4): outlines of the top files, then whole
+3. **Packing within the budget** (default 4,000 tokens, chars/4; resent with every request): outlines of the top files, then whole
    functions and sections; anything that does not fit is listed as **skipped** with the reason.
 4. The **context report** (items, ranks, plain-English reasons, used/budget, skipped) is shown in the agent
    panel; the agent can ask for more with `gather_context`.
-5. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
+5. **Optional semantic reranking** (`forge.context.semanticSearch`, off): a pinned MiniLM model reranks weak
+   keyword matches on the CPU in a worker thread. Its runtime is an opt-in install
+   (`scripts/enable-semantic-search.sh`, ~230 MB); without it the Context block says ranking stayed lexical.
+6. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
    `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
    files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; binary files are
    refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name.
 
-Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s): for Task B, `src/flask/cli.py` ranks first and the
+The workspace is indexed in the background at start-up. Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s cold): for Task B, `src/flask/cli.py` ranks first and the
 packed context (7,456 of 8,000 tokens, 28 items, 7 skipped) includes `tests/test_cli.py` and `docs/cli.rst`.
-Four unrelated Flask tasks also rank their source file first (regression test in the repo).
+Four unrelated Flask tasks also rank their source file first (regression test in the repo). On 11 benchmark tasks,
+semantic reranking gave +15% relevant-file density, +11% MRR, −2% recall@5, at 352 ms vs 2 ms median: off by default.
 
 ## 5. Model setup
 
@@ -94,9 +99,9 @@ Models are configured only in TrueForge, from `config/models.json` via `node scr
 **switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`, one of three named profiles). The NVIDIA catalog offered no Qwen3 Coder or
 DeepSeek model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
 fastest with correct streamed tool calls. Gemini,
-Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** Task B
-passed on real models in earlier rehearsals (133–259 s); the result of A, B and C on the submitted commit is in
-`docs/writeup/rehearsal.json`. TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
+Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** round 1 passed
+A, B, C (tag `round1-submission`). This build, 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
+runs (92–124 s, 25–27 requests, ~1M input tokens), then A, B, C passed on the final commit (B: 30 requests, 244 s). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
 turn. Then the harness's policy, for failures before any write: authentication errors fall back immediately;
 unreachable/timeouts/5xx/429 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and
 then fall back to the `-fallback` agent, which **starts a fresh TrueForge session**. There is **no retry or
@@ -110,19 +115,23 @@ watchdog stops a turn that streams nothing for 45 s.
 | Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
 |---|---|---|
 | Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | 00:03 |
-| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests) | 00:52 |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests); this build: 3 of 3 runs and the rehearsal | 00:52 |
 | Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
 | Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
 | Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
-| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
+| Resilience (10) | [video] Task C: invalid primary key → fallback banner → ✕ (reject all hunks) → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
 | TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | 03:05 |
 | Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
 | PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
+Timestamps refer to the submitted round-1 video (Accept All / Reject All / Choose Hunks… prompt); the finals build
+reviews with a multi-select hunk picker (✓ / ✕ in its title bar) instead, covered by the native UI tests.
+
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
-VS Code), 134 unit and 19 integration tests against TrueForge 0.185.1; no extension-host block over 150 ms in
-measured scripted B runs (peaks 95–139 ms).
+VS Code), 163 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
+renders ≤ 100 ms) passed 3/3 suite runs (peaks 49–106 ms) and fails an injected 200 ms stall; one earlier run had
+an unexplained 605 ms block in VS Code's `postMessage`.
 
 ## 7. Tools used
 
@@ -143,8 +152,8 @@ measured scripted B runs (peaks 95–139 ms).
 
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
-instructions, hence the harness command budget (3 per turn); each step resends the whole conversation. Retrieval is lexical (no embeddings) and
-the symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
+instructions (one run spent its budget on `python -c` checks, then left a failing test), hence the harness command budget (last 2 runs kept for pytest); each step resends the whole conversation. Retrieval is
+lexical by default (semantic reranking is ~178× slower). The symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
@@ -153,7 +162,6 @@ fallback allows 50 requests/day without credit (one B takes 40–70). Compaction
 demo tasks never reach the threshold. One workspace
 folder; tested on WSL only.
 
-**With another month:** embeddings and language-server symbols for retrieval, evaluated across repositories and
+**With another month:** faster embeddings and language-server symbols for retrieval, evaluated across repositories and
 models; per-hunk CodeLens; conversation history across fallback; read confinement for
-`run_command`; cost-aware model routing; Marketplace packaging. A hybrid-efficiency branch (multi-select picker, optional semantic
-search) is in progress on feature/hybrid-efficiency-native; not part of this submission.
+`run_command`; cost-aware model routing; Marketplace packaging.

@@ -6,14 +6,17 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import type { HarnessEvent, ReviewDecision } from '../contract-types';
+import { PROTOCOL_VERSION, type HarnessEvent, type ReviewDecision, type TurnRequest } from '../contract-types';
+import type { ContextAssemblyOptions } from '../context';
 import { FakePort } from '../mcp/fake-port';
 import { ScopeRegistry, type SessionScope } from '../mcp/scope';
 import { proposeEditTool } from '../mcp/tools';
 import { runCommandTool } from '../mcp/command';
 import { sha256Hex } from '../review';
 import type { TrueForgeClient, TrueForgeSdk } from '../trueforge/sdk';
-import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, TurnRun, type TurnDeps } from './turn';
+import { isTestCommand } from '../mcp/command';
+import { cdPrefix, COMMAND_BUDGET_EXHAUSTED, COMMAND_BUDGET_RESERVED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, RERUN_AFTER_FIX, TurnRun, type TurnDeps } from './turn';
+import { buildTurnInput } from './prompt';
 
 /** An async event stream the test feeds by hand. Aborting the request signal ends it with an error. */
 class Channel implements AsyncIterable<unknown> {
@@ -72,12 +75,15 @@ class FakeTrueForge {
   cancels = 0;
   /** Every user.tool_approval sent back to TrueForge, in order. */
   readonly approvals: Array<{ toolCallId: string; approval: { status: string; reason?: string } }> = [];
+  /** The request body of every createTurnStream call (the turn's input). */
+  readonly turnRequests: unknown[] = [];
   private active: Channel | undefined;
   constructor(private readonly script: Script) {}
 
   readonly client = {
     sessions: {
-      createTurnStream: async (sessionId: string, _req: unknown, opts?: { abortSignal?: AbortSignal }) => {
+      createTurnStream: async (sessionId: string, req: unknown, opts?: { abortSignal?: AbortSignal }) => {
+        this.turnRequests.push(req);
         const ch = new Channel(opts?.abortSignal);
         this.active = ch;
         this.script.onTurn(ch, ++this.turns, sessionId);
@@ -166,6 +172,106 @@ const events = (run: TurnRun): readonly HarnessEvent[] => run.buffer.snapshot();
 const terminal = (run: TurnRun) => events(run).filter((e) => e.t === 'done');
 const lastError = (run: TurnRun) => events(run).filter((e) => e.t === 'error').pop() as Extract<HarnessEvent, { t: 'error' }> | undefined;
 const scopeOf = (sessionId: string): SessionScope => scopes.get(sessionId)!;
+
+test('turn prompt includes the ranked shortlist and keeps an explicit reference pinned', async () => {
+  const request = {
+    sessionId: 's', turnId: 'prompt', mode: 'agent',
+    instruction: 'find the new user token alpha theta login flow',
+    references: [{ kind: 'file', path: FILE }],
+    semanticSearch: true,
+  } as TurnRequest;
+  let semanticCalls = 0;
+  const progress: number[] = [];
+  const options: ContextAssemblyOptions = {
+    onSemanticProgress: (event) => { if (typeof event.progress === 'number') progress.push(event.progress); },
+    semanticRanker: {
+      rank: async (_query, chunks, _signal, onProgress) => {
+        semanticCalls++;
+        onProgress?.({ status: 'progress_total', progress: 42 });
+        return new Map(chunks.map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.95]));
+      },
+    },
+  };
+  const turnInput = await buildTurnInput(request, port, 2000, undefined, options);
+  assert.ok(turnInput.input.includes('Context gathered by the editor'));
+  assert.ok(turnInput.context?.text.includes(FILE));
+  assert.ok(turnInput.context?.text.includes('@file'));
+  assert.equal(turnInput.context?.report.selections[0]?.path, FILE);
+  assert.equal(turnInput.context?.report.selections[0]?.source, 'explicit');
+  assert.equal(semanticCalls, 1, 'the request setting reaches context assembly when keyword coverage is weak');
+  assert.deepEqual(progress, [42], 'model progress reaches the active turn callback');
+});
+
+test('cancelling while semantic context is loading aborts the ranker', async () => {
+  const request = {
+    sessionId: 's', turnId: 'cancel-context', mode: 'agent',
+    instruction: 'new user token alpha theta login', semanticSearch: true,
+  } as TurnRequest;
+  const controller = new AbortController();
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  let observedAbort = false;
+  const options: ContextAssemblyOptions = {
+    semanticRanker: {
+      rank: async (_query, _chunks, signal) => new Promise((resolve) => {
+        markStarted();
+        signal?.addEventListener('abort', () => { observedAbort = true; resolve(new Map()); }, { once: true });
+      }),
+    },
+  };
+  const pending = buildTurnInput(request, port, 2000, controller.signal, options);
+  await started;
+  controller.abort();
+  await pending;
+  assert.ok(observedAbort);
+});
+
+test('coder and inline prompts use the ranked evidence workflow', async () => {
+  const repoRoot = path.resolve(__dirname, '../../../../../../');
+  const coder = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-coder.json'), 'utf8')) as { manifest: { instructions: string } };
+  const inline = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-inline.json'), 'utf8')) as { manifest: { instructions: string } };
+  // The coder prompt is main's (ecd4a06) verbatim: explore / edit / verify with the explicit command rules.
+  assert.match(coder.manifest.instructions, /Work in three phases/);
+  assert.match(coder.manifest.instructions, /context the editor ranked for this task/i);
+  assert.match(coder.manifest.instructions, /exactly ONE propose_edit per file/i);
+  assert.match(coder.manifest.instructions, /Verify only with `python -m pytest <the test file you changed> -q`/);
+  assert.match(coder.manifest.instructions, /task message states your run_command budget/);
+  assert.match(coder.manifest.instructions, /one more rerun of a test command that already ran/);
+  assert.match(coder.manifest.instructions, /re-read the request's requirements and check every assertion/);
+  assert.match(coder.manifest.instructions, /no python -c/);
+  assert.doesNotMatch(coder.manifest.instructions, /You have \d+ run_command calls/, 'the budget comes from the harness, not a number in the prompt');
+  assert.match(coder.manifest.instructions, /no cd, no pipes or redirection/);
+  assert.match(coder.manifest.instructions, /read-only host filesystem/);
+  assert.match(coder.manifest.instructions, /never use shell commands to edit source files/);
+  assert.match(inline.manifest.instructions, /ranked context/i);
+  assert.match(inline.manifest.instructions, /selected file only/i);
+});
+
+test('hybrid context setting stays off by default and the request contract is versioned', async () => {
+  const repoRoot = path.resolve(__dirname, '../../../../../../');
+  const extension = JSON.parse(await fs.readFile(path.join(repoRoot, 'extension/package.json'), 'utf8')) as {
+    contributes: { configuration: { properties: Record<string, { default?: unknown; description?: string }> } };
+  };
+  const setting = extension.contributes.configuration.properties['forge.context.semanticSearch'];
+  assert.ok(setting, 'the semantic-search setting is declared');
+  assert.equal(setting.default, false, 'benchmark results keep the slower semantic path opt-in');
+  assert.match(setting.description ?? '', /local|keyword/i);
+  assert.equal(PROTOCOL_VERSION as string, '0.4.5');
+});
+
+test('turn semantic setting is scoped to its session and stop aborts in-flight context work', async () => {
+  const tf = new FakeTrueForge({ onTurn: (ch, k) => ch.push(ev('turn.created', { turnId: `rt-${k}` }), done('done')) });
+  const run = makeRun(tf, {}, { semanticSearch: true });
+  await run.start();
+  const scope = scopeOf('rs-coder-1');
+  assert.equal(scope.semanticSearch, true);
+  const signal = scope.signal;
+  scope.cancel();
+  assert.equal(signal.aborted, true);
+  scope.resetForTurn();
+  assert.equal(scope.semanticSearch, false);
+  assert.equal(scope.signal.aborted, false);
+});
 
 test('control: a model error before any approval is retried once', async () => {
   const tf = new FakeTrueForge({
@@ -368,7 +474,7 @@ test('autoApproveSafeCommands never auto-approves unrestricted commands or edits
   for (const [tool, args] of [
     ['run_command', { command: 'python -m pytest tests | tail -5' }],
     ['run_command', { command: 'rm -rf build' }],
-    ['run_command', { command: 'cd /workspace && python -m pytest -q' }],
+    ['run_command', { command: 'python -m pytest -q && rm -rf build' }],
     ['propose_edit', editArgs()],
   ] as const) {
     const tf = new FakeTrueForge({
@@ -452,7 +558,7 @@ async function userDeniesCommands(run: TurnRun, asked: HarnessEvent[]): Promise<
 test('command budget: after 3 commands in an agent turn, run_command is refused without asking', async () => {
   const commands = ['python -m pytest tests/a.py', 'git diff', 'flask routes', 'python -m pytest', 'ls'];
   const tf = stepwise(commands.map((command) => ['run_command', { command }]));
-  const run = makeRun(tf);
+  const run = makeRun(tf, {}, { commandBudget: 3 });
   const asked: HarnessEvent[] = [];
   void userAnswers(run, asked);
   await run.start();
@@ -494,12 +600,118 @@ test('command budget: 0 refuses every command; edits are never limited', async (
   assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'allow']);
 });
 
-test('command budget defaults: 3 for agent, 1 for inline; invalid values use the default', () => {
-  assert.equal(commandBudgetOf({ mode: 'agent' }), 3);
+test('a cd-prefixed command is refused without a prompt and without using the budget, with the corrected call', async () => {
+  const tf = stepwise([
+    ['run_command', { command: 'cd /workspace && python -m pytest tests/test_cli.py -q' }],
+    ['run_command', { command: 'cd examples/tutorial; flask --app flaskr --help' }],
+    ['run_command', { command: 'python -m pytest tests/test_cli.py -q' }],
+  ]);
+  const run = makeRun(tf, {}, { commandBudget: 1 });
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.deepEqual(asked.map((e) => e.t === 'command_request' && e.command), ['python -m pytest tests/test_cli.py -q'], 'only the bare command was shown');
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['deny', 'deny', 'allow'], 'the budget of 1 was still free for the third call');
+  assert.match(tf.approvals[0]!.approval.reason ?? '', /COMMAND_SHAPE: .*command "python -m pytest tests\/test_cli.py -q"\. Nothing was run and the command budget was not used/);
+  assert.match(tf.approvals[1]!.approval.reason ?? '', /command "flask --app flaskr --help" and cwd "examples\/tutorial"/);
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 0);
+});
+
+test('cdPrefix: only a leading cd joined by && or ; is recognised', () => {
+  assert.deepEqual(cdPrefix('cd /w && pytest -q'), { dir: '/w', rest: 'pytest -q' });
+  assert.deepEqual(cdPrefix('  cd "a b";git status'), { dir: 'a b', rest: 'git status' });
+  for (const c of ['pytest -q', 'echo cd x && y', 'cd x', 'cd x || y', 'cdx && y']) assert.equal(cdPrefix(c), undefined, c);
+});
+
+test('command budget: after a fix, one rerun of a command that already ran is allowed past the budget, once', async () => {
+  const test = 'python -m pytest tests/test_cli.py -q';
+  const tf = stepwise([
+    ['run_command', { command: test }],
+    ['run_command', { command: test }],          // budget used up, no edit since: refused
+    ['propose_edit', editArgs()],
+    ['run_command', { command: 'git diff' }],     // never ran before: refused
+    ['run_command', { command: test }],          // the rerun after the fix: allowed
+    ['propose_edit', editArgs()],
+    ['run_command', { command: test }],          // the allowance is used: refused
+  ]);
+  const run = makeRun(tf, {}, { commandBudget: 1, autoApproveSafeCommands: true });
+  void userAnswers(run, []);
+  await run.start();
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'deny', 'allow', 'deny', 'allow', 'allow', 'deny']);
+  assert.match(tf.approvals[1]!.approval.reason ?? '', new RegExp(RERUN_AFTER_FIX));
+  assert.doesNotMatch(tf.approvals[6]!.approval.reason ?? '', new RegExp(RERUN_AFTER_FIX), 'no allowance is offered once it is used');
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 3);
+});
+
+test('command budget: inline turns get no rerun allowance and no budget note', async () => {
+  const tf = stepwise([['run_command', { command: 'pytest' }], ['propose_edit', editArgs()], ['run_command', { command: 'pytest' }]]);
+  const run = makeRun(tf, {}, { mode: 'inline', commandBudget: 1 });
+  void userAnswers(run, []);
+  await run.start();
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'allow', 'deny']);
+  assert.doesNotMatch(JSON.stringify(tf.turnRequests[0]), /Command budget for this turn/);
+});
+
+test('the agent turn message states the command budget the harness enforces', async () => {
+  const tf = stepwise([['run_command', { command: 'pytest' }]]);
+  const run = makeRun(tf, {}, { commandBudget: 4 });
+  void userAnswers(run, []);
+  await run.start();
+  assert.match(JSON.stringify(tf.turnRequests[0]), /Command budget for this turn: 4 run_command call\(s\)/);
+});
+
+test('command budget: an agent turn keeps its last 2 runs for tests, so a fix can be tested and tested again', async () => {
+  const test = 'python -m pytest tests/test_cli.py -q';
+  const tf = stepwise([
+    ['run_command', { command: 'python -c "print(1)"' }],
+    ['run_command', { command: 'python -c "print(2)"' }],
+    ['run_command', { command: 'python -c "print(3)"' }],
+    ['run_command', { command: 'python -c "print(4)"' }], // only the 2 runs kept for tests are left: refused
+    ['run_command', { command: 'flask --help' }],         // refused the same way
+    ['run_command', { command: test }],                   // 4th run
+    ['propose_edit', editArgs()],
+    ['run_command', { command: test }],                   // 5th run
+    ['propose_edit', editArgs()],
+    ['run_command', { command: test }],                   // the rerun after the fix, past the budget
+    ['run_command', { command: test }],                   // nothing left
+  ]);
+  const run = makeRun(tf, {}, { autoApproveSafeCommands: true });
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status),
+    ['allow', 'allow', 'allow', 'deny', 'deny', 'allow', 'allow', 'allow', 'allow', 'allow', 'deny']);
+  for (const i of [3, 4]) assert.match(tf.approvals[i]!.approval.reason ?? '', new RegExp(`COMMAND_BUDGET_RESERVED: ${COMMAND_BUDGET_RESERVED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(2 of 5 left`));
+  assert.match(tf.approvals[10]!.approval.reason ?? '', /COMMAND_BUDGET_EXHAUSTED/);
+  assert.equal(asked.filter((e) => e.t === 'command_request').length, 3, 'the refused commands were never shown');
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 3);
+  assert.match(JSON.stringify(tf.turnRequests[0]), /The last 2 are kept for test runs \(python -m pytest <the test file you changed> -q\): at most 3 other command\(s\)/);
+});
+
+test('command budget: no test reserve below a budget of 4 or in inline turns', async () => {
+  for (const req of [{ commandBudget: 3 }, { mode: 'inline' as const, commandBudget: 5 }]) {
+    const tf = stepwise([1, 2, 3].map((n) => ['run_command', { command: `python -c "print(${n})"` }]));
+    const run = makeRun(tf, {}, req);
+    void userAnswers(run, []);
+    await run.start();
+    assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'allow', 'allow'], JSON.stringify(req));
+    assert.doesNotMatch(JSON.stringify(tf.turnRequests[0]), /kept for test runs/);
+  }
+});
+
+test('isTestCommand: pytest and python -m pytest only, without shell operators', () => {
+  for (const c of ['python -m pytest tests/test_cli.py -q', 'pytest -q', '.venv/bin/python -m pytest', 'python3.12 -m pytest tests', 'FOO=1 pytest -x'])
+    assert.equal(isTestCommand(c), true, c);
+  for (const c of ['python -c "import pytest"', 'python -m pytest; rm -rf x', 'flask --help', 'git diff', 'pytest | tee log', 'python -m pytestx'])
+    assert.equal(isTestCommand(c), false, c);
+});
+
+test('command budget defaults: 5 for agent, 1 for inline; invalid values use the default', () => {
+  assert.equal(commandBudgetOf({ mode: 'agent' }), 5);
   assert.equal(commandBudgetOf({ mode: 'inline' }), 1);
   assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: 0 }), 0);
   assert.equal(commandBudgetOf({ mode: 'inline', commandBudget: 5 }), 5);
-  for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 3);
+  for (const bad of [-1, 1.5, Number.NaN]) assert.equal(commandBudgetOf({ mode: 'agent', commandBudget: bad }), 5);
 });
 
 test('autoApproveSafeCommands is narrowed: python -c, flask and path- or env-prefixed pytest still ask (not as unrestricted)', async () => {

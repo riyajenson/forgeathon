@@ -2,7 +2,7 @@
 // and translates everything into the shared HarnessEvent stream.
 import type { CancelStatus, EditProposal, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
-import { isAutoApprovableCommand, isListedCommand, UNRESTRICTED_WARNING } from '../mcp/command';
+import { isAutoApprovableCommand, isListedCommand, isTestCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
@@ -49,7 +49,7 @@ export type ReviewSubmitResult = { ok: true } | { ok: false; error: ProtocolErro
 const FALLBACK_SUFFIX = '-fallback';
 
 /** Default most run_command calls per turn (presented to the user or auto-approved), by mode. */
-export const DEFAULT_COMMAND_BUDGET = { agent: 3, inline: 1 } as const;
+export const DEFAULT_COMMAND_BUDGET = { agent: 5, inline: 1 } as const;
 
 export function commandBudgetOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>): number {
   const b = req.commandBudget;
@@ -58,6 +58,39 @@ export function commandBudgetOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>
 
 export const COMMAND_BUDGET_EXHAUSTED =
   'command budget for this turn exhausted; stop running commands, finish edits and summarize';
+
+/**
+ * Agent mode only: once the budget is used up, one rerun of a command that already ran this turn is still allowed
+ * after an edit was approved since that command last ran, so a fix can always be checked once.
+ */
+export const RERUN_AFTER_FIX =
+  'after your next fix you may rerun one test command that already ran this turn, once; nothing else';
+
+/**
+ * Agent turns with a budget of at least 4 keep their last runs for tests (pytest, python -m pytest): other commands
+ * may use only the rest, so a test can always be run, fixed and run again. Measured on real Task B runs, where one
+ * run spent 4 of 5 commands on python -c checks and could not test its last fix.
+ */
+export const TEST_RESERVE = 2;
+export function testReserveOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>): number {
+  return req.mode === 'agent' && commandBudgetOf(req) >= 4 ? TEST_RESERVE : 0;
+}
+
+export const COMMAND_BUDGET_RESERVED =
+  'the remaining commands of this turn are kept for running the tests; run the test file you changed with python -m pytest <file> -q instead';
+
+/** Appended to the agent turn's message so the model plans its verification within the limit the harness enforces. */
+export function commandBudgetNote(budget: number, reserve = 0): string {
+  return `Command budget for this turn: ${budget} run_command call(s). A refused command shape (cd prefix) does not count. ` +
+    (reserve ? `The last ${reserve} are kept for test runs (python -m pytest <the test file you changed> -q): at most ${budget - reserve} other command(s). ` : '') +
+    'Keep one run for the rerun after a fix; when the budget is used up, one rerun of a test command that already ran is still allowed after a fix.';
+}
+
+/** `cd <dir> && <command>` or `cd <dir>; <command>`: commands already start in the workspace root, and run_command takes a cwd. */
+export function cdPrefix(command: string): { dir: string; rest: string } | undefined {
+  const m = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*(\S[\s\S]*)$/.exec(command);
+  return m ? { dir: m[1]!.replace(/^["']|["']$/g, ''), rest: m[2]!.trim() } : undefined;
+}
 
 /** propose_edit refusals caused by the shape of the arguments rather than by the file's content. */
 const ARGUMENT_ERROR_CODES = new Set(['INVALID_ARGS', 'INVALID_EDIT', 'OUTSIDE_WORKSPACE']);
@@ -74,6 +107,7 @@ export class TurnRun {
   private attempt: Attempt | undefined;
   private scope: SessionScope | undefined;
   private cancelRequested = false;
+  private readonly contextAbort = new AbortController();
   private cancelPromise: Promise<CancelStatus> | undefined;
   private wakeRetry: (() => void) | undefined;
   private readonly waiters = new Map<string, ReviewWaiter>();
@@ -82,6 +116,11 @@ export class TurnRun {
   private readonly log = { retries: 0, fallback: false, toolCalls: 0, reviews: 0, commandPrompts: 0, autoApproved: 0, budgetRefused: 0, attempts: [] as AttemptRecord[] };
   /** run_command calls presented (prompted or auto-approved) this turn, counted against the command budget. */
   private commandsUsed = 0;
+  /** propose_edit calls approved (at least one hunk accepted) this turn. */
+  private editsApproved = 0;
+  /** For each command that ran this turn: editsApproved when it last ran. */
+  private readonly commandRuns = new Map<string, number>();
+  private rerunAfterFixUsed = false;
   /** Files with a propose_edit refused this turn for an argument error. */
   private readonly argumentErrors = new Set<string>();
 
@@ -155,6 +194,7 @@ export class TurnRun {
     if (this.done) return Promise.resolve('already_terminal');
     this.cancelPromise ??= (async () => {
       this.cancelRequested = true;
+      this.contextAbort.abort();
       this.buffer.emit({ t: 'status', state: 'cancelling' });
       this.scope?.cancel();
       for (const w of this.waiters.values()) w.resolve('cancelled');
@@ -187,8 +227,15 @@ export class TurnRun {
     const emit = this.buffer.emit.bind(this.buffer);
     emit({ t: 'turn_started' });
     emit({ t: 'status', state: 'starting' });
-    const { input, context } = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens);
+    const { input: turnInput, context } = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens, this.contextAbort.signal, {
+      onSemanticProgress: (event) => {
+        const progress = typeof event.progress === 'number' ? ` (${Math.floor(event.progress)}%)` : '';
+        const file = event.file ?? event.name;
+        emit({ t: 'status', state: 'starting', detail: `Loading local context model${progress}${file ? ` · ${file}` : ''}` });
+      },
+    });
     if (context) emit({ t: 'context_report', report: context.report });
+    const input = this.req.mode === 'agent' ? `${turnInput}\n\n${commandBudgetNote(commandBudgetOf(this.req), testReserveOf(this.req))}` : turnInput;
 
     let agent = this.deps.agentName;
     let onFallback = false;
@@ -219,6 +266,7 @@ export class TurnRun {
 
       const scope = this.deps.scopes.open(runtimeSessionId);
       scope.resetForTurn();
+      scope.semanticSearch = this.req.semanticSearch === true;
       scope.onApplied = (result) => emit({ t: 'edit_applied', result });
       scope.workspaceRoot = this.deps.workspaceRoot;
       scope.onContext = (report) => emit({ t: 'context_report', report });
@@ -397,6 +445,7 @@ export class TurnRun {
           acceptedHunkIds: acceptedIndices.map((i) => hunkId(call.id, i)),
           ...(d.reason ? { rejectReason: d.reason } : {}),
         });
+        this.editsApproved++;
         decisions.push({ id: call.id, threadId: call.threadId, allow: true });
         continue;
       }
@@ -406,15 +455,36 @@ export class TurnRun {
         const command = typeof a.command === 'string' ? a.command : '';
         const cwd = typeof a.cwd === 'string' && a.cwd ? a.cwd : '.';
         if (!command) { deny('INVALID_ARGS: command must be a non-empty string'); continue; }
+        const cd = cdPrefix(command);
+        if (cd) {
+          // A shape the instructions rule out; refused before the budget and the user see it, with the corrected call.
+          const where = cd.dir === '.' || cd.dir.startsWith('/') || cd.dir.startsWith('~') ? '' : ` and cwd "${cd.dir}"`;
+          deny(`COMMAND_SHAPE: commands already start in the workspace root; drop the cd prefix and call run_command with command "${cd.rest}"${where}. Nothing was run and the command budget was not used.`);
+          continue;
+        }
         const budget = commandBudgetOf(this.req);
-        if (this.commandsUsed >= budget) {
+        const key = command.trim();
+        const ranAt = this.commandRuns.get(key);
+        const rerunAfterFix = this.commandsUsed >= budget && this.req.mode === 'agent' && !this.rerunAfterFixUsed &&
+          ranAt !== undefined && this.editsApproved > ranAt;
+        if (this.commandsUsed >= budget && !rerunAfterFix) {
           // Hard per-turn limit, enforced here rather than trusted to the instructions: refused without a prompt.
           this.log.budgetRefused++;
           this.buffer.emit({ t: 'command_budget_reached', callId: call.id, command, budget });
-          deny(`COMMAND_BUDGET_EXHAUSTED: ${COMMAND_BUDGET_EXHAUSTED} (limit ${budget} per turn; nothing was run)`);
+          const rerun = this.req.mode === 'agent' && !this.rerunAfterFixUsed && this.commandRuns.size > 0 ? `; ${RERUN_AFTER_FIX}` : '';
+          deny(`COMMAND_BUDGET_EXHAUSTED: ${COMMAND_BUDGET_EXHAUSTED}${rerun} (limit ${budget} per turn; nothing was run)`);
           continue;
         }
-        this.commandsUsed++;
+        const reserve = testReserveOf(this.req);
+        if (!rerunAfterFix && reserve && this.commandsUsed >= budget - reserve && !isTestCommand(command)) {
+          // Only the runs kept for tests are left: a different command is refused without a prompt, like the budget.
+          this.log.budgetRefused++;
+          this.buffer.emit({ t: 'command_budget_reached', callId: call.id, command, budget });
+          deny(`COMMAND_BUDGET_RESERVED: ${COMMAND_BUDGET_RESERVED} (${budget - this.commandsUsed} of ${budget} left, kept for tests; nothing was run)`);
+          continue;
+        }
+        if (rerunAfterFix) this.rerunAfterFixUsed = true;
+        else this.commandsUsed++;
         this.buffer.emit({ t: 'status', state: 'awaiting_review', detail: command.slice(0, 120) });
         const listed = isListedCommand(command);
         if (this.req.autoApproveSafeCommands === true && isAutoApprovableCommand(command)) {
@@ -422,6 +492,7 @@ export class TurnRun {
           this.log.autoApproved++;
           this.buffer.emit({ t: 'command_request', callId: call.id, command, cwd, autoApproved: true });
           scope.commands.record(approvalKey('run_command', call.toolArgs), { callRef: { sessionId: this.req.sessionId, turnId: this.req.turnId, callId: call.id }, command, cwd });
+          this.commandRuns.set(key, this.editsApproved);
           decisions.push({ id: call.id, threadId: call.threadId, allow: true });
           continue;
         }
@@ -431,6 +502,7 @@ export class TurnRun {
         if (d === 'cancelled' || d.kind !== 'command') return 'cancelled';
         if (!d.allow) { deny(d.reason ? `user refused to run the command: ${d.reason}` : 'user refused to run the command'); continue; }
         scope.commands.record(approvalKey('run_command', call.toolArgs), { callRef: { sessionId: this.req.sessionId, turnId: this.req.turnId, callId: call.id }, command, cwd });
+        this.commandRuns.set(key, this.editsApproved);
         decisions.push({ id: call.id, threadId: call.threadId, allow: true });
         continue;
       }

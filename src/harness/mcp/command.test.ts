@@ -1,6 +1,6 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type SpawnOptions } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
@@ -329,6 +329,49 @@ test('abort during spawn is observed even before the abort listener is attached'
   assert.deepEqual(kill.mock.calls[0]?.arguments, [-12345, 'SIGTERM']);
   assert.equal(scope.running.size, 0);
 });
+
+// Stand-in for bwrap in the race Stop used to lose: its "sandbox" (a setsid sleep) leaves the spawned process's group
+// at once and keeps stdout/stderr open, as bwrap's sandbox process does before it has armed --die-with-parent. The
+// stand-in reports the sandbox pid on fd 3 (bwrap's --info-fd) after `reportDelay` seconds.
+function orphaningRuntime(pidFile: string, reportDelay: number): CommandRuntime {
+  const runtime = noSpawnRuntime();
+  runtime.environment = async () => ({ env: { PATH: process.env['PATH'] }, removed: 0 });
+  runtime.spawn = ((_file: string, _args: readonly string[], options: SpawnOptions) => spawn('/bin/sh', ['-c',
+    `setsid sleep 8 3>&- & echo $! > "${pidFile}"; sleep ${reportDelay}; ` +
+    `{ printf '{"child-pid": %s}' $! >&3; } 2>/dev/null; exec 3>&-; wait`], options)) as unknown as CommandRuntime['spawn'];
+  return runtime;
+}
+
+for (const [when, reportDelay] of [['after', 0], ['before', 0.5]] as const) {
+  test(`Stop kills a sandbox that left bwrap's process group (Stop ${when} bwrap reported it)`, async () => {
+    const pidFile = path.join(os.tmpdir(), `forge-orphan-${process.pid}-${reportDelay}`);
+    await fs.rm(pidFile, { force: true });
+    const args = { command: 'sleep 8' }; approve(args);
+    const result = runCommandTool(ctx, args, orphaningRuntime(pidFile, reportDelay));
+    let sandbox = 0;
+    try {
+      for (let i = 0; i < 300 && !sandbox; i++) {
+        sandbox = Number(await fs.readFile(pidFile, 'utf8').catch(() => '0')) || 0;
+        if (!sandbox) await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.ok(sandbox > 0, 'the stand-in sandbox started');
+      if (when === 'after') await new Promise((r) => setTimeout(r, 200));
+      const t0 = Date.now();
+      scope.cancel();
+      const r = await result;
+      const ms = Date.now() - t0;
+      assert.ok(ms < 4000, `Stop ended the command in ${ms} ms, not when the 8 s sandbox finished`);
+      assert.ok(r.ok && /killed: turn cancelled/.test(r.text), r.ok ? r.text : r.message);
+      const gone = () => { try { process.kill(sandbox, 0); return false; } catch { return true; } };
+      for (let i = 0; i < 100 && !gone(); i++) await new Promise((r) => setTimeout(r, 10));
+      assert.ok(gone(), 'the sandbox process was killed');
+    } finally {
+      if (sandbox) { try { process.kill(sandbox, 'SIGKILL'); } catch { /* gone */ } }
+      await result.catch(() => undefined);
+      await fs.rm(pidFile, { force: true });
+    }
+  });
+}
 
 test('working directory refuses symlink escape', async () => {
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-outside-'));

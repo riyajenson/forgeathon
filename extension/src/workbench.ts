@@ -117,7 +117,8 @@ export class Workbench implements vscode.Disposable {
       // Hard per-turn limit on commands, enforced by the harness (default 3 agent, 1 inline).
       const budget = cfg.get<unknown>(`commandBudget.${mode}`);
       const commandBudget = typeof budget === 'number' && Number.isInteger(budget) && budget >= 0 ? budget : undefined;
-      await controller.run(mode, instruction, context, {autoApproveSafeCommands, ...(commandBudget === undefined ? {} : {commandBudget})});
+      const semanticSearch = cfg.get<unknown>('context.semanticSearch', false) === true;
+      await controller.run(mode, instruction, context, {autoApproveSafeCommands, semanticSearch, ...(commandBudget === undefined ? {} : {commandBudget})});
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Turn failed';
       this.panel.error(message); this.panel.notice('Failed'); throw error;

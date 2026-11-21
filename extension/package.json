@@ -77,8 +77,13 @@
         "forge.context.budgetTokens": {
           "type": "integer",
           "minimum": 1,
-          "default": 8000,
+          "default": 4000,
           "description": "Agent-mode context budget in tokens."
+        },
+        "forge.context.semanticSearch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use local semantic reranking (CPU) when keyword evidence is weak. Opt-in: first run scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the model (about 54 MB) downloads on first use. Without the runtime, ranking stays lexical and the Context block says so. Off by default: current benchmarks show higher retrieval latency."
         },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",
@@ -87,7 +92,7 @@
         },
         "forge.commandBudget.agent": {
           "type": "integer",
-          "default": 3,
+          "default": 5,
           "minimum": 0,
           "description": "Most commands the agent may run in one turn (asked or auto-approved). Further run_command calls are refused by the harness without asking, and the panel shows \"command budget reached\"."
         },

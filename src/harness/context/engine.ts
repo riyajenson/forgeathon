@@ -3,10 +3,12 @@
 import type { ContextReport, Reference, SourceRange } from '../contract-types';
 import type { EditorPort } from '../mcp/port';
 import { normalizeWorkspacePath } from '../mcp/paths';
-import { rankFiles, type RankedFile } from './rank';
+import { rankFiles, shouldUseSemantic, type RankedFile } from './rank';
 import { isBinaryText, isSecretPath, modelPathRefusal } from './files';
 import { estimateTokens } from './text';
 import { buildIndex, type IndexedChunk, type IndexedFile, type WorkspaceIndex } from './workspace-index';
+import { LocalSemanticRanker, type SemanticProgressHandler } from './semantic';
+import { SEMANTIC_RUNTIME_MISSING } from './semantic-runtime';
 
 export interface ContextRequest {
   instruction: string;
@@ -14,8 +16,19 @@ export interface ContextRequest {
   activeFile?: string;
   references?: readonly Reference[];
   budgetTokens: number;
+  /** Enable selective local semantic reranking after lexical confidence is checked. */
+  semanticSearch?: boolean;
+  /** Stop semantic inference if the parent turn is cancelled. */
+  signal?: AbortSignal;
   /** Inline edits pin the selection and add only a little automatic context. */
   mode: 'inline' | 'agent';
+}
+
+export interface ContextAssemblyOptions {
+  /** Test or host injection; production calls share one lazy local model worker. */
+  semanticRanker?: Pick<LocalSemanticRanker, 'rank'>;
+  /** Reports the one-time local model load/download to the active turn. */
+  onSemanticProgress?: SemanticProgressHandler;
 }
 
 export interface ContextResult {
@@ -33,6 +46,20 @@ const MAX_RANKED_FILES = 8;
 const OUTLINE_FILES = 5;
 const CHUNKS_PER_FILE = 3;
 const MAX_CHUNK_SHARE = 0.15;
+const MAX_SEMANTIC_FILES = 20;
+const pathOrder = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+let sharedSemanticRanker: LocalSemanticRanker | undefined;
+
+function defaultSemanticRanker(): LocalSemanticRanker {
+  return sharedSemanticRanker ??= new LocalSemanticRanker();
+}
+
+/** Release the lazy model worker when the host shuts down. */
+export async function disposeContextResources(): Promise<void> {
+  const ranker = sharedSemanticRanker;
+  sharedSemanticRanker = undefined;
+  await ranker?.dispose();
+}
 
 /** Explicit references written in the instruction: @file:<path> and @symbol:<Name>. */
 export function parseMentions(instruction: string): Reference[] {
@@ -65,7 +92,7 @@ function resolveSymbol(index: WorkspaceIndex, name: string): IndexedChunk[] {
   return exact.length ? exact : hits;
 }
 
-export async function assembleContext(port: EditorPort, req: ContextRequest, prebuilt?: WorkspaceIndex): Promise<ContextResult> {
+export async function assembleContext(port: EditorPort, req: ContextRequest, prebuilt?: WorkspaceIndex, options: ContextAssemblyOptions = {}): Promise<ContextResult> {
   const t0 = Date.now();
   const index = prebuilt ?? await buildIndex(port);
   const budget = Math.max(1, Math.floor(req.budgetTokens));
@@ -75,6 +102,15 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
   const parts: string[] = [];
   const pinnedPaths = new Set<string>();
   const includedChunks = new Set<string>();
+  const includedRanges = new Map<string, Array<{ startLine: number; endLine: number }>>();
+
+  const markRange = (path: string, startLine: number, endLine: number) => {
+    const ranges = includedRanges.get(path) ?? [];
+    ranges.push({ startLine, endLine });
+    includedRanges.set(path, ranges);
+  };
+  const overlapsIncludedRange = (path: string, startLine: number, endLine: number) =>
+    (includedRanges.get(path) ?? []).some((range) => startLine <= range.endLine && endLine >= range.startLine);
 
   let used = 0;
   const add = (sel: Omit<Selection, 'rank' | 'estimatedTokens'>, body: string, heading: string): boolean => {
@@ -106,9 +142,11 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
     pinnedPaths.add(path);
     const range = { startLine: s.startLine, endLine: s.endLine };
     const ok = add({ path, range, source: 'selection', rationale: 'selected by the user', truncated: false }, s.text, `${path} lines ${s.startLine}-${s.endLine} (selection)`);
+    if (ok) markRange(path, range.startLine, range.endLine);
     if (!ok) {
       const cut = truncateTo(s.text, Math.floor(remaining * 0.8));
       const fitted = cut !== '' && add({ path, range, source: 'selection', rationale: 'selected by the user (truncated to fit the budget)', truncated: true }, cut, `${path} lines ${s.startLine}-${s.endLine} (selection, truncated)`);
+      if (fitted) markRange(path, range.startLine, range.endLine);
       if (!fitted) skipped.push({ path, reason: `selection does not fit the context budget (${budget} tokens)`, estimatedTokens: estimateTokens(s.text) });
     }
     }
@@ -127,7 +165,10 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
       for (const c of hits.slice(0, 3)) {
         const label = c.qualname ?? c.name ?? ref.name;
         const ok = add({ path: c.path, symbol: label, range: { startLine: c.startLine, endLine: c.endLine }, source: 'explicit', rationale: `@symbol:${ref.name} requested by the user`, truncated: false }, c.text, `${c.path} lines ${c.startLine}-${c.endLine} · ${label} (@symbol)`);
-        if (ok) includedChunks.add(`${c.path}:${c.startLine}`);
+        if (ok) {
+          includedChunks.add(`${c.path}:${c.startLine}`);
+          markRange(c.path, c.startLine, c.endLine);
+        }
         else skipped.push({ path: c.path, reason: `@symbol:${ref.name} does not fit the remaining budget`, estimatedTokens: estimateTokens(c.text) });
       }
     } else {
@@ -160,7 +201,28 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
 
   // 4. Automatic retrieval.
   const pinnedSymbols = refs.filter((r): r is Extract<Reference, { kind: 'symbol' }> => r.kind === 'symbol').map((r) => r.name).join(' ');
-  const { files: ranked } = rankFiles(index, `${req.instruction.replace(/@(file|symbol):\S+/g, ' ')} ${pinnedSymbols}`);
+  const task = `${req.instruction.replace(/@(file|symbol):\S+/g, ' ')} ${pinnedSymbols}`;
+  const lexical = rankFiles(index, task);
+  let semanticRanks: ReadonlyMap<string, number> | undefined;
+  if (req.semanticSearch && !req.signal?.aborted && shouldUseSemantic(lexical.files, lexical.queryTerms)) {
+    const candidates = new Map<string, RankedFile>();
+    for (const file of lexical.files.slice(0, MAX_SEMANTIC_FILES)) candidates.set(file.path, file);
+    const neighbours = lexical.files.filter((file) => file.reasons.some((reason) => /^(tests for|documents|imported by) /.test(reason)));
+    for (const file of neighbours.slice(0, MAX_SEMANTIC_FILES)) candidates.set(file.path, file);
+    const chunks = [...candidates.values()].flatMap((file) => file.chunks
+      .filter((chunk, chunkIndex) => chunk.score > 0 || chunkIndex === 0)
+      .slice(0, CHUNKS_PER_FILE)
+      .map((rankedChunk) => rankedChunk.chunk));
+    if (chunks.length) {
+      const ranker = options.semanticRanker ?? defaultSemanticRanker();
+      semanticRanks = await ranker.rank(task, chunks, req.signal, options.onSemanticProgress);
+      const unavailable = (ranker as Partial<Pick<LocalSemanticRanker, 'unavailable'>>).unavailable;
+      if (!semanticRanks.size && unavailable && !req.signal?.aborted) {
+        skipped.push({ path: '(semantic search)', reason: unavailable.message.startsWith(SEMANTIC_RUNTIME_MISSING) ? SEMANTIC_RUNTIME_MISSING : `semantic search unavailable (${unavailable.message.slice(0, 160)}); ranking stayed lexical`, estimatedTokens: 0 });
+      }
+    }
+  }
+  const { files: ranked } = rankFiles(index, task, semanticRanks);
   const candidates = ranked.filter((f) => f.score > 0);
   const limit = req.mode === 'inline' ? 2 : MAX_RANKED_FILES;
   const chosen = candidates.slice(0, limit);
@@ -182,25 +244,33 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
     }
   }
 
-  const pool = chosen.flatMap((f, fileRank) => f.chunks
-    .filter((r) => r.score > 0 || f.chunks.indexOf(r) === 0)
+  const pool = chosen.flatMap((f) => f.chunks
+    .filter((r, chunkIndex) => r.score > 0 || r.semanticScore !== undefined || chunkIndex === 0)
     .slice(0, CHUNKS_PER_FILE)
-    .map((r) => ({ f, r, key: r.score + (limit - fileRank) * 0.01 })))
-    .sort((a, b) => b.key - a.key);
-  for (const { f, r } of pool) {
+    .map((r) => {
+      const tokens = estimateTokens(r.chunk.text);
+      const relevance = r.relevance ?? (r.score > 0 ? r.score : f.score * 0.4);
+      return { f, r, tokens, relevance, density: relevance / Math.max(tokens, 1) };
+    }))
+    .sort((a, b) => b.density - a.density || b.relevance - a.relevance || pathOrder(a.r.chunk.path, b.r.chunk.path) || a.r.chunk.startLine - b.r.chunk.startLine);
+  for (const { f, r, tokens } of pool) {
     const c = r.chunk;
     const id = `${c.path}:${c.startLine}`;
-    if (includedChunks.has(id) || pinnedPaths.has(c.path)) continue;
-    const tokens = estimateTokens(c.text);
+    if (includedChunks.has(id) || pinnedPaths.has(c.path) || overlapsIncludedRange(c.path, c.startLine, c.endLine)) continue;
     if (tokens > budget * MAX_CHUNK_SHARE) { skipped.push({ path: c.path, reason: `${c.qualname ?? c.name ?? `lines ${c.startLine}-${c.endLine}`} is too large for the budget (${tokens} tokens); the outline lists it`, estimatedTokens: tokens }); continue; }
     const label = c.qualname ?? c.name;
-    const matched = r.matched.length ? `matches ${r.matched.slice(0, 4).map((t) => `"${t}"`).join(', ')}` : 'best part of a neighbour file';
+    const matched = r.semanticScore !== undefined
+      ? `semantic similarity (${r.semanticScore.toFixed(3)})`
+      : r.matched.length ? `matches ${r.matched.slice(0, 4).map((t) => `"${t}"`).join(', ')}` : 'best part of a neighbour file';
     const ok = add(
       { path: c.path, ...(label ? { symbol: label } : {}), range: { startLine: c.startLine, endLine: c.endLine }, source: 'automatic', rationale: `${matched} · ${why(f)}`, truncated: false },
       c.text,
       `${c.path} lines ${c.startLine}-${c.endLine}${label ? ` · ${label}` : ''}`,
     );
-    if (ok) includedChunks.add(id);
+    if (ok) {
+      includedChunks.add(id);
+      markRange(c.path, c.startLine, c.endLine);
+    }
     else skipped.push({ path: c.path, reason: `${label ?? `lines ${c.startLine}-${c.endLine}`} skipped: budget exhausted (needs ${tokens}, ${remaining} left)`, estimatedTokens: tokens });
   }
 

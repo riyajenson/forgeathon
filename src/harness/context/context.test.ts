@@ -283,3 +283,321 @@ test('indexing yields to the event loop and reuses unchanged files', async () =>
   assert.equal(second.chunks.length, first.chunks.length);
   assert.ok(reads >= 800);
 });
+
+test('retrieval benchmark reports recall, reciprocal rank, packed file density, and median latency', () => {
+  let benchmark: { measureRetrieval?: (results: unknown[]) => unknown } | undefined;
+  try { benchmark = require('./retrieval-benchmark') as typeof benchmark; } catch { /* New module is the behavior under test. */ }
+  assert.equal(typeof benchmark?.measureRetrieval, 'function', 'benchmark metric function is exported');
+  assert.deepEqual(benchmark!.measureRetrieval!([
+    { caseId: 'first', expectedPaths: ['src/a.ts', 'src/b.ts'], rankedPaths: ['src/x.ts', 'src/a.ts', 'src/b.ts'], packedPaths: ['src/a.ts'], packedTokens: 500, elapsedMs: 10 },
+    { caseId: 'second', expectedPaths: ['src/c.ts'], rankedPaths: ['src/c.ts'], packedPaths: ['src/c.ts'], packedTokens: 250, elapsedMs: 30 },
+  ]), {
+    recallAt5: 1,
+    mrr: 0.75,
+    relevantFilesPer1000Tokens: 2000 / 750,
+    medianElapsedMs: 20,
+  });
+});
+
+type SemanticTestChunk = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+  sha256: string;
+  semanticVectors: Map<string, number[]>;
+};
+type SemanticTestWorker = {
+  embed: (texts: readonly string[], signal?: AbortSignal, progress?: (event: { status: string; progress?: number }) => void) => Promise<readonly number[][]>;
+  dispose: () => Promise<void>;
+};
+type SemanticTestApi = {
+  semanticChunkId: (chunk: Pick<SemanticTestChunk, 'path' | 'startLine' | 'endLine'>) => string;
+  LocalSemanticRanker: new (options?: {
+    workerFactory?: () => SemanticTestWorker;
+    onProgress?: (event: { status: string; progress?: number }) => void;
+  }) => {
+    rank: (query: string, chunks: readonly SemanticTestChunk[], signal?: AbortSignal) => Promise<ReadonlyMap<string, number>>;
+    dispose: () => Promise<void>;
+  };
+};
+function semanticApiForTest(): SemanticTestApi | undefined {
+  try { return require('./semantic') as SemanticTestApi; } catch { return undefined; }
+}
+
+test('semantic chunk IDs are stable for a path and line range', () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  assert.equal(api.semanticChunkId({ path: 'src/alpha.py', startLine: 4, endLine: 9 }), 'src/alpha.py:4:9');
+  assert.notEqual(api.semanticChunkId({ path: 'src/alpha.py', startLine: 4, endLine: 10 }), 'src/alpha.py:4:9');
+});
+
+test('semantic vectors reuse unchanged file analysis and invalidate after a content hash change', async () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-semantic-cache-'));
+  const localPath = path.join(localRoot, 'src', 'sample.py');
+  await fs.mkdir(path.dirname(localPath), { recursive: true });
+  await fs.writeFile(localPath, 'def handler():\n    return 1\n');
+  const localPort = new FakePort(localRoot);
+  const batches: number[] = [];
+  const ranker = new api.LocalSemanticRanker({
+    workerFactory: () => ({
+      embed: async (texts) => { batches.push(texts.length); return texts.map(() => [1, 0]); },
+      dispose: async () => {},
+    }),
+  });
+  try {
+    const first = await buildIndex(localPort);
+    const firstChunks = first.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
+    await ranker.rank('handler', firstChunks);
+
+    const unchanged = await buildIndex(localPort);
+    const unchangedChunks = unchanged.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
+    assert.strictEqual(unchangedChunks[0]!.semanticVectors, firstChunks[0]!.semanticVectors);
+    await ranker.rank('handler', unchangedChunks);
+    assert.deepEqual(batches, [firstChunks.length + 1, 1], 'unchanged chunks reuse their cached vectors');
+
+    await fs.writeFile(localPath, 'def handler():\n    return 2\n');
+    const changed = await buildIndex(localPort);
+    const changedChunks = changed.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
+    assert.notStrictEqual(changedChunks[0]!.semanticVectors, firstChunks[0]!.semanticVectors);
+    assert.equal(changedChunks[0]!.semanticVectors.size, 0, 'a new SHA-256 starts with an empty vector cache');
+    await ranker.rank('handler', changedChunks);
+    assert.deepEqual(batches, [firstChunks.length + 1, 1, changedChunks.length + 1]);
+  } finally {
+    await ranker.dispose();
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
+});
+
+test('missing semantic model falls back to no semantic scores and reports download progress', async () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  const chunk = (await buildIndex(port).then((index) => index.chunks.slice(0, 1))) as unknown as SemanticTestChunk[];
+  const progress: Array<{ status: string; progress?: number }> = [];
+  const ranker = new api.LocalSemanticRanker({
+    onProgress: (event) => progress.push(event),
+    workerFactory: () => ({
+      embed: async (_texts, _signal, onProgress) => {
+        onProgress?.({ status: 'progress_total', progress: 42 });
+        throw new Error('model files unavailable');
+      },
+      dispose: async () => {},
+    }),
+  });
+  try {
+    assert.deepEqual([...await ranker.rank('find handler', chunk)], []);
+    assert.deepEqual(progress, [{ status: 'progress_total', progress: 42 }]);
+  } finally {
+    await ranker.dispose();
+  }
+});
+
+test('cancelled semantic work returns no stale scores or cached vectors', async () => {
+  const api = semanticApiForTest();
+  assert.ok(api, 'semantic module is present');
+  const chunk = (await buildIndex(port).then((index) => index.chunks.slice(0, 1))) as unknown as SemanticTestChunk[];
+  const controller = new AbortController();
+  let disposed = false;
+  const ranker = new api.LocalSemanticRanker({
+    workerFactory: () => ({
+      embed: (_texts, signal) => new Promise((_resolve, reject) => {
+        const cancel = () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
+        if (signal?.aborted) cancel();
+        else signal?.addEventListener('abort', cancel, { once: true });
+      }),
+      dispose: async () => { disposed = true; },
+    }),
+  });
+  try {
+    const pending = ranker.rank('find handler', chunk, controller.signal);
+    controller.abort();
+    assert.deepEqual([...await pending], []);
+    assert.equal(chunk[0]!.semanticVectors.size, 0);
+  } finally {
+    await ranker.dispose();
+  }
+  assert.ok(disposed, 'dispose releases the worker');
+});
+
+type HybridChunk = { path: string; startLine: number; endLine: number; text: string };
+type HybridRankedFile = { path: string; score: number; reasons: string[]; chunks: Array<{ chunk: HybridChunk; score: number; matched: string[] }> };
+type HybridRankApi = {
+  rankFiles: (index: Awaited<ReturnType<typeof buildIndex>>, task: string, semanticRanks?: ReadonlyMap<string, number>) => { files: HybridRankedFile[]; queryTerms: string[] };
+  shouldUseSemantic: (files: readonly HybridRankedFile[], queryTerms: readonly string[]) => boolean;
+};
+
+function hybridRankApiForTest(): HybridRankApi | undefined {
+  try { return require('./rank') as HybridRankApi; } catch { return undefined; }
+}
+
+test('hybrid rank fusion adds semantic-only files and leaves omitted semantic results lexical-only', async () => {
+  const api = hybridRankApiForTest();
+  assert.ok(api, 'hybrid ranking helpers are exported');
+  const index = await buildIndex(port);
+  const task = 'route command';
+  const lexical = rankFiles(index, task).files;
+  const legacyShape = api.rankFiles(index, task).files;
+  assert.deepEqual(legacyShape.map((file) => file.path), lexical.map((file) => file.path));
+
+  const target = index.files.get('src/kitchen/bread.py')!.chunks[0]!;
+  const semantic = new Map([[`${target.path}:${target.startLine}:${target.endLine}`, 0.99]]);
+  const hybrid = api.rankFiles(index, 'find a constellation', semantic).files;
+  assert.equal(hybrid[0]?.path, 'src/kitchen/bread.py', 'semantic evidence can surface a file absent from lexical results');
+  assert.ok(hybrid[0]?.reasons.some((reason) => /semantic/i.test(reason)));
+});
+
+test('semantic activation uses term coverage and score margin, and ignores empty queries', async () => {
+  const api = hybridRankApiForTest();
+  assert.ok(api, 'hybrid ranking helpers are exported');
+  const makeFile = (path: string, score: number, matched: string[]): HybridRankedFile => ({
+    path, score, reasons: [], chunks: [{ chunk: { path, startLine: 1, endLine: 2, text: '' }, score, matched }],
+  });
+  assert.equal(api.shouldUseSemantic([], ['missing']), true, 'no lexical result is weak evidence');
+  assert.equal(api.shouldUseSemantic([makeFile('src/a.py', 10, ['auth', 'token', 'session', 'cookie']), makeFile('src/b.py', 8.5, ['auth'])], ['auth', 'token', 'session', 'cookie', 'login']), false, 'broad coverage and a clear margin stay lexical');
+  assert.equal(api.shouldUseSemantic([makeFile('src/a.py', 10, ['auth']), makeFile('src/b.py', 9.8, ['auth'])], ['auth', 'token', 'session', 'cookie']), true, 'low coverage activates semantic reranking');
+  assert.equal(api.shouldUseSemantic([makeFile('src/a.py', 10, ['auth', 'token', 'session', 'cookie']), makeFile('src/b.py', 9.8, ['auth'])], ['auth', 'token', 'session', 'cookie']), true, 'a narrow top-two score margin activates reranking');
+  assert.equal(api.shouldUseSemantic([], []), false, 'an empty query has no semantic signal');
+});
+
+test('semantic rank ties are deterministic and empty queries do not produce semantic results', async () => {
+  const api = hybridRankApiForTest();
+  assert.ok(api, 'hybrid ranking helpers are exported');
+  const index = await buildIndex(port);
+  const chunks = ['src/kitchen/bread.py', 'src/flask/helpers.py'].map((file) => index.files.get(file)!.chunks[0]!);
+  const semantic = new Map(chunks.map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.75]));
+  const first = api.rankFiles(index, 'unmatched constellation', semantic).files.map((file) => file.path);
+  const second = api.rankFiles(index, 'unmatched constellation', semantic).files.map((file) => file.path);
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.slice(0, 2), ['src/flask/helpers.py', 'src/kitchen/bread.py'], 'equal evidence breaks ties by path');
+  assert.deepEqual(api.rankFiles(index, '', semantic).files, [], 'empty queries stay deterministic and do not use arbitrary vectors');
+});
+
+type HybridEngineApi = {
+  assembleContext: (
+    port: EditorPort,
+    request: { instruction: string; budgetTokens: number; mode: 'inline' | 'agent'; references?: readonly { kind: 'file' | 'symbol'; path?: string; name?: string }[]; semanticSearch?: boolean },
+    prebuilt?: Awaited<ReturnType<typeof buildIndex>>,
+    options?: { semanticRanker?: { rank: (query: string, chunks: readonly HybridChunk[], signal?: AbortSignal) => Promise<ReadonlyMap<string, number>> } },
+  ) => Promise<{ ranked: HybridRankedFile[]; report: { estimatedTokens: number; budgetTokens: number; selections: Array<{ path: string; source: string; rationale: string; range?: { startLine: number; endLine: number } }> } }>;
+};
+
+test('hybrid context keeps explicit references first and stays within its token budget', async () => {
+  let engine: HybridEngineApi | undefined;
+  try { engine = require('./engine') as HybridEngineApi; } catch { engine = undefined; }
+  assert.ok(engine, 'context assembly exposes semantic ranking options');
+  const index = await buildIndex(port);
+  let seenCandidates: string[] = [];
+  const result = await engine.assembleContext(port, {
+    instruction: 'mystery account login transaction permission orchestrator routes command',
+    references: [{ kind: 'file', path: 'src/flask/cli.py' }],
+    budgetTokens: 500,
+    mode: 'agent',
+    semanticSearch: true,
+  }, index, {
+    semanticRanker: {
+      rank: async (_query, chunks) => {
+        seenCandidates = chunks.map((chunk) => chunk.path);
+        return new Map(chunks.filter((chunk) => chunk.path === 'src/flask/helpers.py').map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.99]));
+      },
+    },
+  });
+  assert.ok(seenCandidates.includes('src/flask/helpers.py'), 'structural neighbors are included in the bounded semantic candidate set');
+  assert.equal(result.report.selections[0]?.path, 'src/flask/cli.py');
+  assert.equal(result.report.selections[0]?.source, 'explicit');
+  assert.ok(result.report.estimatedTokens <= result.report.budgetTokens);
+});
+
+test('concurrent index builds on one port run one after the other and agree', async () => {
+  const order: string[] = [];
+  const first = buildIndex(port).then((i) => { order.push('first'); return i; });
+  const second = buildIndex(port).then((i) => { order.push('second'); return i; });
+  const [a, b] = await Promise.all([first, second]);
+  assert.deepEqual(order, ['first', 'second'], 'the second build waited for the one in progress');
+  assert.deepEqual([...b.files.keys()], [...a.files.keys()]);
+  assert.equal(b.chunks.length, a.chunks.length);
+  assert.ok(b.chunks.every((c, i) => c.tf === a.chunks[i]!.tf), 'the second build reused the first one\'s analyses');
+});
+
+test('semantic search on without its runtime: lexical ranking, and the context report says why', async () => {
+  const engine = require('./engine') as HybridEngineApi;
+  const { SEMANTIC_RUNTIME_MISSING } = require('./semantic-runtime') as typeof import('./semantic-runtime');
+  const index = await buildIndex(port);
+  const ranker = { unavailable: undefined as Error | undefined, rank: async () => { ranker.unavailable = new Error(`${SEMANTIC_RUNTIME_MISSING} (looked in /x)`); return new Map<string, number>(); } };
+  const request = { instruction: 'mystery account login transaction permission orchestrator routes command', budgetTokens: 2000, mode: 'agent' as const, semanticSearch: true };
+  const result = await engine.assembleContext(port, request, index, { semanticRanker: ranker }) as Awaited<ReturnType<HybridEngineApi['assembleContext']>> & { report: { skipped: Array<{ path: string; reason: string }> } };
+  assert.deepEqual(result.report.skipped.filter((s) => s.path === '(semantic search)').map((s) => s.reason), [SEMANTIC_RUNTIME_MISSING]);
+  const lexical = await engine.assembleContext(port, { ...request, semanticSearch: false }, index) as typeof result;
+  assert.deepEqual(result.report.selections.map((s) => s.path), lexical.report.selections.map((s) => s.path), 'same selections as lexical-only');
+  assert.equal(lexical.report.skipped.some((s) => s.path === '(semantic search)'), false, 'off by default: nothing reported');
+});
+
+test('the semantic runtime is found in src/harness/semantic-runtime, or where FORGE_SEMANTIC_RUNTIME points', () => {
+  const { semanticRuntimeDir } = require('./semantic-runtime') as typeof import('./semantic-runtime');
+  assert.match(semanticRuntimeDir({}), /src[\\/]harness[\\/]semantic-runtime$/);
+  assert.equal(semanticRuntimeDir({ FORGE_SEMANTIC_RUNTIME: '/opt/forge-sem' }), path.resolve('/opt/forge-sem'));
+});
+
+test('hybrid context packs overlapping chunks at most once', async () => {
+  let engine: HybridEngineApi | undefined;
+  try { engine = require('./engine') as HybridEngineApi; } catch { engine = undefined; }
+  assert.ok(engine, 'context assembly exposes semantic ranking options');
+  const index = await buildIndex(port);
+  const file = index.files.get('src/flask/cli.py')!;
+  const source = file.chunks.find((chunk) => chunk.name === 'routes_command')!;
+  const overlapping = { ...source, id: index.chunks.length, startLine: source.startLine + 1 };
+  file.chunks.push(overlapping);
+  index.chunks.push(overlapping);
+
+  const result = await engine.assembleContext(port, {
+    instruction: 'new account permission path workflow routes command',
+    budgetTokens: 1000,
+    mode: 'inline',
+    semanticSearch: true,
+  }, index, {
+    semanticRanker: {
+      rank: async (_query, chunks) => new Map(chunks
+        .filter((chunk) => chunk.path === 'src/flask/cli.py')
+        .map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.95])),
+    },
+  });
+  const selected = result.report.selections.filter((selection) => selection.path === 'src/flask/cli.py' && selection.range);
+  for (let i = 0; i < selected.length; i++) {
+    for (let j = i + 1; j < selected.length; j++) {
+      const left = selected[i]!.range!;
+      const right = selected[j]!.range!;
+      assert.ok(left.endLine < right.startLine || right.endLine < left.startLine, 'selected ranges do not overlap');
+    }
+  }
+});
+
+test('hybrid packing prefers more relevant code per estimated token after pinned context', async () => {
+  let engine: HybridEngineApi | undefined;
+  try { engine = require('./engine') as HybridEngineApi; } catch { engine = undefined; }
+  assert.ok(engine, 'context assembly exposes semantic ranking options');
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-context-density-'));
+  const longBody = Array.from({ length: 18 }, () => '    result = alpha + beta + gamma + delta').join('\n');
+  await fs.mkdir(path.join(localRoot, 'src'), { recursive: true });
+  await fs.writeFile(path.join(localRoot, 'src', 'large.py'), `def execute_batch():\n${longBody}\n    return result\n`);
+  await fs.writeFile(path.join(localRoot, 'src', 'short.py'), 'def execute_one():\n    return alpha\n');
+  const localPort = new FakePort(localRoot);
+  try {
+    const index = await buildIndex(localPort);
+    const result = await engine.assembleContext(localPort, {
+      instruction: 'alpha beta gamma delta omega sigma theta lambda epsilon zeta kappa iota',
+      budgetTokens: 1000,
+      mode: 'inline',
+      semanticSearch: true,
+    }, index, {
+      semanticRanker: {
+        rank: async (_query, chunks) => new Map(chunks.map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.9])),
+      },
+    });
+    const automatic = result.report.selections.filter((selection) => selection.source === 'automatic');
+    assert.equal(automatic[0]?.path, 'src/short.py', 'the shorter relevant chunk gives more retrieval value per token');
+    assert.ok(result.report.estimatedTokens <= result.report.budgetTokens);
+  } finally {
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
+});

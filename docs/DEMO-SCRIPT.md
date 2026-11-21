@@ -5,6 +5,12 @@ TrueForge session for Task B; model waiting time may be cut, but **never cut bet
 and the diff appearing**. The video must be publicly viewable: after uploading, open the link in a private
 browser window (signed out) to confirm.
 
+**This branch (finals build):** reviews use the multi-select hunk picker (✓ / ✕ in its title bar) instead of the
+round-1 video's "Accept All / Reject All / Choose Hunks..." prompt. The submitted round-1 video is final and stays the
+linked video; the picker is covered by the native UI tests. The round-1 video was recorded by an automated UI script driving the real extension with real models; that tooling
+is in `scripts/demo-recording/` (see its README): it launches the Extension Development Host with the recording
+profile, saves a DevTools screencast, and drives each segment at human pace.
+
 ## Before recording (resets)
 
 ```bash
@@ -36,14 +42,14 @@ bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev -- true && echo protec
 5. Layout: editor left, Forge agent panel right (Forge-a-thon: Open Agent Panel), integrated terminal
    bottom (cwd `~/flask-demo`). Browser tab with http://localhost:8790 → Sessions, ready.
 6. Readability: `"editor.fontSize": 16`, `"terminal.integrated.fontSize": 15`, `"window.zoomLevel": 1`,
-   minimap off, close unrelated panels, OS notifications off. The review prompt (Accept All / Reject All / Choose Hunks...) is a
-   quick pick at the top of the window and closes when the review is decided or the turn is stopped.
+   minimap off, close unrelated panels, OS notifications off. The review prompt (the hunk picker: every hunk checked, ✓ accept all and ✕ reject all
+   in its title bar) is a quick pick at the top of the window and closes when the review is decided or the turn is stopped.
    1920×1080 recording.
 7. Have the three instructions in a text file to paste (exact wording below).
 8. Settings in the Extension Development Host for the recording:
    - `"forge.autoApproveSafeCommands": true`. This auto-approves only `pytest`, `python -m pytest`,
      `git status` and `git diff`.
-   - `forge.commandBudget.agent` at its default of `3`.
+   - `forge.commandBudget.agent` at its default of `5`.
    - Every diff is still reviewed. `python -c`, `flask` and ⚠ Unrestricted commands still ask.
 
 ## Task B: what to expect
@@ -82,15 +88,15 @@ fallback can carry B's requests, but its free tier allows 50 requests a day with
 40–70, so a fallback during B may not finish. On `openrouter-free` the same cap applies to the primary: record
 B first that day.
 
-**Your clicks in Task B:** **Accept All** on each diff (expect 3–8) and **Allow once** on any command prompt
+**Your clicks in Task B:** **✓** (*Accept all hunks*) on each diff (expect 3–8) and **Allow once** on any command prompt
 without a warning (`python -c …`, `flask …`; 0–3). Deny any ⚠ Unrestricted prompt.
 
 | What appears | Click |
 |---|---|
-| Each diff | **Accept All** |
+| Each diff | **✓** (*Accept all hunks*) in the picker's title bar |
 | Command prompt **without** a warning (`python -c …`, `flask …`) | **Allow once** |
-| Command prompt with **⚠ Unrestricted** (`cd …`, pipes, here-docs, `python -m flask …`) | **Deny**. The refusal goes back to the model; tested on the mock (`e2e-mock.sh --deny-unrestricted`) |
-| "auto-approved: …" and "command budget reached (3 per turn): …" lines | Nothing; they are shown only |
+| Command prompt with **⚠ Unrestricted** (pipes, here-docs, `python -m flask …`) | **Deny**. The refusal goes back to the model; tested on the mock (`e2e-mock.sh --deny-unrestricted`) |
+| "auto-approved: …" and "command budget reached (5 per turn): …" lines | Nothing; they are shown only |
 
 Earlier runs (before the sandbox merge; STATUS.md): first diff 39–53 s, whole turn 133–259 s, 6–12 reviews.
 
@@ -110,14 +116,14 @@ three files, the TrueForge session for B, Task C's banner and clean `git status`
 | Time | Shot | Cut | Say / show |
 |---|---|---|---|
 | 0:00–0:03 | **Setup glimpse**: terminal 1 (TrueForge 0.185.1 running), `git -C ~/flask-demo log -1 --oneline` → `22d9247` | — | "VS Code extension; the agent loop runs on TrueForge in local mode." |
-| 0:03–0:40 | **Task A, uncut from instruction to diff** (up to ~28 s of model waiting): `src/flask/helpers.py`, select `get_debug_flag`, `Ctrl+Alt+I`, paste instruction A, Enter → diff editor + "Review N hunk(s)" → **Choose Hunks...** (the per-hunk picker, all ticked) → accept | None before the diff. After accepting, the turn's closing seconds may be cut: caption | Point at the per-hunk picker. |
+| 0:03–0:40 | **Task A, uncut from instruction to diff** (up to ~28 s of model waiting): `src/flask/helpers.py`, select `get_debug_flag`, `Ctrl+Alt+I`, paste instruction A, Enter → diff editor + the hunk picker (all ticked; untick and re-tick one to show the choice) → Enter | None before the diff. After accepting, the turn's closing seconds may be cut: caption | Point at the per-hunk picker. |
 | 0:40–0:47 | **Task A verification**: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` → `False` | — | |
 | 0:47–0:55 | **Undo (8 s)**: `Ctrl+Shift+P` → **Forge-a-thon: Undo Last Reviewed Edit** → the editor shows the original function → terminal `git status --short` (empty: file restored) | — | "Every reviewed edit can be undone." |
-| 0:55–2:40 | **Task B, uncut from instruction to the first diff** (42 s in the rehearsal, up to 105 s measured earlier) — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: used/budget tokens, `src/flask/cli.py` ranked with its reason, skipped items) → tool calls (read_file, search_workspace, …) → first diff → **Accept All**. If the diff comes early, keep filming the next reviews in this slot | None before the first diff | "No file names in the request; the agent finds the files itself." Talk over the wait: context, tools. |
-| 2:40–2:52 | **Task B, rest of the turn** (≈ 55 s of real time shown in 12 s) — each further diff → **Accept All** (measured: 4 more over `cli.py`, `tests/test_cli.py`, `docs/cli.rst`); "auto-approved: python -m pytest …" lines; any `python -c` prompt → **Allow once**; any ⚠ Unrestricted → **Deny**; summary, then hold ~2 s on **Files changed in this turn: 3** (the three paths together, with review and accepted-hunk counts) | **Cut model waiting between reviews**: caption at every cut | "Test runs are auto-approved; anything else asks; at most three commands per turn." |
+| 0:55–2:40 | **Task B, uncut from instruction to the first diff** (42 s in the rehearsal, up to 105 s measured earlier) — panel: paste instruction B, Send → streamed text → **Context block** (pause ~3 s: used/budget tokens, `src/flask/cli.py` ranked with its reason, skipped items) → tool calls (read_file, search_workspace, …) → first diff → **✓**. If the diff comes early, keep filming the next reviews in this slot | None before the first diff | "No file names in the request; the agent finds the files itself." Talk over the wait: context, tools. |
+| 2:40–2:52 | **Task B, rest of the turn** (≈ 55 s of real time shown in 12 s) — each further diff → **✓** (measured: 4 more over `cli.py`, `tests/test_cli.py`, `docs/cli.rst`); "auto-approved: python -m pytest …" lines; any `python -c` prompt → **Allow once**; any ⚠ Unrestricted → **Deny**; summary, then hold ~2 s on **Files changed in this turn: 3** (the three paths together, with review and accepted-hunk counts) | **Cut model waiting between reviews**: caption at every cut | "Test runs are auto-approved; anything else asks; at most three commands per turn." |
 | 2:52–3:00 | **TrueForge session (required for eligibility)**: panel **Open TrueForge session** → hold ~8 s on Task B's turn with its tool calls (read/search/propose_edit/run_command) and approvals | — | Note this timestamp for the write-up. |
 | 3:00–3:22 | **Task B verification, 22 s readable** (commands pre-typed; let each output stay on screen ~7 s): `.venv/bin/python -m pytest tests/test_cli.py -q` (passes) · `cd examples/tutorial && ../../.venv/bin/flask --app flaskr --help` (lists `config`) · `../../.venv/bin/flask --app flaskr config` (`"SECRET_KEY": "***"`) · `cd ~/flask-demo` | — | |
-| 3:22–3:55 | **Task C, uncut from instruction to diff**: `git checkout -- . && git status --short` (empty) → terminal 2 `scripts/use-models.sh nvidia-free --break-primary` (pre-typed; use the profile you are recording with) → repeat Task A → banner "Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to openrouter/nemotron-3-ultra-free" (on `openrouter-free`: "… → switched to nvidia/nemotron-3-ultra") → fallback's diff (9.6–12.6 s measured) → **Reject All** → `git status --short` (empty) | None before the diff | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." Repo URL on the last frame. |
+| 3:22–3:55 | **Task C, uncut from instruction to diff**: `git checkout -- . && git status --short` (empty) → terminal 2 `scripts/use-models.sh nvidia-free --break-primary` (pre-typed; use the profile you are recording with) → repeat Task A → banner "Primary model failed: [Model Error] Request failed (401): Unauthorized → switched to openrouter/nemotron-3-ultra-free" (on `openrouter-free`: "… → switched to nvidia/nemotron-3-ultra") → fallback's diff (9.6–12.6 s measured) → **✕** (*Reject all hunks*) → `git status --short` (empty) | None before the diff | "Invalid primary key: automatic fallback, editor responsive, workspace unchanged." Repo URL on the last frame. |
 
 Trimmed to fit (optional material): the Stop shot (Stop is proven by tests, not by the video), Undo's re-apply, and
 2 s of setup. If B's first diff came early and time is left, an optional 6 s Stop shot can go after the B

@@ -21,12 +21,22 @@ export class AgentViewState {
   /** Set when the turn ends: every file the turn changed (then reviewed files left unchanged), on one screen. */
   summary: string[] = [];
   command?: {command: string; cwd: string; warning?: string};
+  private compaction?: {id: string; label: string; detail: string};
 
   update(e: HarnessEvent) {
     switch (e.t) {
       case 'session': this.trace = e.traceUrl; this.model = e.model + ' (' + e.agentName + ')'; break;
       case 'turn_started': this.status = 'Running'; break;
-      case 'status': this.status = e.detail || e.state; break;
+      case 'status':
+        this.status = e.detail || e.state;
+        // Compaction also stays in the activity list: started (compacting), then finished (the next status with detail).
+        if (e.state === 'compacting') {
+          this.compaction = {id: 'compaction:' + this.tools.length, label: 'Context compaction', detail: e.detail || 'running'};
+          this.tools.push(this.compaction);
+        } else if (this.compaction && e.detail) {
+          this.compaction.detail = e.detail; this.compaction = undefined;
+        }
+        break;
       case 'text': this.text = (this.text + e.delta).slice(-100000); break;
       case 'tool_call':
         if (e.tool !== 'internal') this.tools.push({id:e.callId, label:e.displayName, detail:e.summary});

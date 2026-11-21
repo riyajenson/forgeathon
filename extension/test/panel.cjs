@@ -26,6 +26,14 @@ exports.run = async () => {
   assert.equal(budget.command, undefined, 'a command refused by the budget opens no prompt');
   assert.equal(budget.status, 'command budget reached');
   assert.deepEqual(budget.tools, [{id:'budget:b',label:'command budget reached (3 per turn): python -m pytest',detail:'not run'}]);
+  const compact = new AgentViewState();
+  compact.update({t:'status',state:'compacting',detail:'Compacting context: 30,412 tokens reached the 30,000-token threshold'});
+  assert.equal(compact.status, 'Compacting context: 30,412 tokens reached the 30,000-token threshold', 'compaction start on the status line');
+  compact.update({t:'status',state:'running',detail:'Context compacted in 21.4 s: 29,880 tokens summarized into 1,204'});
+  assert.equal(compact.status, 'Context compacted in 21.4 s: 29,880 tokens summarized into 1,204', 'compaction finish on the status line');
+  compact.update({t:'status',state:'running'});
+  assert.deepEqual(compact.tools, [{id:'compaction:0',label:'Context compaction',detail:'Context compacted in 21.4 s: 29,880 tokens summarized into 1,204'}],
+    'the compaction stays in the activity list after the status line moves on');
   // Turn-end summary: every changed file with review and accepted-hunk counts; reviewed-but-rejected files last.
   const turn = new AgentViewState();
   const prop = (path, n) => ({t:'review_request',proposal:{path,hunks:Array.from({length:n},(_, i)=>({hunkId:String(i)}))}});

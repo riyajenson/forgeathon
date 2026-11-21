@@ -6,7 +6,7 @@ import {
   type Request, type Response, type ReviewDecision, type SessionId, type SessionStatus, type TurnRef, type TurnRequest,
 } from './contract-types';
 import { ScopeRegistry } from './mcp/scope';
-import { disposeContextResources } from './context';
+import { buildIndex, disposeContextResources } from './context';
 import { canonicalJson } from './review/canonical';
 import { startMcpServer, type RunningMcpServer } from './mcp/server';
 import { isTrueForgeUnreachable, safeMessage } from './trueforge/errors';
@@ -21,6 +21,8 @@ export interface HarnessOptions {
   mcpPort?: number;
   /** TrueForge agent names. Defaults forge-inline / forge-coder; fallbacks are `${name}-fallback`. */
   agents?: { inline?: string; agent?: string };
+  /** Index the workspace in the background once started (default true), so the first turn's context is warm. */
+  prewarmIndex?: boolean;
   /** How long cancel waits for TrueForge to confirm. Default 5000 ms. */
   cancelTimeoutMs?: number;
   /** No TrueForge events for this long while running → cancel and treat as model unavailable. Default 45000 ms. */
@@ -121,6 +123,11 @@ class ForgeHarnessImpl implements ForgeHarness {
     this.sdk = sdk;
     this.client = client;
     bridge.log('info', `forge-harness ready: TrueForge ${this.url}, MCP ${this.mcp.url}`);
+    // Index the workspace in the background (in slices) while the user types, so the first turn starts from a
+    // warm analysis cache instead of tokenizing every file right after Send. Local only; nothing leaves the machine.
+    if (this.options.prewarmIndex !== false) {
+      void buildIndex(bridge).catch((e) => bridge.log('warn', `background indexing failed: ${safeMessage((e as Error).message)}`));
+    }
   }
 
   async createSession(req: Request<{ workspaceRoot: string }>): Promise<Response<SessionStatus>> {

@@ -76,8 +76,27 @@ exports.run = async() => {
       }
       await until(async()=>JSON.stringify(await checkedRows())===JSON.stringify([n===1,n===2]),'only hunk '+n+' checked');
     }
+    // The picker's title buttons (✓ Accept all hunks, ✕ Reject all hunks), clicked like a user: the pointer moves onto
+    // the visible button, its tooltip names the action, then a real mouse click.
+    async function clickTitleButton(icon,tooltip){
+      const find=`[...document.querySelectorAll('.quick-input-widget .codicon-${icon}')]
+        .map(el=>el.closest('a, .action-label, [role=button]')||el).find(el=>el.offsetParent!==null&&el.getBoundingClientRect().width>0)`;
+      const box=await until(()=>driver.evaluate(`(()=>{const b=${find};if(!b)return null;const r=b.getBoundingClientRect();
+        return {x:r.x+r.width/2,y:r.y+r.height/2,label:b.getAttribute('aria-label')||b.title||''};})()`),'visible '+icon+' button');
+      assert.equal(box.label,tooltip,'the '+icon+' button says what it does');
+      await driver.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:box.x,y:box.y});
+      await driver.send('Input.dispatchMouseEvent',{type:'mousePressed',x:box.x,y:box.y,button:'left',clickCount:1});
+      await driver.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:box.x,y:box.y,button:'left',clickCount:1});
+    }
+    const both='first = 3\nsecond = 4\n';
+    const rounds=[
+      {name:'hunk 1 only',decide:()=>selectOnly(1).then(()=>vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem')),saved:expected[1]},
+      {name:'hunk 2 only',decide:()=>selectOnly(2).then(()=>vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem')),saved:expected[2]},
+      {name:'✓ Accept all hunks',decide:()=>clickTitleButton('check','Accept all hunks'),saved:both},
+      {name:'✕ Reject all hunks',decide:()=>clickTitleButton('close','Reject all hunks'),saved:before},
+    ];
     const sessionIds=[];
-    for(const n of [1,2]){
+    for(const round of rounds){
       const doc=await vscode.workspace.openTextDocument(vscode.Uri.file(file));
       const editor=await vscode.window.showTextDocument(doc);
       editor.selection=new vscode.Selection(doc.positionAt(0),doc.positionAt(doc.getText().length));
@@ -90,12 +109,13 @@ exports.run = async() => {
       assert.equal(await fs.readFile(file,'utf8'),before,'Preview changed disk');
       await until(()=>driver.evaluate("document.body.innerText.includes('Review hunks')"),'review control');
       await until(()=>driver.evaluate("document.querySelector('.quick-input-widget')?.innerText.includes('Hunk 1')"),'hunk picker');
-      await selectOnly(n);
-      await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+      await round.decide();
       await Promise.race([run,new Promise((_,reject)=>setTimeout(()=>reject(Error('Turn did not finish')),30000))]);
-      assert.equal(await fs.readFile(file,'utf8'),expected[n],'Exactly hunk '+n+' should be saved');
-      await vscode.commands.executeCommand('forgeathon.undo');
-      assert.equal(await fs.readFile(file,'utf8'),before,'Undo did not restore original after hunk '+n);
+      assert.equal(await fs.readFile(file,'utf8'),round.saved,round.name+': saved text');
+      if(round.saved!==before){
+        await vscode.commands.executeCommand('forgeathon.undo');
+        assert.equal(await fs.readFile(file,'utf8'),before,'Undo did not restore original after '+round.name);
+      }
     }
     // Stop while the review is pending: the diff tab and every review control close; nothing actionable remains.
     {
@@ -124,7 +144,7 @@ exports.run = async() => {
     const sessions=await client.sessions.list();
     assert.ok(sessions.data.length,'TrueForge session persisted');
     sessionIds.push(sessions.data[0].id);
-    console.log('PASS real TrueForge 0.185.1 + scripted model, inline command, native diff, hunk picker (hunk 1 only, then hunk 2 only: exactly that hunk saved), undo after each, Stop with a pending review closes the picker; session '+sessionIds[0]);
+    console.log('PASS real TrueForge 0.185.1 + scripted model, inline command, native diff, hunk picker (hunk 1 only, then hunk 2 only: exactly that hunk saved; the ✓ title button saved both, the ✕ button neither), undo after each, Stop with a pending review closes the picker; session '+sessionIds[0]);
     console.log('Extension host '+process.platform+' Node '+process.versions.node+' remoteName='+(vscode.env.remoteName||'local'));
   } finally {
     driver?.close(); await model.stop(); server.kill('SIGTERM');

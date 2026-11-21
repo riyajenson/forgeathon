@@ -121,6 +121,15 @@ export function isAutoApprovableCommand(command: string): boolean {
   return isListedCommand(c) && AUTO_APPROVABLE_COMMANDS.some((re) => re.test(c));
 }
 
+/**
+ * A test run: pytest or python -m pytest (a virtualenv path before the program is fine), listed (no shell operators).
+ * Agent turns keep part of their command budget for these, so a fix can always be tested.
+ */
+export function isTestCommand(command: string): boolean {
+  const c = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|[^\s'"]*)\s+)+/, '');
+  return isListedCommand(command) && VERIFICATION_COMMANDS.slice(0, 2).some((re) => re.test(c));
+}
+
 export const UNRESTRICTED_WARNING = 'Unrestricted command: not on the verification list. It runs write-protected and offline, but can read any file you can and run any program.';
 
 function capped(buf: string): string {

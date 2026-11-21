@@ -2,7 +2,7 @@
 // and translates everything into the shared HarnessEvent stream.
 import type { CancelStatus, EditProposal, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
-import { isAutoApprovableCommand, isListedCommand, UNRESTRICTED_WARNING } from '../mcp/command';
+import { isAutoApprovableCommand, isListedCommand, isTestCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey } from '../review';
@@ -66,9 +66,23 @@ export const COMMAND_BUDGET_EXHAUSTED =
 export const RERUN_AFTER_FIX =
   'after your next fix you may rerun one test command that already ran this turn, once; nothing else';
 
+/**
+ * Agent turns with a budget of at least 4 keep their last runs for tests (pytest, python -m pytest): other commands
+ * may use only the rest, so a test can always be run, fixed and run again. Measured on real Task B runs, where one
+ * run spent 4 of 5 commands on python -c checks and could not test its last fix.
+ */
+export const TEST_RESERVE = 2;
+export function testReserveOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>): number {
+  return req.mode === 'agent' && commandBudgetOf(req) >= 4 ? TEST_RESERVE : 0;
+}
+
+export const COMMAND_BUDGET_RESERVED =
+  'the remaining commands of this turn are kept for running the tests; run the test file you changed with python -m pytest <file> -q instead';
+
 /** Appended to the agent turn's message so the model plans its verification within the limit the harness enforces. */
-export function commandBudgetNote(budget: number): string {
+export function commandBudgetNote(budget: number, reserve = 0): string {
   return `Command budget for this turn: ${budget} run_command call(s). A refused command shape (cd prefix) does not count. ` +
+    (reserve ? `The last ${reserve} are kept for test runs (python -m pytest <the test file you changed> -q): at most ${budget - reserve} other command(s). ` : '') +
     'Keep one run for the rerun after a fix; when the budget is used up, one rerun of a test command that already ran is still allowed after a fix.';
 }
 
@@ -221,7 +235,7 @@ export class TurnRun {
       },
     });
     if (context) emit({ t: 'context_report', report: context.report });
-    const input = this.req.mode === 'agent' ? `${turnInput}\n\n${commandBudgetNote(commandBudgetOf(this.req))}` : turnInput;
+    const input = this.req.mode === 'agent' ? `${turnInput}\n\n${commandBudgetNote(commandBudgetOf(this.req), testReserveOf(this.req))}` : turnInput;
 
     let agent = this.deps.agentName;
     let onFallback = false;
@@ -459,6 +473,14 @@ export class TurnRun {
           this.buffer.emit({ t: 'command_budget_reached', callId: call.id, command, budget });
           const rerun = this.req.mode === 'agent' && !this.rerunAfterFixUsed && this.commandRuns.size > 0 ? `; ${RERUN_AFTER_FIX}` : '';
           deny(`COMMAND_BUDGET_EXHAUSTED: ${COMMAND_BUDGET_EXHAUSTED}${rerun} (limit ${budget} per turn; nothing was run)`);
+          continue;
+        }
+        const reserve = testReserveOf(this.req);
+        if (!rerunAfterFix && reserve && this.commandsUsed >= budget - reserve && !isTestCommand(command)) {
+          // Only the runs kept for tests are left: a different command is refused without a prompt, like the budget.
+          this.log.budgetRefused++;
+          this.buffer.emit({ t: 'command_budget_reached', callId: call.id, command, budget });
+          deny(`COMMAND_BUDGET_RESERVED: ${COMMAND_BUDGET_RESERVED} (${budget - this.commandsUsed} of ${budget} left, kept for tests; nothing was run)`);
           continue;
         }
         if (rerunAfterFix) this.rerunAfterFixUsed = true;

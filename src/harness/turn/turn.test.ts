@@ -14,7 +14,8 @@ import { proposeEditTool } from '../mcp/tools';
 import { runCommandTool } from '../mcp/command';
 import { sha256Hex } from '../review';
 import type { TrueForgeClient, TrueForgeSdk } from '../trueforge/sdk';
-import { cdPrefix, COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, RERUN_AFTER_FIX, TurnRun, type TurnDeps } from './turn';
+import { isTestCommand } from '../mcp/command';
+import { cdPrefix, COMMAND_BUDGET_EXHAUSTED, COMMAND_BUDGET_RESERVED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, RERUN_AFTER_FIX, TurnRun, type TurnDeps } from './turn';
 import { buildTurnInput } from './prompt';
 
 /** An async event stream the test feeds by hand. Aborting the request signal ends it with an error. */
@@ -657,6 +658,52 @@ test('the agent turn message states the command budget the harness enforces', as
   void userAnswers(run, []);
   await run.start();
   assert.match(JSON.stringify(tf.turnRequests[0]), /Command budget for this turn: 4 run_command call\(s\)/);
+});
+
+test('command budget: an agent turn keeps its last 2 runs for tests, so a fix can be tested and tested again', async () => {
+  const test = 'python -m pytest tests/test_cli.py -q';
+  const tf = stepwise([
+    ['run_command', { command: 'python -c "print(1)"' }],
+    ['run_command', { command: 'python -c "print(2)"' }],
+    ['run_command', { command: 'python -c "print(3)"' }],
+    ['run_command', { command: 'python -c "print(4)"' }], // only the 2 runs kept for tests are left: refused
+    ['run_command', { command: 'flask --help' }],         // refused the same way
+    ['run_command', { command: test }],                   // 4th run
+    ['propose_edit', editArgs()],
+    ['run_command', { command: test }],                   // 5th run
+    ['propose_edit', editArgs()],
+    ['run_command', { command: test }],                   // the rerun after the fix, past the budget
+    ['run_command', { command: test }],                   // nothing left
+  ]);
+  const run = makeRun(tf, {}, { autoApproveSafeCommands: true });
+  const asked: HarnessEvent[] = [];
+  void userAnswers(run, asked);
+  await run.start();
+  assert.deepEqual(tf.approvals.map((a) => a.approval.status),
+    ['allow', 'allow', 'allow', 'deny', 'deny', 'allow', 'allow', 'allow', 'allow', 'allow', 'deny']);
+  for (const i of [3, 4]) assert.match(tf.approvals[i]!.approval.reason ?? '', new RegExp(`COMMAND_BUDGET_RESERVED: ${COMMAND_BUDGET_RESERVED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(2 of 5 left`));
+  assert.match(tf.approvals[10]!.approval.reason ?? '', /COMMAND_BUDGET_EXHAUSTED/);
+  assert.equal(asked.filter((e) => e.t === 'command_request').length, 3, 'the refused commands were never shown');
+  assert.equal(events(run).filter((e) => e.t === 'command_budget_reached').length, 3);
+  assert.match(JSON.stringify(tf.turnRequests[0]), /The last 2 are kept for test runs \(python -m pytest <the test file you changed> -q\): at most 3 other command\(s\)/);
+});
+
+test('command budget: no test reserve below a budget of 4 or in inline turns', async () => {
+  for (const req of [{ commandBudget: 3 }, { mode: 'inline' as const, commandBudget: 5 }]) {
+    const tf = stepwise([1, 2, 3].map((n) => ['run_command', { command: `python -c "print(${n})"` }]));
+    const run = makeRun(tf, {}, req);
+    void userAnswers(run, []);
+    await run.start();
+    assert.deepEqual(tf.approvals.map((a) => a.approval.status), ['allow', 'allow', 'allow'], JSON.stringify(req));
+    assert.doesNotMatch(JSON.stringify(tf.turnRequests[0]), /kept for test runs/);
+  }
+});
+
+test('isTestCommand: pytest and python -m pytest only, without shell operators', () => {
+  for (const c of ['python -m pytest tests/test_cli.py -q', 'pytest -q', '.venv/bin/python -m pytest', 'python3.12 -m pytest tests', 'FOO=1 pytest -x'])
+    assert.equal(isTestCommand(c), true, c);
+  for (const c of ['python -c "import pytest"', 'python -m pytest; rm -rf x', 'flask --help', 'git diff', 'pytest | tee log', 'python -m pytestx'])
+    assert.equal(isTestCommand(c), false, c);
 });
 
 test('command budget defaults: 5 for agent, 1 for inline; invalid values use the default', () => {

@@ -54,3 +54,45 @@ the video's 105-second slot. Tuning candidate (not yet run on real models): rais
 single compaction comes after the first edits. In the round-1 log, 40k is reached at about request 33 of 37; B2
 would have peaked at about 55k without compaction. A second option is a line in the agent instructions: after a
 summary, re-read only the ranges you are about to edit.
+
+## Phase 1b: compaction tuned to 40k (2026-11-21, commit 4f1e269)
+
+Changes:
+- **Trigger 40k.** The trigger moved from 30k to 40k input tokens. Across the three B runs on record, the first
+  `propose_edit` comes at about 32–36k input (round-1: request 19 at 33.8k). 35k could still fire before it, and
+  45k would never fire in a lean run (round-1 peaks at 42k).
+- **Instruction after a summary:** re-read only the ranges about to be edited, and don't re-explore files the summary covers.
+- **Iteration limit:** `iterationLimit` 60 → 80 (inline unchanged).
+- **Smoke run record:** it now places each compaction (model request, before or after the first diff), counts
+  `propose_edit` failures as malformed (INVALID_EDIT, INVALID_ARGS, OUTSIDE_WORKSPACE) or refused, and adds a
+  WARNING for each accepted hunk whose added lines look unrelated to the task (probe text, or no task term in the
+  added lines or the proposal summary). What it accepts is unchanged.
+
+Targets: 6/6; at most 1 compaction, after the first edit; first diff ≤ 60 s; turn ≤ 150 s.
+
+| | B1 (14:46) | B2 (14:59) | B2 redo (15:17) |
+|---|---|---|---|
+| Checks | **6/6** | 3/6 (429, after edits) | 3/6 (429, after edits) |
+| Compactions | 1, request 23, **after** the first edit (39,242 tokens; 38,510 → 851 in 16.6 s) | 0 (ended at ~36k) | 1, request 70, after the first edit (39,718; 39,473 → 1,206 in 20.7 s) |
+| First diff | **41.8 s** (request 16) | 125.4 s (request 31) | 258.1 s (request 65) |
+| Turn time | 255.4 s | 189.9 s (error) | 383.2 s (error) |
+| Model requests | 46, 0 × 429 | 48: 8 × 429, 2 × 502 | 84: NVIDIA 37 (24 × 429), OpenRouter 47 (4 × 429, daily cap) |
+| Malformed / refused edits | 0 / 1 (OLD_TEXT_AMBIGUOUS) | 0 / 0 | 6 / 0 |
+| Warnings (unrelated hunks) | 0 | 0 | 0 |
+
+- **B1 met three of the four targets.** The turn took 255 s, against the 150 s target. The time went to a failing
+  new test. The model fixed it twice, then tried a debug `python -c` (denied as Unrestricted), then three test runs
+  that the budget refused. Four requests took 20–28 s each to generate 750–1,400 tokens. After the summary it
+  re-read 7 ranges, including the whole of `tests/test_cli.py` and `docs/cli.rst`, which it had not edited yet:
+  about 18 s.
+- **B2 was spaced 8 min 38 s after B1, not 10 min** (an operator mistake in the wait). NVIDIA returned 429 from
+  request 32 on, at about 17–20 requests/min. The last 429 came after edits had been saved, so the turn ended
+  with an error (by design: no retry or fallback after a write).
+- **B2 redo**, the one 429 redo, after 15 minutes idle and a 1-token check (HTTP 200). NVIDIA throttled from the
+  6th request, and the turn fell back to OpenRouter, which then hit its free daily cap. The key had served about
+  220 Task B requests in the previous 90 minutes.
+
+Verdict: targets not met, so Phase 2 was not started. Compaction at 40k behaves as intended: once, after the first
+edit, with no unrelated hunks. The misses are the turn time (test-fix loop and generation latency in B1) and
+NVIDIA's free-tier throttling (B2, redo). The first-diff time also varies with exploration: B2 reached its first
+diff at request 31 with no compaction at all.

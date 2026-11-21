@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import type { ContextReport, HarnessEvent } from 'forge-harness';
+import { proposalWarnings } from './destructive';
 
 export class AgentViewState {
   text = '';
@@ -21,8 +22,12 @@ export class AgentViewState {
   /** Set when the turn ends: every file the turn changed (then reviewed files left unchanged), on one screen. */
   summary: string[] = [];
   command?: {command: string; cwd: string; warning?: string};
-  /** Set when the turn stopped on a rate limit: Resume is offered from `at` (ms since epoch). */
-  resume?: {at: number; files: string[]};
+  /** Set when the turn stopped on a rate limit or a stall: Resume is offered from `at` (ms since epoch). */
+  resume?: {at: number; files: string[]; reason: 'rate_limited' | 'stalled'};
+  /** Proposals in this turn with hunks that delete a whole class or function. */
+  warnings: string[] = [];
+  /** Set when an agent turn ends: the observed outcome of its last test command, shown next to the model's summary. */
+  tests = '';
   private compaction?: {id: string; label: string; detail: string};
 
   update(e: HarnessEvent) {
@@ -53,6 +58,7 @@ export class AgentViewState {
         this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path;
         const f = this.files[e.proposal.path] ??= {reviews: 0, hunks: 0, accepted: 0, status: ''};
         f.reviews++; f.hunks += e.proposal.hunks.length;
+        for (const w of proposalWarnings(e.proposal)) this.warnings.push(e.proposal.path + ': ' + w);
         break;
       }
       case 'command_request':
@@ -77,7 +83,7 @@ export class AgentViewState {
           if (item) item.detail = detail; else this.tools.push({id:'subagent:' + e.threadId, label:'Sub-agent: ' + e.name, detail});
         }
         break;
-      case 'resumable': this.resume = {at: Date.now() + e.retryAfterMs, files: e.changedFiles}; break;
+      case 'resumable': this.resume = {at: Date.now() + e.retryAfterMs, files: e.changedFiles, reason: e.reason}; break;
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);
@@ -94,6 +100,7 @@ export class AgentViewState {
         this.status = e.summary || e.status; this.outcome = e.status; this.busy = this.reviewing = false; this.command = undefined;
         if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
         this.summary = this.fileSummary();
+        this.tests = testsLine(e.tests);
         break;
     }
   }
@@ -104,6 +111,14 @@ export class AgentViewState {
     return [...all.filter(([, f]) => f.accepted > 0).map(([path, f]) => path + ' | ' + counts(f) + ' | ' + f.status),
       ...all.filter(([, f]) => f.accepted === 0).map(([path, f]) => path + ' | ' + counts(f) + ' | not changed')];
   }
+}
+
+/** The observed test outcome as one line: what actually ran, not what the model says. */
+export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): string {
+  if (!t) return '';
+  if (t.status === 'not_run') return 'Tests (observed): not run in this turn';
+  const counts = t.status === 'passed' ? 'passed' : (t.failed ? t.failed + ' failed' : 'failed (exit ' + t.exitCode + ')');
+  return 'Tests (observed): ' + counts + (t.summary ? ' \u2014 ' + t.summary : '') + (t.command ? ' \u2014 $ ' + t.command : '');
 }
 
 type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void> };
@@ -162,7 +177,7 @@ button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
 <section id="context" hidden><h2>Context</h2><p id="budget"></p><ul id="selected"></ul><h2 id="skippedTitle">Skipped</h2><ul id="skipped"></ul></section>

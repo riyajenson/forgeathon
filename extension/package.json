@@ -108,6 +108,12 @@
           "default": 1,
           "minimum": 0,
           "description": "Most test runs an inline edit may make in one turn."
+        },
+        "forge.watchdog.modelRequestSec": {
+          "type": "integer",
+          "default": 120,
+          "minimum": 30,
+          "description": "Seconds the model may stay silent while a request is in flight (a long edit can stream nothing for a while) before the turn is stopped as unresponsive. Other waits keep the 45 s limit. A stop after the turn changed files offers Resume."
         }
       }
     }

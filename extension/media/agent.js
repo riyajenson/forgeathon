@@ -9,7 +9,8 @@
     el('resumeBox').hidden = !s.resume || s.busy;
     if (!s.resume || s.busy) return;
     const files = s.resume.files.length ? ' Already changed: ' + s.resume.files.join(', ') + '.' : ' No file was changed.';
-    el('resumeText').textContent = 'Stopped by a model rate limit (HTTP 429).' + files + ' Resume continues the task in this conversation.';
+    const why = s.resume.reason === 'stalled' ? 'Stopped: the model did not respond in time.' : 'Stopped by a model rate limit (HTTP 429).';
+    el('resumeText').textContent = why + files + ' Resume continues the task in this conversation.';
     const wait = s.resume.at - Date.now();
     el('resume').disabled = wait > 0;
     el('resume').textContent = wait > 0 ? 'Resume (in ' + Math.ceil(wait / 1000) + ' s)' : 'Resume';
@@ -50,6 +51,10 @@
       el('skippedTitle').hidden = !s.context.skipped.length;
       list('skipped',s.context.skipped.map(i => i.path + ' | ' + i.reason + ' | ' + i.estimatedTokens + ' tokens'));
     }
+    el('tests').hidden = !s.tests;
+    el('tests').textContent = s.tests;
+    el('warnings').hidden = !s.warnings.length;
+    list('warningList', s.warnings);
     el('turnFiles').hidden = !s.summary.length;
     el('turnFilesTitle').textContent = 'Files changed in this turn: ' + s.summary.filter(line => !line.endsWith('| not changed')).length;
     list('summary',s.summary);

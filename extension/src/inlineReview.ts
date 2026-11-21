@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { randomUUID } from 'node:crypto';
 import type { EditProposal, ReviewDecision } from 'forge-harness';
 import { EditReview, preview } from './review';
+import { hunkWarning, proposalWarnings } from './destructive';
 
 export class InlineReview implements vscode.Disposable {
   private readonly texts = new Map<string, string>();
@@ -45,8 +46,10 @@ export class InlineReview implements vscode.Disposable {
     const n = p.hunks.length;
     const qp = vscode.window.createQuickPick();
     this.actions = qp;
-    qp.title = `Review ${n} hunk${n === 1 ? '' : 's'} in ${p.path}`;
-    qp.placeholder = 'The proposed change is in the diff editor. Escape hides this; "Review hunks" in the status bar reopens the hunk list.';
+    const warnings = proposalWarnings(p);
+    qp.title = `Review ${n} hunk${n === 1 ? '' : 's'} in ${p.path}` + (warnings.length ? ` — ⚠ ${warnings.join('; ')}` : '');
+    qp.placeholder = (warnings.length ? '⚠ This change deletes whole definitions; check them in the diff or choose hunks. ' : '') +
+      'The proposed change is in the diff editor. Escape hides this; "Review hunks" in the status bar reopens the hunk list.';
     qp.ignoreFocusOut = true;
     qp.items = [{label: 'Accept All'}, {label: 'Reject All'}, {label: 'Choose Hunks...'}];
     qp.onDidAccept(() => {
@@ -83,7 +86,8 @@ export class InlineReview implements vscode.Disposable {
     picker.title = 'Select hunks to accept. Enter submits; unchecked hunks are rejected';
     picker.canSelectMany = true;
     picker.items = p.hunks.map((h, i) => ({
-      label: 'Hunk ' + (i + 1) + ' - line ' + p.originalText.slice(0, h.startOffset).split('\n').length,
+      label: (hunkWarning(h) ? '$(warning) ' : '') + 'Hunk ' + (i + 1) + ' - line ' + p.originalText.slice(0, h.startOffset).split('\n').length,
+      ...(hunkWarning(h) ? {description: hunkWarning(h)} : {}),
       detail: h.oldText.slice(0, 80) + ' | ' + h.newText.slice(0, 80), hunkId: h.hunkId
     }));
     picker.selectedItems = picker.items; // start from "accept all"; uncheck hunks to reject them

@@ -41,6 +41,34 @@ exports.run = async () => {
   limited.update({t:'resumable',reason:'rate_limited',retryAfterMs:60000,changedFiles:['src/flask/cli.py']});
   assert.deepEqual(limited.resume.files, ['src/flask/cli.py']);
   assert.ok(limited.resume.at >= t0 + 60000 && limited.resume.at <= Date.now() + 60000, 'Resume is offered after the suggested wait');
+  assert.equal(limited.resume.reason, 'rate_limited');
+  const stalled = new AgentViewState();
+  stalled.update({t:'resumable',reason:'stalled',retryAfterMs:5000,changedFiles:['tests/test_cli.py']});
+  assert.equal(stalled.resume.reason, 'stalled', 'a stall after writes offers Resume too');
+  assert.ok(stalled.resume.at <= Date.now() + 5000);
+  // Verified test status: the observed outcome of the last test command, next to the model's summary.
+  const tested = new AgentViewState();
+  tested.update({t:'done',status:'done',summary:'All tests pass.',tests:{status:'failed',command:'pytest tests/test_cli.py -q',exitCode:1,passed:57,failed:1,summary:'1 failed, 57 passed, 3 skipped in 0.18s'}});
+  assert.equal(tested.status, 'All tests pass.');
+  assert.equal(tested.tests, 'Tests (observed): 1 failed \u2014 1 failed, 57 passed, 3 skipped in 0.18s \u2014 $ pytest tests/test_cli.py -q');
+  const passedState = new AgentViewState();
+  passedState.update({t:'done',status:'done',tests:{status:'passed',command:'pytest -q',exitCode:0,passed:3,failed:0,summary:'3 passed in 0.1s'}});
+  assert.equal(passedState.tests, 'Tests (observed): passed \u2014 3 passed in 0.1s \u2014 $ pytest -q');
+  const notRun = new AgentViewState();
+  notRun.update({t:'done',status:'done',tests:{status:'not_run'}});
+  assert.equal(notRun.tests, 'Tests (observed): not run in this turn');
+  const inlineDone = new AgentViewState();
+  inlineDone.update({t:'done',status:'done'});
+  assert.equal(inlineDone.tests, '', 'no test line without done.tests (inline turns)');
+  // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
+  const destructive = new AgentViewState();
+  destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[
+    {hunkId:'a',startOffset:0,endOffset:0,oldText:'',newText:'# c\n'},
+    {hunkId:'b',startOffset:10,endOffset:34,oldText:'class TestRoutes:\n    pass',newText:'class TestConfig:\n    pass',deletes:[{kind:'class',name:'TestRoutes',lines:25}]}]}});
+  assert.deepEqual(destructive.warnings, ['tests/test_cli.py: Hunk 2 (line 3) deletes class TestRoutes (25 lines)']);
+  const { proposalWarnings, hunkWarning } = require('../out/destructive');
+  assert.equal(hunkWarning({deletes:[{kind:'function',name:'a',lines:3},{kind:'function',name:'b',lines:2}]}), 'deletes function a (3 lines), function b (2 lines)');
+  assert.deepEqual(proposalWarnings({originalText:'x',hunks:[{hunkId:'a',startOffset:0}]}), []);
   const compact = new AgentViewState();
   compact.update({t:'status',state:'compacting',detail:'Compacting context: 30,412 tokens reached the 30,000-token threshold'});
   assert.equal(compact.status, 'Compacting context: 30,412 tokens reached the 30,000-token threshold', 'compaction start on the status line');
@@ -205,5 +233,5 @@ exports.run = async () => {
   const slowRun=ctrl.run('agent','stop',{});
   await ready;await ctrl.stop();await slowRun;
   assert.ok(cancelled);assert.deepEqual(displayed,['turn_started','done']);gate.dispose();
-  console.log('PASS simulated panel stream, tool summaries, selection/skips, fallback/error, command denial, Stop and late-event filtering, test budget, sub-agents, Resume');
+  console.log('PASS simulated panel stream, tool summaries, selection/skips, fallback/error, command denial, Stop and late-event filtering, test budget, sub-agents, Resume (rate limit and stall), observed test status, destructive-hunk warnings');
 };

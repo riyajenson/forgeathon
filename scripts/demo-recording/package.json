@@ -1,0 +1,8 @@
+{
+  "name": "forge-demo-recording",
+  "private": true,
+  "description": "Recording tooling for the demo video (playwright-core drives an existing VS Code window over its DevTools port; no browser download). Not part of the default install.",
+  "dependencies": {
+    "playwright-core": "1.49.1"
+  }
+}

@@ -122,7 +122,7 @@ exports.run = async () => {
   const harness = {
     start:async port => {assert.equal(typeof port.applyText,'function')},
     createSession:async()=>({ok:true,body:{sessionId:'sim'}}),
-    submitTurn:async ({body})=>{submitted=true;assert.equal(body.instruction,'simulated task');assert.equal(body.autoApproveSafeCommands,undefined,'off by default');assert.equal(body.commandBudget,3,'agent budget defaults to 3');return {ok:true,body}},
+    submitTurn:async ({body})=>{submitted=true;assert.equal(body.instruction,'simulated task');assert.equal(body.autoApproveSafeCommands,undefined,'off by default');assert.equal(body.commandBudget,5,'agent budget defaults to 5 (forge.commandBudget.agent)');return {ok:true,body}},
     stream:async function*({body}) {
       const header = {version, sessionId:body.sessionId,turnId:body.turnId};
       let sequence = 0;
@@ -167,7 +167,7 @@ exports.run = async () => {
   // forge.autoApproveSafeCommands on: the request carries it; an auto-approved command opens no prompt and
   // sends no decision, while an unrestricted command in the same turn still asks.
   const forgeCfg = vscode.workspace.getConfiguration('forge');
-  assert.equal(forgeCfg.inspect('commandBudget.agent').defaultValue, 3);
+  assert.equal(forgeCfg.inspect('commandBudget.agent').defaultValue, 5);
   assert.equal(forgeCfg.inspect('commandBudget.inline').defaultValue, 1);
   await forgeCfg.update('autoApproveSafeCommands', true, vscode.ConfigurationTarget.Global);
   await forgeCfg.update('commandBudget.agent', 2, vscode.ConfigurationTarget.Global);

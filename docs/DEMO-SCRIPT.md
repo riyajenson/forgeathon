@@ -5,9 +5,9 @@ TrueForge session for Task B; model waiting time may be cut, but **never cut bet
 and the diff appearing**. The video must be publicly viewable: after uploading, open the link in a private
 browser window (signed out) to confirm.
 
-**This branch (finals build):** reviews use the multi-select hunk picker (✓ / ✕ in its title bar) instead of the
-round-1 video's "Accept All / Reject All / Choose Hunks..." prompt. The submitted round-1 video is final and stays the
-linked video; the picker is covered by the native UI tests. The round-1 video was recorded by an automated UI script driving the real extension with real models; that tooling
+**This build (updated round-1 submission):** reviews use the multi-select hunk picker (✓ / ✕ in its title bar)
+instead of the "Accept All / Reject All / Choose Hunks..." prompt shown in the current video, which was recorded on
+the first round-1 build. That video was recorded by an automated UI script driving the real extension with real models; that tooling
 is in `scripts/demo-recording/` (see its README): it launches the Extension Development Host with the recording
 profile, saves a DevTools screencast, and drives each segment at human pace.
 

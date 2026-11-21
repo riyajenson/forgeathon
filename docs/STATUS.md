@@ -1,6 +1,10 @@
 # Project status
 
-**2026-11-21 (Stop fix and final rehearsal), finals branch at `d1f4c68`:** the native UI test failed once in 20 runs
+**2026-11-21, round-1 deadline extended to 22 Nov:** `main` is the updated round-1 submission (branch
+`feature/hybrid-efficiency-native` merged; tag `round1-final`; the first round-1 build stays at tag `round1-submission`).
+The video will be re-recorded on this build; until then the write-up links the current video.
+
+**2026-11-21 (Stop fix and final rehearsal), updated round-1 build at `d1f4c68`:** the native UI test failed once in 20 runs
 with "Stop ended the turn in 60041 ms, not after the 60 s command". Cause: a Stop within a few ms of a command's start
 killed bwrap's process group before the sandbox process (its own session, `--new-session`) had armed
 `--die-with-parent`; the sandbox kept running the command and holding stdout/stderr, so the turn waited for the
@@ -18,7 +22,7 @@ stubbing out the Ctrl+Z re-apply or the cancel makes the respective check fail. 
 review, `test_cli.py` 2, `cli.rst` 1; 4 malformed edit calls), C 3/3 (NVIDIA 401 → OpenRouter, 4 requests). The
 three Task B runs below (`f2f87bb`) were not repeated: the fix changes only how a command is started and killed.
 
-**2026-11-21 (second batch), finals branch at `f2f87bb`, real models, profile nvidia-free, video settings:** three
+**2026-11-21 (second batch), updated round-1 build at `f2f87bb`, real models, profile nvidia-free, video settings:** three
 Task B runs at least 10 minutes apart, a 10-minute pause, then one A/B/C rehearsal (`docs/writeup/rehearsal.json`).
 Changes since the first batch: agent turns with a command budget of at least 4 keep the last 2 runs for pytest
 (the first batch's B3 failure mode), the agent context budget default is 4000 instead of 8000, and the
@@ -42,7 +46,7 @@ as a string, 2 failing schema validation), and each rejection resent the whole c
 155 NVIDIA (one 401, C's injected failure), 4 OpenRouter (one 502, resent by TrueForge). The pre-flight sent one
 1-token request per configured NVIDIA key; the first that answered 200 was used for the whole batch.
 
-**2026-11-21 (first batch), finals branch at `6b21d39`, real models, profile nvidia-free, video settings:** three
+**2026-11-21 (first batch), updated round-1 build at `6b21d39`, real models, profile nvidia-free, video settings:** three
 Task B runs, then one A/B/C rehearsal.
 
 | Run | Checks | Requests (429) | Input tokens | Turn | Files (reviews) | Commands |

@@ -57,6 +57,14 @@ model request up to 4 times (waits 1, 2, 4, 8 s when there is no `Retry-After`) 
 The wait is invisible on screen except as a pause, and it happens after the first diff or before it; never cut it
 before the first diff.
 
+**Context compaction (finals branch `harness/p14-trueforge-depth`):** agent mode compacts at 30k input tokens,
+and in Task B this happens once or twice. On screen, the panel status line shows "Compacting context: 30,841 tokens
+reached the 30,000-token threshold" and then "Context compacted in 19.4 s: 30,255 tokens summarized into 879", and
+the activity list keeps a **Context compaction** row. Show it; it is TrueForge feature evidence. Timing impact:
+it fires before the first edit, so in the two real runs (`docs/harness/REHEARSAL-P14.md`) the first diff came after
+129 s and 150 s. That is over the 105 s uncut slot (0:55–2:40), so the B slot needs re-timing on this branch, or a
+higher threshold, before any recording.
+
 **Measured on the current code** (QA run on `37fb675`, 2026-11-19, with bubblewrap protection and the
 recording settings: auto-approval on, budget 3):
 

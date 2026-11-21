@@ -333,8 +333,7 @@ export class TurnRun {
             emit({ t: 'tool_result', callId: e.callId, ok: e.ok, summary: summarizeResult(e.content) });
             break;
           case 'status':
-            if (e.state === 'compacting') emit({ t: 'status', state: 'compacting' });
-            else if (e.state === 'running') emit({ t: 'status', state: 'running' });
+            if (e.state === 'compacting' || e.state === 'running') emit({ t: 'status', state: e.state, ...(e.detail ? { detail: e.detail } : {}) });
             break;
           case 'turn_created':
             emit({ t: 'status', state: 'running' });

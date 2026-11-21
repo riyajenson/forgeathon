@@ -27,7 +27,7 @@ export type AttemptEvent =
   | { t: 'text'; messageId: string; delta: string }
   | { t: 'tool_call'; call: ToolCallInfo }
   | { t: 'tool_result'; callId: string; ok: boolean; content: string }
-  | { t: 'status'; state: 'running' | 'paused' | 'compacting' };
+  | { t: 'status'; state: 'running' | 'paused' | 'compacting'; detail?: string };
 
 export interface AttemptResult {
   status: 'done' | 'cancelled' | 'error';
@@ -283,10 +283,10 @@ export class Attempt {
           break;
         }
         case 'thread.context_compaction_started':
-          this.o.onEvent({ t: 'status', state: 'compacting' });
+          this.o.onEvent({ t: 'status', state: 'compacting', detail: compactionStarted(event) });
           break;
         case 'thread.context_compaction_finished':
-          this.o.onEvent({ t: 'status', state: 'running' });
+          this.o.onEvent({ t: 'status', state: 'running', detail: compactionFinished(event) });
           break;
         case 'turn.done':
           return { kind: 'done', event };
@@ -319,4 +319,20 @@ export class Attempt {
     if (status === 'cancelled') return { ...base, status: 'cancelled', cancelReason: String(state['reason'] ?? '') };
     return { ...base, status: 'error', message: String(state['message'] ?? 'turn failed') };
   }
+}
+
+const tokens = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : '?');
+
+/** Panel status line for TrueForge's thread.context_compaction_started (fields as the SDK deserializes them). */
+export function compactionStarted(event: TfEvent): string {
+  const trigger = event['trigger'] as { contextTokens?: number; thresholdTokens?: number } | undefined;
+  return `Compacting context: ${tokens(trigger?.contextTokens)} tokens reached the ${tokens(trigger?.thresholdTokens)}-token threshold`;
+}
+
+/** Panel status line for thread.context_compaction_finished: the summary call's size and time. */
+export function compactionFinished(event: TfEvent): string {
+  const usage = event['usage'] as { inputTokens?: number; outputTokens?: number } | undefined;
+  const ms = event['durationMs'];
+  const secs = typeof ms === 'number' && Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)} s` : '? s';
+  return `Context compacted in ${secs}: ${tokens(usage?.inputTokens)} tokens summarized into ${tokens(usage?.outputTokens)}`;
 }

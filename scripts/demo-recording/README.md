@@ -20,7 +20,9 @@ scripts/use-models.sh nvidia-free                     # restore the primary mode
 
 Before each take, reset the workspace (`git -C ~/flask-demo checkout -- . && git -C ~/flask-demo clean -fd`) and
 start TrueForge with the models set up (README, Quickstart). `FORGE_DEMO_WORKSPACE`, `FORGE_DEMO_CDP_PORT` and
-`FORGE_DEMO_PROFILE` override the defaults. Each step appends JSON-line markers (`instruction_sent`, `first_diff`,
+`FORGE_DEMO_PROFILE` override the defaults; `FORGE_DEMO_CANCEL_TASK` replaces the instruction the `cancel` step
+sends (with the scripted model of `scripts/dev-mock.sh`, use `stop check: pending review`, the only turn it can be
+stopped in). Each step appends JSON-line markers (`instruction_sent`, `first_diff`,
 `accepted`, `cmd_prompt`, `seg_end`, ...) with epoch timestamps, so cuts can be placed against `index.tsv`. A
 failed step saves a screenshot next to the markers file. `drive.cjs Bresume` continues an interrupted Task B turn
 (`REVIEWS_SO_FAR=<n>` keeps the review count); `drive.cjs state` prints what the quick input and the panel show.

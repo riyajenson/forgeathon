@@ -5,7 +5,8 @@
 // usage: node drive.cjs <step> <markers.jsonl>
 //   steps: layout | A | cancel | B | Bresume | Bverify | C | newconv | state
 //   Bresume: continue answering an interrupted Task B turn (REVIEWS_SO_FAR=<n> keeps the review count).
-// env: FORGE_DEMO_CDP_PORT (default 9333), FORGE_DEMO_WORKSPACE (default ~/flask-demo)
+// env: FORGE_DEMO_CDP_PORT (default 9333), FORGE_DEMO_WORKSPACE (default ~/flask-demo), FORGE_DEMO_CANCEL_TASK (the
+//      instruction the cancel step sends and stops; the scripted model needs 'stop check: pending review')
 const { chromium } = require('playwright-core');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -22,6 +23,7 @@ const mark = (ev, extra = {}) => {
   console.log(new Date().toISOString().slice(11, 19), ev, JSON.stringify(extra));
 };
 const INSTR_A = "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.";
+const INSTR_CANCEL = process.env.FORGE_DEMO_CANCEL_TASK || 'Add type hints to every function in src/flask/cli.py';
 const INSTR_B = 'Add a new built-in CLI command flask config that prints the loaded application\'s configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "***". It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.';
 /** The hunk picker's title; it opens with the diff for every review. */
 const PICKER = /Select hunks to accept/;
@@ -50,6 +52,49 @@ async function wvConnect() {
   await new Promise((res, rej) => { wvWs.onopen = res; wvWs.onerror = rej; });
   wvWs.onmessage = e => { const m = JSON.parse(e.data); if (wvPending.has(m.id)) { wvPending.get(m.id)(m); wvPending.delete(m.id); } };
   wvWs.onclose = () => { wvWs = undefined; };
+}
+/**
+ * Brings the agent panel on screen (a webview behind another tab, e.g. a diff editor opened in its group, has no
+ * DevTools target) and connects. Clicks the panel's tab when there is one; opens it from the command palette only
+ * when no quick input is showing, because the palette would replace a pending hunk picker or command prompt.
+ */
+async function showPanel(force = false) {
+  try {
+    if (await qiText()) {
+      if (!force) return false;
+      await page.keyboard.press('Escape'); mark('picker_hidden'); await sleep(600); // the picker covers the tab strip
+    }
+    const tab = page.locator('.tab', { hasText: 'Forge Agent' }).first();
+    if (await tab.count()) {
+      await tab.hover({ timeout: 2000 }); await sleep(700); if (!force && await qiText()) return false;
+      await tab.click({ timeout: 2000 }); mark('panel_tab'); await sleep(800);
+    } else {
+      mark('panel_open'); await palette('Forge-a-thon: Open Agent Panel'); await sleep(1500);
+      await page.keyboard.press('Control+1');
+    }
+    return true;
+  } catch { mark('panel_tab_skip'); return false; }
+}
+async function ensurePanel() {
+  try { await wvConnect(); return; } catch { }
+  await showPanel();
+  await until(async () => { await wvConnect(); return true; }, 'agent panel webview', 15000, 500);
+}
+/**
+ * Follows an agent turn to its end: answers each review and command prompt, and brings the panel back whenever a
+ * diff editor has covered it. Ends once the panel's Send button has been enabled for four checks in a row.
+ */
+async function followTurn(reviews, onPanel = async () => { }) {
+  const t0 = now(); let quiet = 0;
+  while (true) {
+    if (now() - t0 > 900) throw Error('turn took too long');
+    const t = await qiText();
+    if (await answer(t, reviews)) { await sleep(500); await showPanel(); wvWs = undefined; continue; }
+    let busy = null; try { busy = await wvDisabled('send'); await onPanel(); } catch { wvWs = undefined; }
+    if (busy === false) { if (++quiet > 3) break; } else quiet = 0;
+    if (busy === null && !t) { await showPanel(); await sleep(1500); }
+    await sleep(250);
+  }
 }
 async function wv(expr) {
   if (!wvWs) await wvConnect();
@@ -111,6 +156,55 @@ async function qiButton(icon, hold = 1200) {
   if (icon === 'check') { await page.keyboard.press('Enter'); return; } // Enter submits with every hunk checked
   throw Error('no ' + icon + ' button');
 }
+/** Moves the pointer to a point, rests so any hover state shows on the video, then clicks there. */
+async function pointAndClick(locator, hold) {
+  const bb = await locator.boundingBox();
+  if (!bb) return false;
+  const x = bb.x + bb.width / 2, y = bb.y + bb.height / 2;
+  await page.mouse.move(x, y, { steps: 8 }); await sleep(hold); await page.mouse.click(x, y);
+  return true;
+}
+/** Ticks or unticks hunk row i (0-based) with the pointer and checks that the box really changed (one retry). */
+async function setHunkChecked(i, checked) {
+  const row = page.locator('.quick-input-widget .monaco-list-row').nth(i);
+  const box = row.locator('.quick-input-list-checkbox, input[type=checkbox], .monaco-checkbox').first();
+  const state = async () => {
+    const aria = await box.getAttribute('aria-checked').catch(() => null);
+    if (aria !== null) return aria === 'true';
+    return box.isChecked().catch(() => undefined);
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if ((await state()) === checked) return;
+    await pointAndClick(box, attempt ? 400 : 1200); await sleep(400);
+  }
+  if ((await state()) !== checked) throw Error('hunk ' + (i + 1) + ' did not become ' + (checked ? 'checked' : 'unchecked'));
+}
+/**
+ * Submits the hunk picker with its OK button, as a user would after ticking hunks. (Enter is not used: after a
+ * checkbox click the focus is on that checkbox, where Enter toggles it instead of submitting.)
+ */
+async function qiOk(hold = 1200) {
+  const ok = page.locator('.quick-input-widget .quick-input-action .monaco-button, .quick-input-widget a.monaco-button', { hasText: /^OK$/ }).first();
+  if (await ok.count() && await pointAndClick(ok, hold)) { mark('ok_clicked'); return; }
+  mark('ok_missing');
+  await page.locator('.quick-input-widget input.input').first().focus().catch(() => { });
+  await page.keyboard.press('Enter');
+}
+/**
+ * Maximizes or restores the bottom panel and checks the result from the panel's own toolbar (it shows "Restore Panel"
+ * while maximized). Uses the palette command first, then clicks the toolbar button if the toggle did not take.
+ */
+async function setPanelMaximized(want) {
+  const isMax = () => page.evaluate(() => [...document.querySelectorAll('.part.panel .action-label')]
+    .some(e => /^Restore Panel/.test(e.getAttribute('aria-label') || '')));
+  if ((await isMax()) === want) return;
+  await palette('View: Toggle Maximized Panel'); await sleep(800);
+  if ((await isMax()) === want) return;
+  mark('panel_toggle_click', { want });
+  const btn = page.locator('.part.panel .action-label[aria-label^="' + (want ? 'Maximize Panel' : 'Restore Panel') + '"]').first();
+  if (await btn.count()) { await pointAndClick(btn, 600); await sleep(800); }
+  if ((await isMax()) !== want) throw Error('panel did not ' + (want ? 'maximize' : 'restore'));
+}
 async function focusTerminal() {
   await page.locator('.terminal-wrapper .xterm-screen').first().click(); await sleep(600);
 }
@@ -151,8 +245,23 @@ async function inlineDone(timeout = 120000) {
 }
 const gitStatus = () => execFileSync('git', ['-C', WORKSPACE, 'status', '--short']).toString();
 
+/**
+ * A review is pending (status bar "Review hunks") but its picker is not on screen: reopen it from the status bar, as
+ * a user would, once it has been missing for 3 s. Each reopen is logged as a picker_reopen marker.
+ */
+let pickerMissingSince = 0;
+async function reopenHiddenPicker(t) {
+  const item = page.locator('.statusbar-item', { hasText: 'Review hunks' }).first();
+  if (t || !(await item.count()) || !(await item.isVisible().catch(() => false))) { pickerMissingSince = 0; return false; }
+  if (!pickerMissingSince) { pickerMissingSince = Date.now(); return false; }
+  if (Date.now() - pickerMissingSince < 3000) return false;
+  pickerMissingSince = 0; mark('picker_reopen');
+  await pointAndClick(item, 800); await sleep(500);
+  return true;
+}
 /** Answers every review (✓ Accept all hunks) and command prompt (Allow once; Deny when unrestricted) of an agent turn. */
 async function answer(t, reviews) {
+  if (await reopenHiddenPicker(t)) return true;
   if (PICKER.test(t)) {
     reviews.n++; mark(reviews.n === 1 ? 'first_diff' : 'diff', { task: 'B', n: reviews.n, title: t.split('\n')[0] });
     await sleep(2000); await qiButton('check', 1400);
@@ -201,12 +310,13 @@ const steps = {
     const rows = page.locator('.quick-input-widget .monaco-list-row');
     const nrows = await rows.count(); mark('hunk_rows', { nrows });
     if (nrows >= 2) {
-      const cb = rows.nth(nrows - 1).locator('.quick-input-list-checkbox, input[type=checkbox], .monaco-checkbox').first();
-      try { await cb.hover(); await sleep(1200); await cb.click(); mark('unchecked'); await sleep(1800); await cb.click(); mark('rechecked'); await sleep(1500); }
-      catch (e) { mark('cb_fail', { m: e.message }); }
+      try {
+        await setHunkChecked(nrows - 1, false); mark('unchecked'); await sleep(1800);
+        await setHunkChecked(nrows - 1, true); mark('rechecked'); await sleep(1500);
+      } catch (e) { mark('cb_fail', { m: e.message }); }
     }
     await sleep(1500);
-    mark('accept_hunks'); await page.keyboard.press('Enter');
+    mark('accept_hunks'); await qiOk();
     await inlineDone(); mark('A_turn_done', { status: gitStatus() });
     await sleep(1500);
     mark('verify_A');
@@ -220,12 +330,17 @@ const steps = {
   },
   async cancel() {
     mark('seg_start', { seg: 'cancel' });
+    await ensurePanel();
     await wv('el("task").value=""');
     await wvClick('task', 600);
-    await typeHuman('Add type hints to every function in src/flask/cli.py', 30);
+    await typeHuman(INSTR_CANCEL, 30);
     await sleep(800); await wvClick('send', 800); mark('cancel_send');
     await until(async () => (await wvText('text')).trim().length > 0 || !(await wvHidden('activity')), 'stream start', 120000, 100);
     mark('streaming'); await sleep(3000);
+    // If a review's diff editor has covered the panel, click the panel's tab: that hides the hunk picker and leaves
+    // the review pending, which Stop then cancels.
+    wvWs = undefined;
+    try { await wvConnect(); } catch { await showPanel(true); await ensurePanel(); }
     await wvClick('stop', 700); mark('stop_click');
     await until(async () => /cancel/i.test(await wvText('status')), 'cancelled status', 30000);
     mark('cancelled', { status: await wvText('status') }); await sleep(2500);
@@ -234,58 +349,40 @@ const steps = {
   },
   async B() {
     mark('seg_start', { seg: 'B' });
+    await ensurePanel();
     await wv('el("task").value=""'); await wv('d.scrollingElement.scrollTop=0');
     await wvClick('task', 600);
     await typeHuman(INSTR_B, 14); await sleep(1200);
     await wvClick('send', 800); mark('instruction_sent', { task: 'B' });
+    // A click that lands while the panel is still scrolling misses Send: if no turn started, click it once more.
+    try { await until(async () => await wvDisabled('send'), 'turn start', 5000, 100); }
+    catch { mark('send_retry'); await wvClick('send', 500); await until(async () => await wvDisabled('send'), 'turn start', 10000, 100); }
     let shownContext = false; const reviews = { n: 0 };
-    const t0 = now();
-    while (true) {
-      if (now() - t0 > 900) throw Error('B took too long');
-      if (!shownContext && !(await wvHidden('context'))) {
-        await wvScroll('context');
-        mark('context_shown'); await sleep(4000); shownContext = true;
-        await wvScroll('activity');
-      }
-      if (await answer(await qiText(), reviews)) continue;
-      if (!(await wvDisabled('send')) && now() - t0 > 5) break;
-      await sleep(150);
-    }
+    await followTurn(reviews, async () => {
+      // Pause on the Context block once this turn's report is in.
+      if (shownContext || await wvHidden('context')) return;
+      await wvScroll('context'); mark('context_shown'); await sleep(4000); shownContext = true;
+      await wvScroll('activity');
+    });
+    await ensurePanel();
     await filesChanged(reviews);
     await steps.Bverify();
   },
   async Bresume() {
-    const reviews = { n: Number(process.env.REVIEWS_SO_FAR || 0) }; const t0 = now(); let quiet = 0;
-    // A review can hide the panel's tab behind the diff editor; bring it back between prompts.
-    const showPanel = async () => {
-      try {
-        if (await qiText()) return;
-        const tab = page.locator('.tab', { hasText: 'Forge Agent' }).first();
-        if (await tab.count()) {
-          await tab.hover({ timeout: 2000 }); await sleep(700); if (await qiText()) return;
-          await tab.click({ timeout: 2000 }); mark('panel_tab'); await sleep(800);
-        }
-      } catch { mark('panel_tab_skip'); }
-    };
-    while (true) {
-      if (now() - t0 > 900) throw Error('B took too long');
-      const t = await qiText();
-      if (await answer(t, reviews)) { await sleep(500); await showPanel(); wvWs = undefined; continue; }
-      let busy = null; try { busy = await wvDisabled('send'); } catch { wvWs = undefined; }
-      if (busy === false) { if (++quiet > 3) break; } else quiet = 0;
-      if (busy === null && !t) { await showPanel(); await sleep(1500); }
-      await sleep(250);
-    }
+    const reviews = { n: Number(process.env.REVIEWS_SO_FAR || 0) };
+    await followTurn(reviews);
+    await ensurePanel();
     await filesChanged(reviews);
   },
   async Bverify() {
     mark('verify_B');
-    await palette('View: Toggle Maximized Panel'); await sleep(800);
+    await setPanelMaximized(true);
     await term('clear && pytest tests/test_cli.py -q', 8000);
     await term('clear && cd examples/tutorial && flask --app flaskr --help', 5000);
     await term('clear && flask --app flaskr config', 6000);
     await term(`cd ${WORKSPACE} && clear`, 500);
-    await palette('View: Toggle Maximized Panel'); await sleep(800);
+    await setPanelMaximized(false);
+    wvWs = undefined; await ensurePanel(); // the panel's webview comes back as a new target after un-maximizing
     mark('trace_click_start');
     await wvScroll('trace', 'center'); await sleep(800);
     await wvClick('trace', 1200); mark('trace_clicked'); await sleep(1500);
@@ -308,7 +405,7 @@ const steps = {
     await term('git status --short', 3500);
     mark('seg_end', { seg: 'C', git: gitStatus() });
   },
-  async newconv() { await palette('Forge-a-thon: New Agent Conversation'); await sleep(800); await wv('d.scrollingElement.scrollTop=0'); await page.keyboard.press('Control+1'); },
+  async newconv() { await ensurePanel(); await palette('Forge-a-thon: New Agent Conversation'); await sleep(800); await wv('d.scrollingElement.scrollTop=0'); await page.keyboard.press('Control+1'); },
   /** Debug helper: what the quick input and the panel show right now. */
   async state() {
     console.log(JSON.stringify(await qiText()).slice(0, 200));

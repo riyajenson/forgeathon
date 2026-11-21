@@ -229,7 +229,7 @@ Left for P4 / later:
 - `run_command` can change files outside review; every run counts as a write (no retry/fallback after it)
   and its changed files are reported from `git status --porcelain` before/after.
 - Compaction events become status lines with tokens and duration; observed at runtime on harness/p14-trueforge-depth
-  (30k trigger, `docs/harness/REHEARSAL-P14.md`).
+  (40k trigger, `docs/harness/REHEARSAL-P14.md`).
 - Extension-host Node version under Remote-WSL is still unreported (`import()` needs Node ≥ 18).
 - `~/forge-dev` holds the scratch TrueForge database used by my integration runs; it can be deleted.
 

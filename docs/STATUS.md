@@ -94,7 +94,7 @@ per provider.
   relative paths (mock-tested only).
 - It split `cli.py` into 3 reviews and `test_cli.py` into 2 although the instructions say one call per file.
 - Token use comes from 49 steps that each resend the growing conversation (largest tool result 6.5k chars;
-  compaction at 60k tokens was not reached; see Phase 1 below for 30k).
+  compaction at 60k tokens was not reached; the finals branch compacts at 40k).
 - Tightening the verification instructions: done in the tuning round below.
 
 ## Guardrails round (2026-11-19, branches harness/p11-command-budget, docs/readme-final)
@@ -375,8 +375,8 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
   proposals despite its instructions. NVIDIA's free tier is ≈ 40 requests/min account-wide: Task B peaked well below that, but two Task B
   runs back to back could approach it (TrueForge resends a 429 up to 4 times, then the harness retries once, then
   falls back to OpenRouter, whose free tier allows 50 requests/day without credit).
-- Compaction (agent mode, 30k input tokens on harness/p14-trueforge-depth) fires once or twice in Task B, before the
-  first edit: the turn passes but slows to 254–337 s, first diff 129–150 s (`docs/harness/REHEARSAL-P14.md`).
+- Compaction (agent mode, 40k input tokens on harness/p14-trueforge-depth) fires once in Task B, after the first
+  edit. At 30k it fired before the first edit and doubled the turn time (`docs/harness/REHEARSAL-P14.md`).
 - A fallback starts a new TrueForge session (no earlier panel history).
 - `run_command` runs in bubblewrap (read-only checkout and host, private /tmp, no network, no keys) on top of
   approval, the ⚠ label and the budget; it needs Linux/WSL with bubblewrap (otherwise commands are refused). Reads are

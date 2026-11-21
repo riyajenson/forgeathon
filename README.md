@@ -83,11 +83,11 @@ How one turn runs:
    allow, TrueForge calls the MCP tool, which writes only the accepted hunks through the editor (hash-checked,
    saved) or runs the approved command once.
 5. **Streaming.** Text, tool calls, results, reviews and command requests stream into the panel. Stop cancels
-   the TrueForge turn and closes the approval gate. When an agent-mode request would exceed 30k input tokens,
+   the TrueForge turn and closes the approval gate. When an agent-mode request would exceed 40k input tokens,
    TrueForge compacts the conversation into a summary (`context_management.compaction` in
    `agent/forge-coder.json`; inline: 60k). The panel's status line shows "Compacting context: …" and "Context
-   compacted in … s", and the activity list keeps a "Context compaction" row. In Task B it fires once or twice
-   (`docs/harness/REHEARSAL-P14.md`).
+   compacted in … s", and the activity list keeps a "Context compaction" row. In Task B it fires once, after the
+   first edit (`docs/harness/REHEARSAL-P14.md`).
 6. **Recovery.** A model error before any write is retried once, and a 429 first waits for the provider's
    `Retry-After`. Otherwise the turn falls back to the `-fallback` agent on a different provider, which starts
    a **fresh TrueForge session** (it does not see earlier panel turns). There is **no retry or fallback after a

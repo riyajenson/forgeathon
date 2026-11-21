@@ -1,18 +1,18 @@
 ---
 pdf_options:
   format: A4
-  margin: 14mm 15mm
+  margin: 10mm 14mm
 stylesheet: writeup.css
 ---
 
 # Forge — a VS Code coding agent on TrueForge
 
-Repository: https://github.com/riyajenson/forgeathon · Video: `<PUBLIC VIDEO URL>` · Techfest Team ID: `<TEAM ID>`
+Repository: https://github.com/riyajenson/forgeathon · Video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing · Techfest Team ID: TM-C5CB9D87285
 
 ## 1. Team
 
-`<Name 1>` (role, `<affiliation>`, GitHub `<handle>`) · `<Name 2>` (role, `<affiliation>`, GitHub `<handle>`) ·
-`<Name 3>` (role, `<affiliation>`, GitHub `<handle>`)
+Riya Jenson (GitHub `riyajenson`, Vellore Institute of Technology, Vellore) · Shriya Prasad Sawant (GitHub `shriyapsawant21-wq`, Vellore Institute of Technology, Vellore) ·
+Akil Ansari (GitHub `dumbly-smart`, Vellore Institute of Technology, Vellore) · Divyam Agrawal (GitHub `divyamagrawal06`, Vellore Institute of Technology, Vellore)
 
 ## 2. Starting point
 
@@ -109,15 +109,15 @@ watchdog stops a turn that streams nothing for 45 s.
 
 | Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
 |---|---|---|
-| Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | `[mm:ss]` |
-| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests) | `[mm:ss]` |
-| Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | `[mm:ss]` |
-| Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | `[mm:ss]` |
-| Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | `[mm:ss]` |
-| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | `[mm:ss]` |
-| TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | `[mm:ss]` |
-| Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A `[mm:ss]` · B `[mm:ss]` · C `[mm:ss]` |
-| PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | `[mm:ss]` |
+| Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | 00:03 |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests) | 00:52 |
+| Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
+| Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
+| Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
+| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
+| TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | 03:05 |
+| Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
+| PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
@@ -128,6 +128,9 @@ measured scripted B runs (peaks 95–139 ms).
 
 - **TrueForge 0.185.1** (agent harness), **TrueForge SDK**, **MCP TypeScript SDK**, VS Code extension API,
   TypeScript, Node.js, Python/pytest, `@vscode/test-electron`.
+- **Demo video:** recorded by an automated UI script (Playwright over the Chrome DevTools Protocol) driving the
+  real extension in VS Code with real models (NVIDIA primary, OpenRouter fallback) and the local TrueForge 0.185.1;
+  no simulated output. Only model waiting time and operator holds were cut, each cut captioned on screen.
 - **AI coding assistants (declared as required):** **Claude** (Anthropic; Claude Code CLI and Claude chat) —
   TrueForge spike, harness architecture and implementation, context engine, tests, and, after the hand-over,
   the editor workstream, documentation and this write-up draft. **OpenAI Codex (via ChatGPT)** — the initial
@@ -152,4 +155,5 @@ folder; tested on WSL only.
 
 **With another month:** embeddings and language-server symbols for retrieval, evaluated across repositories and
 models; per-hunk CodeLens; conversation history across fallback; read confinement for
-`run_command`; cost-aware model routing; Marketplace packaging.
+`run_command`; cost-aware model routing; Marketplace packaging. A hybrid-efficiency branch (multi-select picker, optional semantic
+search) is in progress on feature/hybrid-efficiency-native; not part of this submission.

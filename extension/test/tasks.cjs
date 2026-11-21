@@ -64,10 +64,14 @@ exports.run = async () => {
     await ui.undo();
     assert.equal(await git(root, 'status', '--porcelain'), '', 'undo restores helpers.py');
     // The video's re-apply step: the editor's own Undo (Ctrl+Z) reverts the Forge undo, then Ctrl+S saves.
+    // 'undo' acts on the active editor, so wait until helpers.py is active before sending it, then wait for the
+    // buffer and, after saving, the file to hold Task A's edit again (one check right after the command raced it).
     await vscode.window.showTextDocument(doc);
+    await until(() => vscode.window.activeTextEditor?.document.uri.toString() === doc.uri.toString(), 'helpers.py is the active editor', 5000);
     await vscode.commands.executeCommand('undo');
+    await until(() => doc.getText() === afterA, 'Ctrl+Z after Forge undo re-applies the accepted change', 5000);
     await doc.save();
-    assert.equal(await fs.readFile(helpers.fsPath, 'utf8'), afterA, 'Ctrl+Z after Forge undo re-applies the accepted change');
+    await until(async () => (await fs.readFile(helpers.fsPath, 'utf8')) === afterA, 'the re-applied change is saved to disk', 5000);
     await git(root, 'checkout', '--', '.');
     console.log('PASS Task A: inline review, accept, saved, session link, context report, undo, re-apply with Ctrl+Z');
 

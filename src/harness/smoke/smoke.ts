@@ -58,6 +58,8 @@ interface TurnStats {
   /** The model's reply text. */
   text: string;
   fallback?: string;
+  /** Status lines with a detail (context compaction start and finish). */
+  statusLines?: string[];
   error?: string;
   usage?: { inputTokens: number; outputTokens: number };
   contextFiles: string[];
@@ -129,6 +131,9 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
       case 'command_budget_reached': stats.budgetReached++; console.log(`  [${task}] command ${e.command} → refused: command budget (${e.budget}) reached`); break;
       case 'text': stats.text = (stats.text + e.delta).slice(-4000); break;
       case 'edit_applied': stats.edits.push(`${e.result.path}: ${e.result.status}`); break;
+      case 'status':
+        if (e.detail) { (stats.statusLines ??= []).push(e.detail); console.log(`  [${task}] ${e.detail}`); }
+        break;
       case 'fallback': stats.fallback = `${e.fromModel} → ${e.toModel}: ${e.reason}`; console.log(`  [${task}] FALLBACK ${stats.fallback}`); break;
       case 'error': stats.error = e.error.message; break;
       case 'done':
@@ -297,6 +302,7 @@ async function main(): Promise<void> {
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);
     if (s.text.trim()) console.log(`   reply: ${s.text.trim().replace(/\s+/g, ' ').slice(-300)}`);
     if (s.fallback) console.log(`   fallback: ${s.fallback}`);
+    for (const line of s.statusLines ?? []) console.log(`   status: ${line}`);
     if (s.error) console.log(`   error: ${s.error}`);
     if (s.session) console.log(`   trace: ${s.session}`);
   }

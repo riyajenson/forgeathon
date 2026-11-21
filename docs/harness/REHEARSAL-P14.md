@@ -167,3 +167,45 @@ Recording settings: safe test commands auto-approved, Unrestricted denied, budge
   effectively two more compaction-40k runs. S2 ran its new test once, got a failure, tried `cd /workspace && pytest`
   twice (Unrestricted, denied), and ended claiming success.
 - **Compaction at 40k**: once per run, always after the first edit (4/4).
+
+### Phase 3 (2026-11-21): decisions on the phase 2 batch
+
+Protocol 0.4.6, commits ea8fa62..064042e. All 13 offline suites pass on 15e2557 (163 unit, 24 integration,
+e2e-mock 24/24 in both modes, UI suites, responsiveness ×3 and with a 200 ms stall).
+
+1. **Watchdog.** While a model request is in flight the silence limit is 120 s (`forge.watchdog.modelRequestSec`,
+   harness option `modelWatchdogMs`); 45 s stays for other waits. TrueForge emits a placeholder `model.message`
+   when a request starts and the complete one (finish reason, content, tool calls or usage) when it ends; the
+   request counts as in flight between the two. Tool-call argument deltas are streamed as events, so C1's 45 s gap
+   was real silence from the provider. A stop after writes now emits `resumable` (reason `stalled`, Resume after
+   5 s) instead of a dead end. Mock: unit tests and two integration scenarios (a slow generation within the limit
+   finishes; a stall after an edit is resumed in the same conversation).
+2. **Sub-agents: model limitation.** forge-coder was told "For tasks that touch several files, your FIRST action is
+   one read-only exploration subagent (create_sub_agent) …". Two real Task B runs (fresh TrueForge, `--subagents`,
+   meter at 20 requests/min or fewer, pre-flight HTTP 200 before each, 15 min apart):
+
+   | | S3 (20:48) | S4 (21:09) |
+   |---|---|---|
+   | Checks | 6/6 | 2/6 (stopped by 429s) |
+   | Sub-agent delegations | 0 | 0 |
+   | First tool calls | read_file, read_file, read_file | read_file, read_file, search_workspace |
+   | Model requests / 429s | 59 / 0 | 36 / 23 (NVIDIA 18 from request 7; OpenRouter fallback 5, `free-models-per-day`) |
+   | Peak requests in 60 s | 16 | 18 |
+   | Compactions | 1, request 27, after the first edit (38,189 → 778 in 14.0 s) | 0 |
+   | First diff | 107.9 s (request 20) | none |
+   | Turn time | 312.7 s | 133.8 s (error, resumable, 0 files changed) |
+   | Malformed / refused edits | 3 / 1 | 0 / 0 |
+   | Warnings (unrelated or destructive hunks) | 0 | 0 |
+   | Last test command (observed) | failed (2 failed); later edits fixed it, the check passed | not run |
+
+   The meter's new `--log-tools` shows `create_sub_agent` in the tool list of all 36 S4 requests. The model never
+   called it, and its first action in both runs was `read_file`. Combined with S1 and S2 (weaker wording): 0
+   delegations in 4 runs. The wording is reverted, sub-agents stay off by default (`--subagents` remains
+   available), and the WRITEUP lists this as a limitation. S4 met the stop rule (more than 3 × 429 in one run):
+   the batch ended there and no key was switched.
+3. **Destructive-hunk warning.** Hunks carry `deletes` (class or function, name, line count) when they remove a whole
+   Python definition whose name the replacement does not define again. The review prompt and hunk list name it,
+   the panel lists it under "Destructive hunks", and the smoke logs `WARNING accepted hunk deletes a whole …`.
+4. **Observed test status.** `done.tests` carries the outcome of the last test command, taken from its exit code and
+   pytest's summary line (passed, N failed, not run). The panel shows it next to the model's summary. The smoke
+   records `testClaimMismatch` when the reply's claim contradicts it.

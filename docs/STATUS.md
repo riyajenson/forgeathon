@@ -1,5 +1,11 @@
 # Project status
 
+**2026-11-21, phase 3 (`harness/p14-trueforge-depth`, protocol 0.4.6):** 120 s silence limit while a model
+request is in flight, Resume after a stall following writes, warnings for hunks that delete a whole class or function,
+and the observed test outcome next to the model's summary. All 13 offline suites pass. Sub-agents: 0 delegations in 2
+more real runs with a "delegate first" instruction (4 in all), so the wording is reverted and sub-agents stay off. The
+second run hit persistent 429s (NVIDIA, then OpenRouter's daily cap) and the batch stopped. See REHEARSAL-P14, phase 3.
+
 **2026-11-21, finals branch `harness/p14-trueforge-depth` (phase 2):** protocol 0.4.5 adds a separate test-command
 budget, Resume after a rate limit and sub-agent events (`setup-trueforge.mjs --subagents`, off by default). All 13
 offline suites pass on 9883169 (149 unit, 22 integration, e2e-mock 24/24 in both modes, UI suites). Real batch on a new

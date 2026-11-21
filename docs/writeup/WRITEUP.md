@@ -150,7 +150,8 @@ Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
 9–15 requests/min, Groq's free tier (7,000 tokens/min) cannot take B's ~11k-token requests, and the OpenRouter
 fallback allows 50 requests/day without credit (one B takes 40–70). Compaction fires once in Task B, after the first edit; the
-model then re-reads the ranges it still has to edit. One workspace
+model then re-reads the ranges it still has to edit. TrueForge's dynamic sub-agents work end to end on the mock, but
+Nemotron never delegated in 4 real runs, even when told to make one exploration sub-agent its first action, so they stay off. One workspace
 folder; tested on WSL only.
 
 **With another month:** embeddings and language-server symbols for retrieval, evaluated across repositories and

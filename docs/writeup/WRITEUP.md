@@ -35,9 +35,8 @@ compaction is on (60k input tokens); iteration limits 8 (inline) and 60 (agent).
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
 the prompt): a per-turn command budget (5 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached", except that an agent turn may rerun a test
-command that already ran, once, after a fix was accepted, so a failing test can always be fixed and checked;
-`cd <dir> && …` is refused with the corrected call, without using the budget), approved commands run in **bubblewrap** (read-only
+without prompting and the panel shows "command budget reached"; one rerun of a command after an accepted fix is
+always allowed, and `cd <dir> && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (read-only
 checkout and host, private `/tmp`, no network, no provider keys in its environment; refused if unavailable;
 it can still read files, see section 8), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
@@ -75,22 +74,18 @@ every tool call of the failed attempt has settled and no approved edit or comman
    functions and sections; anything that does not fit is listed as **skipped** with the reason.
 4. The **context report** (items, ranks, plain-English reasons, used/budget, skipped) is shown in the agent
    panel; the agent can ask for more with `gather_context`.
-5. **Optional semantic reranking** (`forge.context.semanticSearch`, off by default): when keyword evidence is
-   weak, a pinned MiniLM model reranks candidates locally on the CPU, in a worker thread. Its runtime is an
-   opt-in install (`scripts/enable-semantic-search.sh`, about 230 MB, CPU only); a default install does not
-   include it. Without the runtime, ranking stays lexical and the Context block says so.
+5. **Optional semantic reranking** (`forge.context.semanticSearch`, off): a pinned MiniLM model reranks weak
+   keyword matches on the CPU in a worker thread. Its runtime is an opt-in install
+   (`scripts/enable-semantic-search.sh`, ~230 MB); without it the Context block says ranking stayed lexical.
 6. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
    `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
    files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; binary files are
    refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name.
 
-The workspace is indexed in the background when the harness starts, in time slices, so the first turn starts
-from a warm cache. Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s cold): for Task B, `src/flask/cli.py` ranks first and the
+The workspace is indexed in the background at start-up. Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s cold): for Task B, `src/flask/cli.py` ranks first and the
 packed context (7,456 of 8,000 tokens, 28 items, 7 skipped) includes `tests/test_cli.py` and `docs/cli.rst`.
-Four unrelated Flask tasks also rank their source file first (regression test in the repo). On the 11 available
-retrieval-benchmark tasks, semantic reranking raised relevant-file density by 15% and reciprocal rank by 11%,
-lowered recall@5 by 2%, and raised the median context-assembly time from about 2 ms to 352 ms, so it stays off
-by default.
+Four unrelated Flask tasks also rank their source file first (regression test in the repo). On 11 benchmark tasks,
+semantic reranking gave +15% relevant-file density, +11% MRR, −2% recall@5, at 352 ms vs 2 ms median: off by default.
 
 ## 5. Model setup
 
@@ -129,14 +124,14 @@ watchdog stops a turn that streams nothing for 45 s.
 | Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
 | PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
-Video timestamps refer to the round-1 video. That video shows the round-1 review prompt (Accept All / Reject All /
-Choose Hunks…). The finals build reviews with the multi-select hunk picker (✓ accept all and ✕ reject all in its
-title bar, every hunk checked, Enter submits), so the video will be re-recorded with `scripts/demo-recording/`.
+Timestamps refer to the round-1 video (Accept All / Reject All / Choose Hunks… prompt); the finals build's
+multi-select hunk picker (✓ / ✕ in its title bar) will be re-recorded with `scripts/demo-recording/`.
 
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
-VS Code), 134 unit and 19 integration tests against TrueForge 0.185.1; no extension-host block over 150 ms in
-measured scripted B runs (peaks 95–139 ms).
+VS Code), 158 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
+renders ≤ 100 ms) passed 3/3 suite runs (peaks 45–53 ms) and fails an injected 200 ms stall; one earlier run had
+an unexplained 605 ms block in VS Code's `postMessage`.
 
 ## 7. Tools used
 
@@ -158,8 +153,7 @@ measured scripted B runs (peaks 95–139 ms).
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
 instructions, hence the harness command budget (5 per turn, plus one rerun after a fix); each step resends the whole conversation. Retrieval is
-lexical by default: the optional semantic reranking is about 178× slower per context assembly and missed its 2×
-efficiency target. The symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
+lexical by default (semantic reranking is ~178× slower). The symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at

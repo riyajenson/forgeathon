@@ -18,6 +18,12 @@ const path = require('node:path');
     ? process.env.FORGE_TEST_GPU === '1'
     : path.basename(test) === 'responsiveness.cjs';
   const gpuArgs = gpuEnabled ? [] : ['--disable-gpu'];
+  // The responsiveness benchmark gates on requestAnimationFrame timing. Chromium slows rAF to ~1 Hz in windows it
+  // considers hidden or occluded (another window on top, a locked screen); that is not a stall in Forge, so turn
+  // the throttling off for that test: a slow frame then means the webview or the extension host really stalled.
+  const frameArgs = path.basename(test) === 'responsiveness.cjs'
+    ? ['--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--disable-background-timer-throttling']
+    : [];
   // TRUEFORGE_URL: point the extension at that TrueForge (e.g. the scripted one on another port) instead of
   // the default http://127.0.0.1:8790, which may be a real-model TrueForge.
   if (process.env.TRUEFORGE_URL) {
@@ -37,7 +43,7 @@ const path = require('node:path');
       extensionTestsPath: test,
       extensionTestsEnv: { ...process.env },
       // FORGE_TEST_CDP_PROFILE (live.cjs): that profile directory, with a DevTools port so the test can drive native UI.
-      launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', ...gpuArgs,
+      launchArgs: [workspace, '--disable-extensions', '--disable-workspace-trust', '--skip-welcome', ...gpuArgs, ...frameArgs,
         ...(process.env.FORGE_TEST_CDP_PROFILE ? ['--remote-debugging-port=0'] : []),
         '--user-data-dir', profile],
     });

@@ -509,6 +509,17 @@ test('hybrid context keeps explicit references first and stays within its token 
   assert.ok(result.report.estimatedTokens <= result.report.budgetTokens);
 });
 
+test('concurrent index builds on one port run one after the other and agree', async () => {
+  const order: string[] = [];
+  const first = buildIndex(port).then((i) => { order.push('first'); return i; });
+  const second = buildIndex(port).then((i) => { order.push('second'); return i; });
+  const [a, b] = await Promise.all([first, second]);
+  assert.deepEqual(order, ['first', 'second'], 'the second build waited for the one in progress');
+  assert.deepEqual([...b.files.keys()], [...a.files.keys()]);
+  assert.equal(b.chunks.length, a.chunks.length);
+  assert.ok(b.chunks.every((c, i) => c.tf === a.chunks[i]!.tf), 'the second build reused the first one\'s analyses');
+});
+
 test('semantic search on without its runtime: lexical ranking, and the context report says why', async () => {
   const engine = require('./engine') as HybridEngineApi;
   const { SEMANTIC_RUNTIME_MISSING } = require('./semantic-runtime') as typeof import('./semantic-runtime');

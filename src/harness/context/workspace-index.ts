@@ -97,7 +97,21 @@ function slicer() {
 /** Origin's name for the inventory limit; the shared listing limit (LIST_LIMIT, 20000) applies. */
 export const INDEX_FILE_LIMIT = LIST_LIMIT;
 
+/** The index build in progress per port: a second caller waits for it and then reuses its analyses. */
+const building = new WeakMap<EditorPort, Promise<unknown>>();
+
 export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
+  const previous = building.get(port);
+  const current = (async () => {
+    if (previous) await previous.catch(() => undefined);
+    return buildIndexNow(port);
+  })();
+  building.set(port, current);
+  try { return await current; }
+  finally { if (building.get(port) === current) building.delete(port); }
+}
+
+async function buildIndexNow(port: EditorPort): Promise<WorkspaceIndex> {
   const visible = await visibleFiles(port);
   const skipped: Array<{ path: string; reason: string }> = [];
   if (visible.truncated) skipped.push({ path: '.', reason: `workspace listing stopped at ${LIST_LIMIT} files; retrieval coverage may be incomplete (files after that were not considered)` });
@@ -124,14 +138,20 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
     const mod = moduleName(p);
     let analysis = cache.get(p);
     if (analysis?.sha256 !== snap.sha256) {
+      // One large file (thousands of lines) takes tens of ms to tokenize: yield between its chunks as well.
+      const raw = chunkFile(p, snap.text);
+      await yieldNow();
+      const analysed: FileAnalysis['chunks'] = [];
+      for (const c of raw) {
+        const tokens = terms(`${c.text}`);
+        analysed.push({ ...c, tf: countTerms(tokens), length: tokens.length, nameParts: c.name ? splitIdentifier(c.name).map(normalise) : [] });
+        await yieldNow();
+      }
       analysis = {
         sha256: snap.sha256,
         semanticVectors: new Map(),
         pathTerms: new Set(p.split('/').flatMap((seg) => splitIdentifier(seg.replace(/\.[^.]+$/, '')).map(normalise))),
-        chunks: chunkFile(p, snap.text).map((c) => {
-          const tokens = terms(`${c.text}`);
-          return { ...c, tf: countTerms(tokens), length: tokens.length, nameParts: c.name ? splitIdentifier(c.name).map(normalise) : [] };
-        }),
+        chunks: analysed,
       };
       cache.set(p, analysis);
     }

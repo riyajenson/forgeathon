@@ -24,6 +24,7 @@ import { repoRoot } from '../repo-root';
 import { runSetup, type AgentTemplate, type ModelsConfig } from '../setup/setup';
 import { createClient } from '../trueforge/sdk';
 import { meterRecordsSince, requestStats, type RequestStats } from '../meter/meter';
+import { editFailureKind, TASK_TERMS, unrelatedHunk } from './edit-audit';
 
 const run = promisify(execFile);
 export const TASK_A = "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.";
@@ -60,6 +61,15 @@ interface TurnStats {
   fallback?: string;
   /** Status lines with a detail (context compaction start and finish). */
   statusLines?: string[];
+  /** Each context compaction: the model request that made the summary (from the meter log) and whether a diff had appeared. */
+  compactions: { request?: number; afterToolCalls: number; beforeFirstEdit: boolean; detail: string }[];
+  /** Model request that produced the first diff (from the meter log). */
+  firstDiffRequest?: number;
+  /** propose_edit calls that failed: malformed arguments (never reviewed) versus well-formed edits that were refused. */
+  malformedEdits: number;
+  refusedEdits: number;
+  /** Accepted hunks whose added lines look unrelated to the task (reported only; the smoke still accepts them). */
+  warnings: string[];
   error?: string;
   usage?: { inputTokens: number; outputTokens: number };
   contextFiles: string[];
@@ -92,7 +102,11 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [] };
+  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [], compactions: [], malformedEdits: 0, refusedEdits: 0, warnings: [] };
+  const toolNames = new Map<string, string>();
+  const proposals = new Map<string, { path: string; summary: string; hunks: readonly { hunkId: string; oldText: string; newText: string }[] }>();
+  const compactionTimes: number[] = [];
+  let firstDiffAt: number | undefined;
   for await (const r of h.stream(req({ sessionId, turnId, afterSequence: 0 }))) {
     if (!r.ok) { stats.error = r.error.message; break; }
     const e: HarnessEvent = r.body;
@@ -105,13 +119,21 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
       case 'tool_call':
         stats.toolCalls++;
         stats.toolsByName[e.displayName] = (stats.toolsByName[e.displayName] ?? 0) + 1;
+        toolNames.set(e.callId, e.displayName);
         console.log(`  [${task}] tool ${e.displayName} ${e.summary}`);
         break;
-      case 'tool_result': if (!e.ok) console.log(`  [${task}]   failed: ${e.summary}`); break;
+      case 'tool_result':
+        if (!e.ok) {
+          console.log(`  [${task}]   failed: ${e.summary}`);
+          if (toolNames.get(e.callId) === 'propose_edit') stats[editFailureKind(e.summary) === 'malformed' ? 'malformedEdits' : 'refusedEdits']++;
+        }
+        break;
       case 'review_request': {
         const p = e.proposal;
         stats.reviews++;
         stats.firstDiffMs ??= Date.now() - t0;
+        firstDiffAt ??= Date.now();
+        if (decide === 'accept') proposals.set(p.proposalId, p);
         stats.reviewsByFile[p.path] = (stats.reviewsByFile[p.path] ?? 0) + 1;
         console.log(`  [${task}] review ${p.path}: ${p.hunks.length} hunk(s) → ${decide} all`);
         const d = await h.submitReview(req({ sessionId, turnId, callId: p.callId, kind: 'edit' as const, proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((x) => [x.hunkId, decide])) }));
@@ -130,9 +152,22 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
       }
       case 'command_budget_reached': stats.budgetReached++; console.log(`  [${task}] command ${e.command} → refused: command budget (${e.budget}) reached`); break;
       case 'text': stats.text = (stats.text + e.delta).slice(-4000); break;
-      case 'edit_applied': stats.edits.push(`${e.result.path}: ${e.result.status}`); break;
+      case 'edit_applied': {
+        stats.edits.push(`${e.result.path}: ${e.result.status}`);
+        const p = proposals.get(e.result.proposalId);
+        const applied = 'appliedHunkIds' in e.result ? e.result.appliedHunkIds : [];
+        for (const hunk of p?.hunks.filter((x) => applied.includes(x.hunkId)) ?? []) {
+          const why = unrelatedHunk(hunk, p!.summary, TASK_TERMS[task]);
+          if (why) { stats.warnings.push(`${p!.path} ("${p!.summary}"): ${why}`); console.log(`  [${task}] WARNING accepted hunk unrelated to the task: ${p!.path}: ${why}`); }
+        }
+        break;
+      }
       case 'status':
         if (e.detail) { (stats.statusLines ??= []).push(e.detail); console.log(`  [${task}] ${e.detail}`); }
+        if (e.state === 'compacting') {
+          compactionTimes.push(Date.now());
+          stats.compactions.push({ afterToolCalls: stats.toolCalls, beforeFirstEdit: stats.reviews === 0, detail: e.detail ?? '' });
+        }
         break;
       case 'fallback': stats.fallback = `${e.fromModel} → ${e.toModel}: ${e.reason}`; console.log(`  [${task}] FALLBACK ${stats.fallback}`); break;
       case 'error': stats.error = e.error.message; break;
@@ -145,7 +180,13 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   stats.seconds = Math.round((Date.now() - t0) / 100) / 10;
   if (meterLog) {
     await new Promise((r) => setTimeout(r, 200)); // the meter writes its record when the upstream response ends
-    stats.requests = requestStats((await meterRecordsSince(meterLog, meterStart)).records);
+    const { records } = await meterRecordsSince(meterLog, meterStart);
+    stats.requests = requestStats(records);
+    // The meter stamps a request when it starts: the summary request is the first one at or after the compaction event.
+    const requestAt = (ms: number) => { const i = records.findIndex((r) => Date.parse(r.ts) >= ms - 1000); return i < 0 ? undefined : i + 1; };
+    stats.compactions.forEach((c, i) => { const n = requestAt(compactionTimes[i]!); if (n !== undefined) c.request = n; });
+    // The diff appears after the request that proposed it, so that request started before the diff.
+    if (firstDiffAt !== undefined) { const n = records.filter((r) => Date.parse(r.ts) <= firstDiffAt!).length; if (n > 0) stats.firstDiffRequest = n; }
   }
   return stats;
 }
@@ -303,6 +344,10 @@ async function main(): Promise<void> {
     if (s.text.trim()) console.log(`   reply: ${s.text.trim().replace(/\s+/g, ' ').slice(-300)}`);
     if (s.fallback) console.log(`   fallback: ${s.fallback}`);
     for (const line of s.statusLines ?? []) console.log(`   status: ${line}`);
+    for (const c of s.compactions) console.log(`   compaction at request ${c.request ?? '?'} after ${c.afterToolCalls} tool calls, ${c.beforeFirstEdit ? 'BEFORE' : 'after'} the first edit`);
+    if (s.firstDiffRequest !== undefined) console.log(`   first diff from request ${s.firstDiffRequest}`);
+    console.log(`   propose_edit failures: ${s.malformedEdits} malformed, ${s.refusedEdits} refused; warnings: ${s.warnings.length}`);
+    for (const w of s.warnings) console.log(`   WARNING ${w}`);
     if (s.error) console.log(`   error: ${s.error}`);
     if (s.session) console.log(`   trace: ${s.session}`);
   }

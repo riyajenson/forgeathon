@@ -13,7 +13,7 @@ import { proposeEditTool } from '../mcp/tools';
 import { runCommandTool } from '../mcp/command';
 import { sha256Hex } from '../review';
 import type { TrueForgeClient, TrueForgeSdk } from '../trueforge/sdk';
-import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, RESUME_WAIT_MS, TEST_BUDGET_EXHAUSTED, testCommandBudgetOf, TurnRun, type TurnDeps } from './turn';
+import { COMMAND_BUDGET_EXHAUSTED, commandBudgetOf, PROPOSE_EDIT_SHAPE_HINT, RESUME_AFTER_STALL_MS, RESUME_WAIT_MS, resumeNote, TEST_BUDGET_EXHAUSTED, testCommandBudgetOf, TurnRun, type TurnDeps } from './turn';
 
 /** An async event stream the test feeds by hand. Aborting the request signal ends it with an error. */
 class Channel implements AsyncIterable<unknown> {
@@ -558,7 +558,7 @@ test('resume: a rate limit after an applied edit emits resumable (changed files,
   assert.deepEqual([r.reason, r.changedFiles], ['rate_limited', [FILE]]);
   assert.ok(r.retryAfterMs >= RESUME_WAIT_MS);
   assert.equal(lastError(run)!.error.workspaceEffect, 'changed');
-  assert.deepEqual(run.resumable, { turnId: run.req.turnId, changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 });
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'rate_limited', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 });
   run.markResumed('t-next');
   assert.equal(run.resumable, undefined, 'a turn is resumed once');
 });
@@ -592,7 +592,108 @@ test('resume: a resumed turn that is rate limited again lists the files of both 
   await run.start();
   const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
   assert.deepEqual(r.changedFiles, ['docs/x.rst', FILE]);
-  assert.deepEqual(run.resumable, { turnId: run.req.turnId, changedFiles: ['docs/x.rst', FILE], commandsUsed: 1, testsUsed: 2 });
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'rate_limited', changedFiles: ['docs/x.rst', FILE], commandsUsed: 1, testsUsed: 2 });
+});
+
+test('watchdog: while a model request is in flight the longer limit applies; between steps the general one', async () => {
+  // Model request in flight from turn.created: silent for 250 ms, then a reply. General limit 100 ms, model limit 1000 ms.
+  const slowModel = new FakeTrueForge({
+    // TrueForge's placeholder model.message at the request start does not end the request.
+    onTurn: (ch) => { ch.push(ev('turn.created', { turnId: 'rt-1' }), ev('model.message', { model: 'm' })); setTimeout(() => ch.push(ev('model.message', { content: 'done' }), done('done')), 250); },
+  });
+  const ok = makeRun(slowModel, { watchdogMs: 100, modelWatchdogMs: 1000 });
+  await ok.start();
+  assert.equal(slowModel.cancels, 0, 'a slow generation is not a stall');
+  assert.equal(terminal(ok)[0]!.t === 'done' && terminal(ok)[0]!.status, 'done');
+
+  // After a complete model.message TrueForge is between steps: the general limit applies again.
+  const silentAfter = new FakeTrueForge({
+    onTurn: (ch, k) => ch.push(ev('turn.created', { turnId: `rt-${k}` }), ev('model.message', { content: 'thinking' })),
+  });
+  const stalled = makeRun(silentAfter, { watchdogMs: 100, modelWatchdogMs: 5000 });
+  const t0 = Date.now();
+  await stalled.start();
+  assert.ok(Date.now() - t0 < 3000, 'the 100 ms limit fired, not the 5 s one');
+  assert.ok(silentAfter.cancels >= 1);
+  assert.match(lastError(stalled)!.error.message, /no response from the model for 0 s/);
+
+  // A model request that stays silent past the model limit is a stall, and the message names that limit.
+  const silentModel = new FakeTrueForge({ onTurn: (ch, k) => ch.push(ev('turn.created', { turnId: `rt-${k}` })) });
+  const run = makeRun(silentModel, { watchdogMs: 50, modelWatchdogMs: 1000 });
+  await run.start();
+  assert.match(lastError(run)!.error.message, /no response from the model for 1 s/);
+});
+
+test('watchdog after an applied edit: the turn is resumable (reason stalled) instead of a dead end', async () => {
+  const tf = new FakeTrueForge({
+    onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'propose_edit', editArgs())),
+    // The edit is applied, then TrueForge goes silent (the model is generating a long reply).
+    onApproval: (sub, sessionId) => { void proposeEditTool({ port, scope: scopeOf(sessionId) }, editArgs()).then(() => sub.push(ev('tool.response', { toolCallId: 'c1', content: 'applied' }))); },
+  });
+  const run = makeRun(tf, { watchdogMs: 50, modelWatchdogMs: 200 });
+  void clickThrough(run);
+  await run.start();
+  assert.equal(tf.turns, 1, 'no retry or fallback after a write');
+  const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
+  assert.deepEqual([r.reason, r.changedFiles, r.retryAfterMs], ['stalled', [FILE], RESUME_AFTER_STALL_MS]);
+  assert.match(lastError(run)!.error.message, /no response from the model for 0 s|no response from the model/);
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'stalled', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 });
+
+  const resumed = makeRun(new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-9' }), done('done')) }), { resumeFrom: run.resumable });
+  await resumed.start();
+  assert.ok(events(resumed).some((e) => e.t === 'status' && /^Resuming the turn that stopped responding \(1 file already changed\)/.test(e.detail ?? '')));
+});
+
+test('a watchdog stop before any write is not resumable (retry and fallback handle it)', async () => {
+  const tf = new FakeTrueForge({ onTurn: (ch, k) => ch.push(ev('turn.created', { turnId: `rt-${k}` })), onCancel: () => new Promise(() => undefined) });
+  const run = makeRun(tf, { watchdogMs: 50, modelWatchdogMs: 50 });
+  await run.start();
+  assert.equal(events(run).some((e) => e.t === 'resumable'), false);
+});
+
+test('resume note after a stall says the model stopped responding', () => {
+  assert.match(resumeNote({ changedFiles: [FILE], reason: 'stalled' }), /^Resumed turn: your previous turn on this task stopped early because the model stopped responding/);
+});
+
+test('done.tests reports the observed outcome of the last test command, whatever the model says', { skip: process.platform === 'win32' && 'needs a shell' }, async () => {
+  // A fake "pytest" on PATH prints a pytest summary and exits 1.
+  const bin = path.join(root, 'bin');
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(bin, 'pytest'), '#!/bin/sh\necho "F.."\necho "1 failed, 2 passed in 0.03s"\nexit 1\n', { mode: 0o755 });
+  const oldPath = process.env['PATH'];
+  process.env['PATH'] = `${bin}:${oldPath}`;
+  try {
+    const cmd = { command: 'pytest tests' };
+    const tf = new FakeTrueForge({
+      onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'run_command', cmd)),
+      onApproval: (sub, sessionId) => { void runCommandTool({ port, scope: scopeOf(sessionId) }, cmd).then(() => sub.push(ev('model.message', { content: 'All tests pass.' }), done('done'))); },
+    });
+    const run = makeRun(tf);
+    void clickThrough(run);
+    await run.start();
+    const d = terminal(run)[0] as Extract<HarnessEvent, { t: 'done' }>;
+    assert.equal(d.status, 'done');
+    assert.deepEqual(d.tests, { status: 'failed', command: 'pytest tests', exitCode: 1, passed: 2, failed: 1, summary: '1 failed, 2 passed in 0.03s' });
+  } finally { process.env['PATH'] = oldPath; }
+
+  const none = makeRun(new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-1' }), done('done')) }));
+  await none.start();
+  assert.deepEqual((terminal(none)[0] as Extract<HarnessEvent, { t: 'done' }>).tests, { status: 'not_run' });
+  const inline = makeRun(new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-1' }), done('done')) }), {}, { mode: 'inline' });
+  await inline.start();
+  assert.equal((terminal(inline)[0] as Extract<HarnessEvent, { t: 'done' }>).tests, undefined, 'inline turns carry no test outcome');
+});
+
+test('review requests flag hunks that delete a whole function', async () => {
+  const args = { path: FILE, base_sha256: sha256Hex(ORIGINAL), edits: [{ old_text: 'def alpha():\n    return 1\n', new_text: '' }] };
+  const tf = new FakeTrueForge({ onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'propose_edit', args)), onApproval: (sub, sessionId) => {
+    void proposeEditTool({ port, scope: scopeOf(sessionId) }, args).then(() => sub.push(done('done')));
+  } });
+  const run = makeRun(tf);
+  void clickThrough(run);
+  await run.start();
+  const req = events(run).find((e) => e.t === 'review_request') as Extract<HarnessEvent, { t: 'review_request' }>;
+  assert.deepEqual(req.proposal.hunks[0]!.deletes, [{ kind: 'function', name: 'alpha', lines: 2 }]);
 });
 
 test('sub-agents: delegation becomes subagent events and status lines; its edit is reviewed and approved on its own thread; its text is not the reply', async () => {

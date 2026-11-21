@@ -22,8 +22,12 @@ export interface HarnessOptions {
   agents?: { inline?: string; agent?: string };
   /** How long cancel waits for TrueForge to confirm. Default 5000 ms. */
   cancelTimeoutMs?: number;
-  /** No TrueForge events for this long while running → cancel and treat as model unavailable. Default 45000 ms. */
+  /** No TrueForge events for this long while running → cancel and treat as model unavailable. Default 45000 ms.
+   *  Applies outside model requests; see modelWatchdogMs. */
   watchdogMs?: number;
+  /** The same limit while a model request is in flight: a long generation (a large edit) can stream nothing for a
+   *  while. Default 120000 ms (setting forge.watchdog.modelRequestSec). */
+  modelWatchdogMs?: number;
   /** How long a finished attempt waits for its tool calls to settle before deciding on retry/fallback. Default 10000 ms. */
   settleMs?: number;
   /** Delay before the single retry of an unavailable model. Default 2000 ms. */
@@ -164,7 +168,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       if (!prior) return refuse(req, err('invalid', 'resumeOf names no turn of this session'));
       if (prior.req.mode !== b.mode) return refuse(req, err('invalid', 'a resumed turn must use the mode of the turn it resumes'));
       resumeFrom = prior.resumable;
-      if (!resumeFrom) return refuse(req, err('conflict', 'that turn cannot be resumed: it did not stop on a rate limit, or it was already resumed'));
+      if (!resumeFrom) return refuse(req, err('conflict', 'that turn cannot be resumed: it did not stop on a rate limit or a stall, or it was already resumed'));
       prior.markResumed(b.turnId);
     }
 
@@ -188,6 +192,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       agentModel: (agent) => this.modelOf(agent),
       cancelTimeoutMs: this.options.cancelTimeoutMs ?? 5000,
       watchdogMs: this.options.watchdogMs ?? 45000,
+      modelWatchdogMs: this.options.modelWatchdogMs ?? 120000,
       contextBudgetTokens: this.options.contextBudgetTokens ?? 8000,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: this.options.settleMs ?? 10000,

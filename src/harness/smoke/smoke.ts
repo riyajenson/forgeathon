@@ -30,7 +30,7 @@ import { repoRoot } from '../repo-root';
 import { runSetup, type AgentTemplate, type ModelsConfig } from '../setup/setup';
 import { createClient } from '../trueforge/sdk';
 import { meterRecordsSince, requestStats, type RequestStats } from '../meter/meter';
-import { editFailureKind, TASK_TERMS, unrelatedHunk } from './edit-audit';
+import { editFailureKind, TASK_TERMS, testClaimMismatch, unrelatedHunk } from './edit-audit';
 
 const run = promisify(execFile);
 export const TASK_A = "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.";
@@ -69,7 +69,7 @@ interface TurnStats {
   /** Sub-agents TrueForge started (dynamic sub-agents), with how each ended. */
   subagents: Array<{ name: string; task?: string; ok?: boolean; error?: string }>;
   /** Set when the turn stopped on a rate limit (resumable event). */
-  resumable?: { retryAfterMs: number; changedFiles: string[] };
+  resumable?: { reason: 'rate_limited' | 'stalled'; retryAfterMs: number; changedFiles: string[] };
   /** The resumed turn (--resume-after-rate-limit, Task R). */
   resumed?: TurnStats;
   sessionId?: string;
@@ -90,6 +90,11 @@ interface TurnStats {
   refusedEdits: number;
   /** Accepted hunks whose added lines look unrelated to the task (reported only; the smoke still accepts them). */
   warnings: string[];
+  /** Accepted hunks that delete a whole class or function (also listed in warnings). */
+  destructiveHunks: string[];
+  /** The observed outcome of the last test command (done.tests) and any contradiction in the model's reply. */
+  tests?: { status: 'passed' | 'failed' | 'not_run'; command?: string; summary?: string };
+  testClaimMismatch?: string;
   error?: string;
   usage?: { inputTokens: number; outputTokens: number };
   contextFiles: string[];
@@ -125,9 +130,9 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, testBudgetReached: 0, subagents: [], runtimeSessions: [], sessionId, turnId, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [], compactions: [], malformedEdits: 0, refusedEdits: 0, warnings: [] };
+  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, testBudgetReached: 0, subagents: [], runtimeSessions: [], sessionId, turnId, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [], compactions: [], malformedEdits: 0, refusedEdits: 0, warnings: [], destructiveHunks: [] };
   const toolNames = new Map<string, string>();
-  const proposals = new Map<string, { path: string; summary: string; hunks: readonly { hunkId: string; oldText: string; newText: string }[] }>();
+  const proposals = new Map<string, { path: string; summary: string; hunks: readonly { hunkId: string; oldText: string; newText: string; deletes?: readonly { kind: string; name: string; lines: number }[] }[] }>();
   const compactionTimes: number[] = [];
   let firstDiffAt: number | undefined;
   for await (const r of h.stream(req({ sessionId, turnId, afterSequence: 0 }))) {
@@ -184,7 +189,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
           if (sa) { sa.ok = e.ok === true; if (e.error) sa.error = e.error; }
         }
         break;
-      case 'resumable': stats.resumable = { retryAfterMs: e.retryAfterMs, changedFiles: e.changedFiles }; console.log(`  [${task}] RESUMABLE (rate limited; ${e.changedFiles.length} file(s) changed)`); break;
+      case 'resumable': stats.resumable = { reason: e.reason, retryAfterMs: e.retryAfterMs, changedFiles: e.changedFiles }; console.log(`  [${task}] RESUMABLE (${e.reason === 'stalled' ? 'model stopped responding' : 'rate limited'}; ${e.changedFiles.length} file(s) changed)`); break;
       case 'text': stats.text = (stats.text + e.delta).slice(-4000); break;
       case 'edit_applied': {
         stats.edits.push(`${e.result.path}: ${e.result.status}`);
@@ -193,6 +198,11 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
         for (const hunk of p?.hunks.filter((x) => applied.includes(x.hunkId)) ?? []) {
           const why = unrelatedHunk(hunk, p!.summary, TASK_TERMS[task]);
           if (why) { stats.warnings.push(`${p!.path} ("${p!.summary}"): ${why}`); console.log(`  [${task}] WARNING accepted hunk unrelated to the task: ${p!.path}: ${why}`); }
+          for (const d of hunk.deletes ?? []) {
+            const what = `${p!.path}: deletes ${d.kind} ${d.name} (${d.lines} lines)`;
+            stats.destructiveHunks.push(what); stats.warnings.push(`destructive hunk: ${what}`);
+            console.log(`  [${task}] WARNING accepted hunk deletes a whole ${d.kind}: ${what}`);
+          }
         }
         break;
       }
@@ -208,6 +218,11 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
       case 'done':
         stats.status = e.status;
         if (e.usage) stats.usage = e.usage;
+        if (e.tests) {
+          stats.tests = { status: e.tests.status, ...(e.tests.command ? { command: e.tests.command } : {}), ...(e.tests.summary ? { summary: e.tests.summary } : {}) };
+          const mismatch = testClaimMismatch(stats.text, e.tests);
+          if (mismatch) { stats.testClaimMismatch = mismatch; console.log(`  [${task}] WARNING test claim mismatch: ${mismatch}`); }
+        }
         break;
     }
   }
@@ -409,7 +424,8 @@ async function main(): Promise<void> {
     if (s.firstDiffRequest !== undefined) console.log(`   first diff from request ${s.firstDiffRequest}`);
     console.log(`   propose_edit failures: ${s.malformedEdits} malformed, ${s.refusedEdits} refused; warnings: ${s.warnings.length}`);
     console.log(`   test runs refused by the test-command budget: ${s.testBudgetReached}; sub-agent delegations: ${s.subagents.length}${s.subagents.length ? ` ${JSON.stringify(s.subagents.map((x) => ({ name: x.name, ok: x.ok, task: x.task?.slice(0, 120) })))}` : ''}`);
-    if (s.resumable) console.log(`   stopped on a rate limit: resumable (${s.resumable.changedFiles.join(', ') || 'no files changed'})`);
+    if (s.resumable) console.log(`   stopped (${s.resumable.reason === 'stalled' ? 'model stopped responding' : 'rate limit'}): resumable (${s.resumable.changedFiles.join(', ') || 'no files changed'})`);
+    if (s.tests) console.log(`   last test command: ${s.tests.status}${s.tests.summary ? ` (${s.tests.summary})` : ''}${s.testClaimMismatch ? `; MISMATCH: ${s.testClaimMismatch}` : '; matches the reply'}`);
     for (const w of s.warnings) console.log(`   WARNING ${w}`);
     if (s.error) console.log(`   error: ${s.error}`);
     if (s.session) console.log(`   trace: ${s.session}`);

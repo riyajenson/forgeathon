@@ -219,7 +219,7 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs, run
     // Backstop: the checkout is mounted read-only, but anything that still changed is reported.
     const after = await runtime.snapshot(root);
     const changedFiles = before && after ? diffSnapshots(before, after) : [];
-    scope.onCommand?.({ callRef: approval.callRef, command: args.command, exitCode, changedFiles });
+    scope.onCommand?.({ callRef: approval.callRef, command: args.command, exitCode, changedFiles, output: `${stdout.slice(-6000)}\n${stderr.slice(-2000)}` });
 
     const killed = controller.signal.aborted ? ' (killed: turn cancelled)' : timedOut ? ` (killed: exceeded ${timeoutSec} s)` : '';
     const changes = before && after

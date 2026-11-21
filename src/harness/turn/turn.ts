@@ -1,11 +1,12 @@
 // One application turn: runs TrueForge attempts, the review/command approval flow, retry and fallback,
 // and translates everything into the shared HarnessEvent stream.
-import type { CancelStatus, EditProposal, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
+import type { CancelStatus, EditProposal, EventBody, ProtocolError, ReviewDecision, TurnRequest } from '../contract-types';
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
 import { isAutoApprovableCommand, isListedCommand, isTestCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
-import { canonicalArgsKey } from '../review';
+import { canonicalArgsKey, deletedDefinitions } from '../review';
+import { testOutcome, type TestOutcome } from './test-outcome';
 import { Attempt, type AttemptResult, type CallDecision, type PendingCall } from '../trueforge/attempt';
 import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, redactSecrets, retryDelayMs, safeMessage } from '../trueforge/errors';
 import { appendTurnLog, type AttemptRecord } from './turn-log';
@@ -29,6 +30,8 @@ export interface TurnDeps {
   agentModel(agentName: string): Promise<string>;
   cancelTimeoutMs: number;
   watchdogMs: number;
+  /** Silence limit while a model request is in flight (default 120 s in the harness). */
+  modelWatchdogMs?: number;
   contextBudgetTokens: number;
   retryDelayMs: number;
   settleMs: number;
@@ -38,9 +41,11 @@ export interface TurnDeps {
   resumeFrom?: ResumeFrom | undefined;
 }
 
-/** What a resumed turn inherits from the turn that stopped on a rate limit. */
+/** What a resumed turn inherits from the turn that stopped on a rate limit or a stall. */
 export interface ResumeFrom {
   turnId: string;
+  /** Why the interrupted turn stopped. */
+  reason?: 'rate_limited' | 'stalled';
   /** Files the interrupted turn changed (applied edits, and files commands changed). */
   changedFiles: string[];
   commandsUsed: number;
@@ -50,13 +55,17 @@ export interface ResumeFrom {
 /** Suggested wait before Resume after a rate limit: NVIDIA's free tier sends no Retry-After. */
 export const RESUME_WAIT_MS = 60_000;
 
-/** Put before the original request when a turn resumes one that stopped on a rate limit. */
-export function resumeNote(from: Pick<ResumeFrom, 'changedFiles'>): string {
+/** Suggested wait before Resume after a stall: the model answered nothing, so there is no limit to wait out. */
+export const RESUME_AFTER_STALL_MS = 5_000;
+
+/** Put before the original request when a turn resumes one that stopped on a rate limit or a stall. */
+export function resumeNote(from: Pick<ResumeFrom, 'changedFiles' | 'reason'>): string {
+  const why = from.reason === 'stalled' ? 'the model stopped responding (no output within the time limit)' : 'the model provider rate-limited requests (HTTP 429)';
   const changed = from.changedFiles.length
     ? `Already changed in that turn: ${from.changedFiles.join(', ')}. Those files now differ from what you read earlier: ` +
       're-read only the line ranges you are about to edit (for their exact text and sha256) and do not redo changes that are already there.'
     : 'No file was changed in that turn.';
-  return 'Resumed turn: your previous turn on this task stopped early because the model provider rate-limited requests (HTTP 429). ' +
+  return `Resumed turn: your previous turn on this task stopped early because ${why}. ` +
     `${changed} Commands already run in that turn count against this turn's limits. Continue from where it stopped and finish the task.\n\nOriginal request:`;
 }
 
@@ -119,6 +128,8 @@ export class TurnRun {
   private commandsUsed = 0;
   /** Test runs presented this turn, counted against the test-command budget. */
   private testsUsed = 0;
+  /** The observed outcome of the last test command that ran in this turn. */
+  private lastTest: TestOutcome | undefined;
   /** Files this turn changed: applied edits and files reported changed by commands. */
   private readonly changedFiles = new Set<string>();
   /** Set when the turn stopped on a rate limit and emitted `resumable`. */
@@ -252,7 +263,8 @@ export class TurnRun {
     const input = this.deps.resumeFrom ? `${resumeNote(this.deps.resumeFrom)}\n${built.input}` : built.input;
     if (this.deps.resumeFrom) {
       const n = this.deps.resumeFrom.changedFiles.length;
-      emit({ t: 'status', state: 'starting', detail: `Resuming the turn that stopped on a rate limit (${n} file${n === 1 ? '' : 's'} already changed)` });
+      const why = this.deps.resumeFrom.reason === 'stalled' ? 'stopped responding' : 'stopped on a rate limit';
+      emit({ t: 'status', state: 'starting', detail: `Resuming the turn that ${why} (${n} file${n === 1 ? '' : 's'} already changed)` });
     }
     if (context) emit({ t: 'context_report', report: context.report });
 
@@ -293,6 +305,7 @@ export class TurnRun {
       scope.onContext = (report) => emit({ t: 'context_report', report });
       scope.onCommand = (r) => {
         for (const f of r.changedFiles) this.changedFiles.add(f);
+        if (isTestCommand(r.command)) this.lastTest = testOutcome(r.command, r.exitCode, r.output ?? '');
         emit({
           t: 'status', state: 'running',
           detail: (r.changedFiles.length
@@ -321,7 +334,7 @@ export class TurnRun {
         emit({ t: 'status', state: 'cancelling', detail: `${scope.inFlightCount} tool call(s) still running after the turn ended; waiting for them. No retry or fallback will start.` });
         await scope.waitForIdle();
         if (this.cancelRequested) return this.finishCancelled(result);
-        return void emit({ t: 'done', status: 'error' });
+        return void emit({ t: 'done', status: 'error', ...this.testsField() });
       }
       const wrote = scope.writes > 0;
       // An approved write or command that had not finished counts as a write: no retry, no fallback.
@@ -332,7 +345,7 @@ export class TurnRun {
         this.record(agent, model, runtimeSessionId, result, attemptStart);
       }
       if (result.status === 'done') {
-        return void emit({ t: 'done', status: 'done', ...(result.summary ? { summary: result.summary.slice(0, 2000) } : {}), ...(result.usage ? { usage: result.usage } : {}) });
+        return void emit({ t: 'done', status: 'done', ...(result.summary ? { summary: result.summary.slice(0, 2000) } : {}), ...(result.usage ? { usage: result.usage } : {}), ...this.testsField() });
       }
       if (result.status === 'cancelled' && this.cancelRequested) {
         if (result.unconfirmed) emit({ t: 'status', state: 'cancelling', detail: 'stopped locally; TrueForge did not confirm in time. No further edits or commands will run.' });
@@ -341,7 +354,7 @@ export class TurnRun {
 
       // Failure: model error, watchdog stop, or a cancellation we did not ask for.
       const message = result.watchdog
-        ? `no response from the model for ${Math.round(this.deps.watchdogMs / 1000)} s`
+        ? `no response from the model for ${Math.round((result.watchdogLimitMs ?? this.deps.watchdogMs) / 1000)} s`
         : result.status === 'cancelled' ? `TrueForge stopped the turn (${result.cancelReason || 'cancelled'})` : safeMessage(result.message);
       const cls = result.watchdog ? 'MODEL_UNAVAILABLE' : result.status === 'error' ? classifyTurnError(result.message) : 'OTHER';
 
@@ -370,10 +383,14 @@ export class TurnRun {
           continue;
         }
       }
-      if (cls === 'MODEL_UNAVAILABLE' && isRateLimited(result.message) && !this.cancelRequested) {
+      const rateLimited = cls === 'MODEL_UNAVAILABLE' && isRateLimited(result.message);
+      // A stall after writes is otherwise a dead end (no retry or fallback after a write): offer Resume as well.
+      const stalled = result.watchdog && mayHaveWritten;
+      if ((rateLimited || stalled) && !this.cancelRequested) {
         // The editor may offer Resume: a new turn on the same conversation, told what this one already changed.
-        this.resumableState = { turnId: this.req.turnId, changedFiles: [...this.changedFiles].sort(), commandsUsed: this.commandsUsed, testsUsed: this.testsUsed };
-        emit({ t: 'resumable', reason: 'rate_limited', retryAfterMs: Math.max(RESUME_WAIT_MS, retryDelayMs(result.message, 0)), changedFiles: this.resumableState.changedFiles });
+        const reason = rateLimited ? 'rate_limited' as const : 'stalled' as const;
+        this.resumableState = { turnId: this.req.turnId, reason, changedFiles: [...this.changedFiles].sort(), commandsUsed: this.commandsUsed, testsUsed: this.testsUsed };
+        emit({ t: 'resumable', reason, retryAfterMs: rateLimited ? Math.max(RESUME_WAIT_MS, retryDelayMs(result.message, 0)) : RESUME_AFTER_STALL_MS, changedFiles: this.resumableState.changedFiles });
       }
       const code: ProtocolError['code'] = cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';
       const prefix = cls === 'MODEL_AUTH' ? 'Model authentication failed' : cls === 'MODEL_UNAVAILABLE' ? 'Model unavailable' : cls === 'MODEL_OTHER' ? 'Model error' : 'Turn failed';
@@ -392,6 +409,7 @@ export class TurnRun {
       runtimeSessionId,
       input,
       watchdogMs: this.deps.watchdogMs,
+      ...(this.deps.modelWatchdogMs ? { modelWatchdogMs: this.deps.modelWatchdogMs } : {}),
       cancelTimeoutMs: this.deps.cancelTimeoutMs,
       isBusy: () => scope.inFlightCount > 0,
       onEvent: (e) => {
@@ -470,7 +488,10 @@ export class TurnRun {
         const proposal: EditProposal = {
           ...callRef, ...base, kind: 'proposal', proposalId: call.id, path: p.path,
           originalText: p.originalText, proposedText: p.proposedText, summary: p.summary,
-          hunks: p.hunks.map((h) => ({ hunkId: hunkId(call.id, h.index), startOffset: h.start, endOffset: h.end, oldText: h.oldText, newText: h.newText })),
+          hunks: p.hunks.map((h) => {
+            const deletes = deletedDefinitions(p.originalText, { startOffset: h.start, endOffset: h.end, newText: h.newText });
+            return { hunkId: hunkId(call.id, h.index), startOffset: h.start, endOffset: h.end, oldText: h.oldText, newText: h.newText, ...(deletes.length ? { deletes } : {}) };
+          }),
         };
         this.buffer.emit({ t: 'status', state: 'awaiting_review', detail: p.path });
         this.log.reviews++;
@@ -554,11 +575,20 @@ export class TurnRun {
   }
 
   private finishCancelled(result?: AttemptResult): void {
-    this.buffer.emit({ t: 'done', status: 'cancelled', ...(result?.usage ? { usage: result.usage } : {}) });
+    this.buffer.emit({ t: 'done', status: 'cancelled', ...(result?.usage ? { usage: result.usage } : {}), ...this.testsField() });
   }
 
   private fail(error: ProtocolError): void {
     this.buffer.emit({ t: 'error', error });
-    this.buffer.emit({ t: 'done', status: 'error' });
+    this.buffer.emit({ t: 'done', status: 'error', ...this.testsField() });
+  }
+
+  /** done.tests for agent turns: the last test command's observed outcome, or not_run. */
+  private testsField(): { tests?: NonNullable<Extract<EventBody, { t: 'done' }>['tests']> } {
+    if (this.req.mode !== 'agent') return {};
+    const t = this.lastTest;
+    if (!t) return { tests: { status: 'not_run' } };
+    return { tests: { status: t.status, command: t.command.slice(0, 200), exitCode: t.exitCode,
+      ...(t.passed !== undefined ? { passed: t.passed } : {}), ...(t.failed !== undefined ? { failed: t.failed } : {}), ...(t.summary ? { summary: t.summary } : {}) } };
   }
 }

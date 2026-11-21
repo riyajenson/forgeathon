@@ -36,6 +36,8 @@ export interface AttemptResult {
   cancelReason?: string;
   /** The watchdog stopped this attempt. */
   watchdog: boolean;
+  /** The silence limit that fired (watchdog only): the model-request limit or the general one. */
+  watchdogLimitMs?: number;
   /** Stopped locally because TrueForge did not confirm a cancel in time; its turn may still be running. */
   unconfirmed?: boolean;
   summary?: string;
@@ -51,7 +53,10 @@ export interface AttemptOptions {
   onEvent(event: AttemptEvent): void;
   /** Resolve with one decision per call, or 'cancelled' if the turn was cancelled meanwhile. */
   onApprovals(calls: PendingCall[]): Promise<CallDecision[] | 'cancelled'>;
+  /** Silence limit outside model requests (TrueForge internals between steps). */
   watchdogMs: number;
+  /** Silence limit while a model request is in flight (a long generation can stream nothing for a while). Default watchdogMs. */
+  modelWatchdogMs?: number;
   cancelTimeoutMs: number;
   /** True while one of our MCP tools is running for this attempt: TrueForge is silent then, so the watchdog waits. */
   isBusy?: () => boolean;
@@ -95,6 +100,9 @@ export class Attempt {
   private runtimeTurnId: string | undefined;
   private cancelRequested = false;
   private watchdogFired = false;
+  private watchdogLimitMs: number | undefined;
+  /** True from the turn start, a tool result, a compaction or the approvals until the next complete model.message. */
+  private modelInFlight = true;
   private watchdog: NodeJS.Timeout | undefined;
   private awaitingUser = false;
   private finished: AttemptResult | undefined;
@@ -124,7 +132,7 @@ export class Attempt {
       const result = await Promise.race([driving, this.finishedPromise]);
       return this.finish(result);
     } catch (e) {
-      return this.finish({ status: 'error', message: (e as Error).message, watchdog: this.watchdogFired });
+      return this.finish({ status: 'error', message: (e as Error).message, watchdog: this.watchdogFired, ...(this.watchdogLimitMs ? { watchdogLimitMs: this.watchdogLimitMs } : {}) });
     } finally {
       this.clearWatchdog();
     }
@@ -160,7 +168,7 @@ export class Attempt {
   private forceStop(): void {
     if (this.finished) return;
     this.abort.abort();
-    this.finish({ status: 'cancelled', cancelReason: 'TrueForge did not confirm the stop', watchdog: this.watchdogFired, unconfirmed: true });
+    this.finish({ status: 'cancelled', cancelReason: 'TrueForge did not confirm the stop', watchdog: this.watchdogFired, unconfirmed: true, ...(this.watchdogLimitMs ? { watchdogLimitMs: this.watchdogLimitMs } : {}) });
   }
 
   private finish(result: AttemptResult): AttemptResult {
@@ -175,11 +183,32 @@ export class Attempt {
   private armWatchdog(): void {
     this.clearWatchdog();
     if (this.awaitingUser || this.cancelRequested) return;
+    const limit = this.modelInFlight ? (this.o.modelWatchdogMs ?? this.o.watchdogMs) : this.o.watchdogMs;
     this.watchdog = setTimeout(() => {
       if (this.o.isBusy?.()) return this.armWatchdog(); // a tool (e.g. pytest) is still running: not a stall
       this.watchdogFired = true;
+      this.watchdogLimitMs = limit;
       void this.cancel();
-    }, this.o.watchdogMs);
+    }, limit);
+  }
+
+  /** Tracks whether TrueForge is waiting on a model request, which decides the silence limit. */
+  private noteProgress(event: TfEvent): void {
+    switch (event.type) {
+      // TrueForge emits a placeholder model.message (id and model only) when a request starts, streams deltas,
+      // then the complete message: only the complete one ends the request.
+      case 'model.message': {
+        const tc = event['toolCalls'] as unknown[] | undefined;
+        this.modelInFlight = !(event['finishReason'] != null || event['content'] || tc?.length || event['usage']);
+        break;
+      }
+      case 'turn.created': case 'tool.response': case 'thread.context_compaction_started':
+      case 'thread.context_compaction_finished': case 'thread.created': case 'thread.done':
+        this.modelInFlight = true; break;
+      case 'turn.update':
+        if ((event['state'] as { status?: string } | undefined)?.status === 'running') this.modelInFlight = true;
+        break;
+    }
   }
 
   private clearWatchdog(): void {
@@ -218,6 +247,7 @@ export class Attempt {
       this.clearWatchdog();
       const decisions = this.cancelRequested ? 'cancelled' : await Promise.race([this.o.onApprovals(calls), this.cancelSignal]);
       this.awaitingUser = false;
+      this.modelInFlight = true; // the approved tools run, then the model is called again
       this.armWatchdog(); // from here on TrueForge must answer; a silent server is a stall
       const sub = await client.sessions.subscribeToTurn(runtimeSessionId, this.runtimeTurnId, { afterEventId: this.lastEventId }, this.streamOptions);
       if (decisions !== 'cancelled' && !this.cancelRequested) {
@@ -238,6 +268,7 @@ export class Attempt {
   private async consume(stream: AsyncIterable<unknown>): Promise<ConsumeOutcome> {
     for await (const raw of stream) {
       const event = raw as TfEvent;
+      if (!this.o.sdk.isEventDelta(event as never)) this.noteProgress(event);
       this.armWatchdog();
       if (this.o.sdk.isEventDelta(event as never)) {
         const base = this.messages.get(event.id);
@@ -341,7 +372,7 @@ export class Attempt {
       : undefined;
     const output = state['output'] as { content?: unknown } | undefined;
     const status = state['status'];
-    const base = { watchdog: this.watchdogFired, ...(usage ? { usage } : {}) };
+    const base = { watchdog: this.watchdogFired, ...(this.watchdogLimitMs ? { watchdogLimitMs: this.watchdogLimitMs } : {}), ...(usage ? { usage } : {}) };
     if (status === 'done') return { ...base, status: 'done', ...(typeof output?.content === 'string' ? { summary: output.content } : {}) };
     if (status === 'cancelled') return { ...base, status: 'cancelled', cancelReason: String(state['reason'] ?? '') };
     return { ...base, status: 'error', message: String(state['message'] ?? 'turn failed') };

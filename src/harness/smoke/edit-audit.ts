@@ -33,3 +33,19 @@ export function unrelatedHunk(hunk: { oldText: string; newText: string }, summar
 export function editFailureKind(summary: string): 'malformed' | 'refused' {
   return /INVALID_EDIT|INVALID_ARGS|OUTSIDE_WORKSPACE/.test(summary) ? 'malformed' : 'refused';
 }
+
+/** What the model's final reply says about the tests: passed, failed, or nothing recognisable. */
+export function claimedTests(reply: string): 'passed' | 'failed' | undefined {
+  const t = reply.replace(/\s+/g, ' ');
+  if (/\b[1-9]\d* (failed|errors?)\b|\btests? (still |are )?fail(s|ed|ing)?\b|\bfailing tests?\b/i.test(t)) return 'failed';
+  if (/\b\d+ passed\b|\bPASSED\b|\b(all|the|new) (\w+ )?tests? (now )?pass(es|ed)?\b|\btests? (are )?(passing|pass)\b/i.test(t)) return 'passed';
+  return undefined;
+}
+
+/** A mismatch between the model's claim and the observed outcome of the last test command, or undefined. */
+export function testClaimMismatch(reply: string, observed: { status: 'passed' | 'failed' | 'not_run'; summary?: string } | undefined): string | undefined {
+  const claim = claimedTests(reply);
+  if (!observed || !claim || claim === observed.status) return undefined;
+  if (observed.status === 'not_run') return claim === 'passed' ? 'the reply says the tests pass, but no test command ran' : undefined;
+  return `the reply says the tests ${claim === 'passed' ? 'pass' : 'fail'}, but the last test command ${observed.status}${observed.summary ? ` (${observed.summary})` : ''}`;
+}

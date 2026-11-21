@@ -73,6 +73,16 @@ function script(req: MockRequest): MockReply {
       if (toolResult !== undefined) return { text: 'unexpected' };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
     }
+    case 'stall-after-edit': {
+      // The model goes silent while generating its reply after the edit, until the turn is resumed.
+      const last = textOf(req.messages.filter((m) => m.role === 'user').at(-1)?.content);
+      if (last.startsWith('Resumed turn:')) return { text: 'resumed after the stall' };
+      if (toolResult !== undefined) return { text: 'writing a very long reply', delayMsPerWord: 5000 };
+      return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
+    }
+    case 'slow-words':
+      // 1.2 s between words: longer than the general limit, shorter than the model-request limit.
+      return { text: 'slow but steady answer', delayMsPerWord: 1200 };
     case 'subagent':
       if (toolResult !== undefined) return { text: `main finished after: ${toolResult.slice(0, 200)}` };
       return { toolCalls: [{ name: 'create_sub_agent', args: { name: 'explorer', input: `${SUBTASK} read src/app.py, bump beta, and report what alpha returns` } }] };
@@ -183,8 +193,8 @@ beforeEach(async () => {
   resumeAllowed = false;
 });
 
-async function withHarness<T>(agent: string, fn: (h: ForgeHarness, sessionId: string) => Promise<T>, watchdogMs = 15000): Promise<T> {
-  const h = createHarness({ trueforgeUrl: TF_URL, mcpPort: 0, connectorName: CONNECTOR, agents: { agent, inline: agent }, retryDelayMs: 300, watchdogMs, cancelTimeoutMs: 5000 });
+async function withHarness<T>(agent: string, fn: (h: ForgeHarness, sessionId: string) => Promise<T>, watchdogMs = 15000, modelWatchdogMs = watchdogMs): Promise<T> {
+  const h = createHarness({ trueforgeUrl: TF_URL, mcpPort: 0, connectorName: CONNECTOR, agents: { agent, inline: agent }, retryDelayMs: 300, watchdogMs, modelWatchdogMs, cancelTimeoutMs: 5000 });
   await h.start(port);
   try {
     const s = await h.createSession({ version: PROTOCOL_VERSION, requestId: rid(), body: { workspaceRoot: root } });
@@ -594,6 +604,32 @@ test('resume after a rate limit: the turn stops after its edit with resumable; R
     const again = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: sid, turnId: `turn-${++seq}`, mode: 'agent', instruction, resumeOf: firstTurnId } });
     assert.ok(!again.ok && again.error.code === 'conflict');
   });
+});
+
+test('watchdog on the mock: a slow generation within the model-request limit finishes (general limit 1 s, model limit 4 s)', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    const events = await runTurn(h, sid, 'SCENARIO:slow-words');
+    assert.equal(doneOf(events).status, 'done', JSON.stringify(ofType(events, 'error')));
+    assert.equal(ofType(events, 'status').filter((s) => s.state === 'retrying').length, 0, 'no watchdog retry');
+    assert.match(ofType(events, 'text').map((e) => e.delta).join(''), /slow but steady answer/);
+  }, 1000, 4000);
+});
+
+test('watchdog on the mock: a stall after an edit is resumable; Resume continues the same conversation', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    const instruction = 'SCENARIO:stall-after-edit bump alpha';
+    const first = await runTurn(h, sid, instruction, async (e) => { if (e.t === 'review_request') await review(h, e, () => 'accept'); });
+    assert.equal(doneOf(first).status, 'error');
+    const r = ofType(first, 'resumable');
+    assert.equal(r.length, 1, JSON.stringify(first.slice(-4)));
+    assert.deepEqual([r[0]!.reason, r[0]!.changedFiles], ['stalled', [FILE]]);
+    assert.match(ofType(first, 'error')[0]!.error.message, /no response from the model for 2 s/);
+    assert.equal(ofType(first, 'fallback').length, 0, 'no fallback after a write');
+    const second = await runTurn(h, sid, instruction, undefined, { resumeOf: first[0]!.turnId });
+    assert.equal(doneOf(second).status, 'done', JSON.stringify(ofType(second, 'error')));
+    assert.ok(ofType(second, 'status').some((e) => /^Resuming the turn that stopped responding \(1 file already changed\)$/.test(e.detail ?? '')));
+    assert.match(ofType(second, 'text').map((e) => e.delta).join(''), /resumed after the stall/);
+  }, 1000, 2000);
 });
 
 test('sub-agents on the mock: TrueForge delegates, the sub-agent reads and edits through review, the parent gets its report', async () => {

@@ -99,8 +99,8 @@ Models are configured only in TrueForge, from `config/models.json` via `node scr
 **switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`, one of three named profiles). The NVIDIA catalog offered no Qwen3 Coder or
 DeepSeek model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
 fastest with correct streamed tool calls. Gemini,
-Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** round 1 passed
-A, B, C (tag `round1-submission`). This build, 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
+Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** the first round-1 build passed
+A, B, C (tag `round1-submission`). This updated build, 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
 runs (92–124 s, 25–27 requests, ~1M input tokens), then A, B, C passed on the final commit (B: 30 requests, 244 s). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
 turn. Then the harness's policy, for failures before any write: authentication errors fall back immediately;
 unreachable/timeouts/5xx/429 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and
@@ -124,8 +124,8 @@ watchdog stops a turn that streams nothing for 45 s.
 | Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
 | PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
-Timestamps refer to the submitted round-1 video (Accept All / Reject All / Choose Hunks… prompt); the finals build
-reviews with a multi-select hunk picker (✓ / ✕ in its title bar) instead, covered by the native UI tests.
+Timestamps: current video, recorded on the first round-1 build (Accept All / Reject All prompt); this build
+uses a multi-select hunk picker (✓ / ✕), covered by the native UI tests.
 
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in

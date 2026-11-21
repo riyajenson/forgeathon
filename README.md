@@ -97,12 +97,19 @@ How one turn runs:
    **Resume (branch `harness/p14-trueforge-depth`):** when a turn stops on a rate limit (429), for example after
    edits were saved, the panel offers **Resume** after about a minute. Resume sends the same request as a new turn
    in the same TrueForge conversation, tells the model which files are already changed, and carries over what the
-   interrupted turn used of the command budgets. A turn can be resumed once.
+   interrupted turn used of the command budgets. A turn can be resumed once. The same Resume is offered when the
+   model stops responding after the turn changed files: while a model request is in flight the silence limit is
+   120 s (`forge.watchdog.modelRequestSec`), 45 s for other waits.
 7. **Sub-agents (optional, off by default).** `node scripts/setup-trueforge.mjs --subagents` enables TrueForge's
    dynamic sub-agents for `forge-coder` (not inline) and adds delegation guidance: at most one read-only
    exploration sub-agent per task, with edits and commands left to the main agent. A sub-agent's edits and
    commands still go through the same review and budgets. The panel lists each one as "Sub-agent: <name>" with
    its task and outcome, and the status line shows "Delegated to sub-agent …".
+8. **Review safeguards.** A hunk that deletes a whole Python class or function is flagged in the review (the hunk
+   list and the prompt title name it with its line count, for example "deletes class TestRoutes (25 lines)") and
+   listed under "Destructive hunks" in the panel. When an agent turn ends, the panel shows the **observed** result
+   of the last test command next to the model's summary ("Tests (observed): 1 failed — 1 failed, 57 passed …",
+   "passed", or "not run in this turn"), taken from the command's exit code and output, not from the reply.
 
 ## Quickstart with real models
 
@@ -233,7 +240,7 @@ resolve them to `64:ff9b::…` addresses, which the guard treats as private and 
 `MODEL_HTTP_MAX_RETRIES=4` is the rate-limit cushion. TrueForge 0.185.1 resends a model request that gets 429,
 408, 409, 502, 503 or a 52x/530 gateway error up to that many times, before any output is streamed. It honours a
 `Retry-After` of up to 5 s; otherwise it waits 1, 2, 4, 8 s (±10 %), so about 15 s at most, inside the
-harness's 45 s silence limit. These resends happen below the turn: no tool runs twice, and the harness's own
+harness's silence limit (120 s while a model request is in flight, 45 s otherwise). These resends happen below the turn: no tool runs twice, and the harness's own
 rule (at most one retry, never after a change was applied) is unchanged. 401 and 500 are not resent, so the
 fallback for an invalid key is still immediate; a host that never answers (connect timeouts are resent too)
 takes about 30 s before the fallback.
@@ -482,6 +489,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
 | `forge.testCommandBudget.agent` | `3` | Most test runs (`pytest`, `python -m pytest`) per agent turn, counted separately, so a denied or extra command never uses up a test rerun ("test-command budget reached") |
 | `forge.testCommandBudget.inline` | `1` | Most test runs per inline turn |
+| `forge.watchdog.modelRequestSec` | `120` | Seconds the model may stay silent during a request before the turn is stopped as unresponsive (other waits: 45 s); a stop after changes offers Resume |
 | `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY` | (none) | Provider keys, read by the setup script; only those your config uses are needed (default: NVIDIA and OpenRouter) |
 | `OUTBOUND_URL_ALLOWED_HOSTS` | (none) | TrueForge: must include `127.0.0.1` so it can call the editor's MCP server |
 | `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults (5000, 2) | We use `3000` and `4`: a short connect timeout, and TrueForge resends a rate-limited (429) model request up to 4 times (about 15 s) before the turn sees the error |
@@ -585,7 +593,7 @@ The smoke script also accepts these options:
 ```text
 agent/        TrueForge agent definitions (forge-coder.json, forge-inline.json)
 config/       models.example.json (real providers), models.mock.example.json (demo model)
-contracts/    shared TypeScript contract between extension and harness (protocol 0.4.5)
+contracts/    shared TypeScript contract between extension and harness (protocol 0.4.6)
 extension/    VS Code extension: commands, inline review, agent panel, EditorPort
 src/harness/  forge-harness: TrueForge adapter, MCP server and tools, context engine,
               review core, command budget, demo model, model meter

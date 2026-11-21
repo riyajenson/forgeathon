@@ -34,8 +34,10 @@ compaction is on (60k input tokens); iteration limits 8 (inline) and 60 (agent).
 (text, tool calls, results, context report, review/command requests, fallback, done) and handles approvals:
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
-the prompt): a per-turn command budget (3 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached"), approved commands run in **bubblewrap** (read-only
+the prompt): a per-turn command budget (5 agent, 1 inline; later `run_command` calls are refused to the model
+without prompting and the panel shows "command budget reached", except that an agent turn may rerun a test
+command that already ran, once, after a fix was accepted, so a failing test can always be fixed and checked;
+`cd <dir> && …` is refused with the corrected call, without using the budget), approved commands run in **bubblewrap** (read-only
 checkout and host, private `/tmp`, no network, no provider keys in its environment; refused if unavailable;
 it can still read files, see section 8), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
@@ -73,14 +75,22 @@ every tool call of the failed attempt has settled and no approved edit or comman
    functions and sections; anything that does not fit is listed as **skipped** with the reason.
 4. The **context report** (items, ranks, plain-English reasons, used/budget, skipped) is shown in the agent
    panel; the agent can ask for more with `gather_context`.
-5. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
+5. **Optional semantic reranking** (`forge.context.semanticSearch`, off by default): when keyword evidence is
+   weak, a pinned MiniLM model reranks candidates locally on the CPU, in a worker thread. Its runtime is an
+   opt-in install (`scripts/enable-semantic-search.sh`, about 230 MB, CPU only); a default install does not
+   include it. Without the runtime, ranking stays lexical and the Context block says so.
+6. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
    `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
    files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; binary files are
    refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name.
 
-Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s): for Task B, `src/flask/cli.py` ranks first and the
+The workspace is indexed in the background when the harness starts, in time slices, so the first turn starts
+from a warm cache. Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s cold): for Task B, `src/flask/cli.py` ranks first and the
 packed context (7,456 of 8,000 tokens, 28 items, 7 skipped) includes `tests/test_cli.py` and `docs/cli.rst`.
-Four unrelated Flask tasks also rank their source file first (regression test in the repo).
+Four unrelated Flask tasks also rank their source file first (regression test in the repo). On the 11 available
+retrieval-benchmark tasks, semantic reranking raised relevant-file density by 15% and reciprocal rank by 11%,
+lowered recall@5 by 2%, and raised the median context-assembly time from about 2 ms to 352 ms, so it stays off
+by default.
 
 ## 5. Model setup
 
@@ -114,10 +124,14 @@ watchdog stops a turn that streams nothing for 45 s.
 | Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
 | Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
 | Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
-| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
+| Resilience (10) | [video] Task C: invalid primary key → fallback banner → ✕ (reject all hunks) → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
 | TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | 03:05 |
 | Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
 | PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
+
+Video timestamps refer to the round-1 video. That video shows the round-1 review prompt (Accept All / Reject All /
+Choose Hunks…). The finals build reviews with the multi-select hunk picker (✓ accept all and ✕ reject all in its
+title bar, every hunk checked, Enter submits), so the video will be re-recorded with `scripts/demo-recording/`.
 
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
@@ -143,8 +157,9 @@ measured scripted B runs (peaks 95–139 ms).
 
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
-instructions, hence the harness command budget (5 per turn); each step resends the whole conversation. Retrieval is lexical (no embeddings) and
-the symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
+instructions, hence the harness command budget (5 per turn, plus one rerun after a fix); each step resends the whole conversation. Retrieval is
+lexical by default: the optional semantic reranking is about 178× slower per context assembly and missed its 2×
+efficiency target. The symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
 makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
@@ -153,7 +168,6 @@ fallback allows 50 requests/day without credit (one B takes 40–70). Compaction
 demo tasks never reach the threshold. One workspace
 folder; tested on WSL only.
 
-**With another month:** embeddings and language-server symbols for retrieval, evaluated across repositories and
+**With another month:** faster embeddings and language-server symbols for retrieval, evaluated across repositories and
 models; per-hunk CodeLens; conversation history across fallback; read confinement for
-`run_command`; cost-aware model routing; Marketplace packaging. A hybrid-efficiency branch (multi-select picker, optional semantic
-search) is in progress on feature/hybrid-efficiency-native; not part of this submission.
+`run_command`; cost-aware model routing; Marketplace packaging.

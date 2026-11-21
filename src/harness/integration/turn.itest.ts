@@ -46,6 +46,13 @@ function script(req: MockRequest): MockReply {
   if (req.model === 'mock-fallback') return lastToolMessage(req) !== undefined ? { text: 'fallback finished' } : { text: 'fallback model answered' };
   const scenario = scenarioOf(req);
   const toolResult = lastToolMessage(req);
+  // 'compact' (agent it-compact, trigger 2000 input tokens): TrueForge asks for a summary (its compaction prompt is the
+  // last message); the summary then replaces the conversation, so later requests are recognised by it instead.
+  if (scenario === 'compact' && isSummaryRequest(req)) return { text: `${COMPACT_SUMMARY} the user asked to bump alpha; src/app.py was read.` };
+  if (req.messages.some((m) => m.role === 'assistant' && textOf(m.content).includes(COMPACT_SUMMARY))) {
+    if (toolResult !== undefined) return { text: `compact finished: ${toolResult.slice(0, 200)}` };
+    return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [{ old_text: '    return 1', new_text: '    return 10' }] } }] };
+  }
   const edit1 = { old_text: '    return 1', new_text: '    return 10' };
   const edit2 = { old_text: '    return 2', new_text: '    return 20' };
   switch (scenario) {
@@ -77,6 +84,9 @@ function script(req: MockRequest): MockReply {
       if (toolResult !== undefined) return { text: `finished after: ${toolResult.slice(0, 200)}` };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
     }
+    case 'compact':
+      // Reported input large enough that the next call crosses it-compact's 2000-token trigger.
+      return { toolCalls: [{ name: 'read_file', args: { path: FILE, start_line: 1, end_line: 6 } }], promptTokens: 5000 };
     case 'stall':
       return { text: 'thinking ... ... ...', delayMsPerWord: 4000 };
     case 'slow':
@@ -91,7 +101,10 @@ const AGENTS: Array<[string, string]> = [
   ['it-auth', 'itbad/primary'], ['it-auth-fallback', 'itfb/fb'],
   ['it-dead', 'itdead/primary'], ['it-dead-fallback', 'itfb/fb'],
   ['it-both', 'itbad/primary'], ['it-both-fallback', 'itdead/primary'],
+  ['it-compact', 'itgood/primary'], ['it-compact-fallback', 'itfb/fb'],
 ];
+const COMPACT_SUMMARY = 'COMPACTED-SUMMARY:';
+const isSummaryRequest = (req: MockRequest) => /detailed summary of the conversation so far/.test(textOf(req.messages.at(-1)?.content));
 
 before(async () => {
   await mock.start(MOCK_PORT);
@@ -121,7 +134,7 @@ before(async () => {
       mcpServers: [{ name: CONNECTOR, enableTools: ['@all'], preloadTools: ['read_file', 'search_workspace', 'propose_edit', 'run_command'], requireApprovalForTools: ['propose_edit', 'run_command'] }],
       config: {
         sandbox: { enabled: false }, dynamicSubAgents: { enabled: false }, generativeUi: { enabled: false }, askUserQuestions: { enabled: false },
-        contextManagement: { compaction: { enabled: true, trigger: { type: 'input_tokens' as const, value: 60000 } }, largeToolResponse: { enabled: false } },
+        contextManagement: { compaction: { enabled: true, trigger: { type: 'input_tokens' as const, value: name === 'it-compact' ? 2000 : 60000 } }, largeToolResponse: { enabled: false } },
         iterationLimit: 10,
       },
     };
@@ -222,6 +235,27 @@ test('allow: review, accept all, edit saved, turn done', async () => {
     assert.ok(ctx[0]!.report.selections.some((s) => s.path === FILE && s.source === 'automatic'));
     assert.ok(events.indexOf(ctx[0]!) < events.findIndex((e) => e.t === 'session'), 'context report precedes the TrueForge session');
     assert.ok(ofType(events, 'tool_result').some((t) => t.ok));
+  });
+});
+
+test('compaction: TrueForge summarizes mid-turn, the status line shows start and finish, the turn completes', async () => {
+  await withHarness('it-compact', async (h, sid) => {
+    const events = await runTurn(h, sid, 'SCENARIO:compact bump alpha', async (e) => {
+      if (e.t === 'review_request') await review(h, e, () => 'accept');
+    });
+    assert.equal(doneOf(events).status, 'done');
+    const details = ofType(events, 'status').map((e) => `${e.state}|${e.detail ?? ''}`);
+    const start = details.findIndex((d) => /^compacting\|Compacting context: [\d,]+ tokens reached the 2,000-token threshold$/.test(d));
+    assert.ok(start >= 0, details.join('\n'));
+    assert.match(details[start + 1] ?? '', /^running\|Context compacted in \d+\.\d s: [\d,]+ tokens summarized into [\d,]+$/);
+    assert.equal(details.filter((d) => d.startsWith('compacting')).length, 1, 'compacted once');
+    const summaryCalls = mock.requests.filter(isSummaryRequest);
+    assert.equal(summaryCalls.length, 1, 'one summary request');
+    assert.deepEqual(summaryCalls[0]!.toolNames.filter(Boolean), [], 'the summary request offers no tools');
+    const after = mock.requests.slice(mock.requests.indexOf(summaryCalls[0]!) + 1);
+    assert.ok(after.length >= 2, 'the turn continued after compaction');
+    assert.ok(after.every((r) => !r.messages.some((m) => m.role === 'user' && textOf(m.content).includes('SCENARIO:compact'))), 'the original request was replaced by the summary');
+    assert.equal(await disk(), ORIGINAL.replace('return 1', 'return 10'));
   });
 });
 

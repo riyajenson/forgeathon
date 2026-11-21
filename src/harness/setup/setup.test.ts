@@ -101,7 +101,7 @@ test('buildAgents --subagents: dynamic sub-agents and the delegation instruction
     const m = byName[name]!.manifest as Record<string, any>;
     assert.equal(m['config'].dynamicSubAgents.enabled, true, name);
     assert.ok(String(m['instructions']).startsWith(String((plainByName[name]!.manifest as Record<string, any>)['instructions'])), 'own instructions first');
-    assert.match(String(m['instructions']), /\n\nSub-agents\. For tasks that touch several files, your FIRST action is one read-only exploration subagent \(create_sub_agent\)/);
+    assert.match(String(m['instructions']), /\n\nSub-agents\. create_sub_agent is available\. Use it at most once per task/);
     assert.match(byName[name]!.description, /\(sub-agents on\)$/);
     assert.equal('subAgents' in m, false, 'the template key is not part of the manifest');
   }

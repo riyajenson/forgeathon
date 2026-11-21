@@ -6,6 +6,9 @@ export type Hunk = {
   endOffset: number;
   oldText: string;
   newText: string;
+  /** 0.4.6: whole definitions this hunk deletes (a class or function whose entire body lies in the hunk and whose
+   * name the replacement does not define again); the review shows them as a warning. Absent when none. */
+  deletes?: readonly { kind: 'class' | 'function'; name: string; lines: number }[];
 };
 export type FileBase = { isNewFile: false; baseSha256: string } | { isNewFile: true; baseSha256: null };
 export type EditProposal = CallRef & FileBase & {

@@ -11,7 +11,14 @@ import { sha256Hex } from '../review';
 import { normalizeWorkspacePath } from './paths';
 import type { ToolContext, ToolOutcome } from './tools';
 import { approvalKey } from './tools';
-import { checkProtection, confinedCwd, protectedArgs } from './command-protection';
+import { checkProtection, confinedCwd, protectedArgs, venvBase } from './command-protection';
+import { forgeRepoRoot, redact, SECRET_ENV, secretValues } from './redact';
+
+/** Files hidden from commands even when the workspace contains them: this repo's own model config (provider setup). */
+export function hiddenInWorkspace(): string[] {
+  const root = forgeRepoRoot();
+  return root ? [path.join(root, 'config', 'models.json')] : [];
+}
 
 export interface RunCommandArgs {
   command: string;
@@ -58,8 +65,7 @@ function diffSnapshots(before: Map<string, string>, after: Map<string, string>):
   return [...changed].sort();
 }
 
-/** Environment variables a command never receives: anything that looks like a credential, and editor IPC handles. */
-const SECRET_ENV = /KEY|TOKEN|SECRET|PASSW|CREDENTIAL|AUTH|COOKIE|PRIVATE|SESSION/i;
+/** Environment variables a command never receives: anything that looks like a credential (SECRET_ENV), and editor IPC handles. */
 const EDITOR_IPC_ENV = /^VSCODE_(IPC|GIT)|^GIT_ASKPASS$|^SSH_ASKPASS$/;
 
 /** The editor's environment without secrets, with the workspace's own virtualenv (.venv or venv) first on PATH. */
@@ -149,6 +155,8 @@ export interface CommandRuntime {
   environment: typeof commandEnv;
   checkProtection: typeof checkProtection;
   spawn: typeof spawn;
+  /** Values redacted from output (default: secretValues()). */
+  secrets?: () => readonly string[];
 }
 const defaultRuntime: CommandRuntime = { snapshot, environment: commandEnv, checkProtection, spawn };
 
@@ -200,7 +208,8 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs, run
     const venv = env['VIRTUAL_ENV'];
     const exitCode = await new Promise<number | null>((resolve) => {
       // Only these variables reach the command: no credentials, no editor IPC handles.
-      const child = runtime.spawn('bwrap', protectedArgs(cwd, args.command, root, venv ? [venv] : []), {
+      const base = venv ? venvBase(venv) : undefined;
+      const child = runtime.spawn('bwrap', protectedArgs(cwd, args.command, root, [...(venv ? [venv] : []), ...(base ? [base] : [])], hiddenInWorkspace()), {
         cwd, env: { PATH: env['PATH'], VIRTUAL_ENV: venv, HOME: '/tmp', TMPDIR: '/tmp',
           LANG: env['LANG'] ?? 'C.UTF-8', PYTHONDONTWRITEBYTECODE: '1', PYTEST_ADDOPTS: '-p no:cacheprovider' },
         detached: true, stdio: ['ignore', 'pipe', 'pipe'],
@@ -216,6 +225,12 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs, run
       child.on('error', (e) => { stderr += `\n${e.message}`; });
       child.on('close', (code) => { clearTimeout(timer); clearTimeout(escalation); controller.signal.removeEventListener('abort', stop); resolve(code); });
     });
+    // Provider keys and credential shapes never leave this function: not to the model, the turn, the panel or logs.
+    const secrets = runtime.secrets ? runtime.secrets() : secretValues();
+    const cleanOut = redact(stdout, secrets);
+    const cleanErr = redact(stderr, secrets);
+    stdout = cleanOut.text; stderr = cleanErr.text;
+    const redactedCount = cleanOut.count + cleanErr.count;
     // Backstop: the checkout is mounted read-only, but anything that still changed is reported.
     const after = await runtime.snapshot(root);
     const changedFiles = before && after ? diffSnapshots(before, after) : [];
@@ -228,10 +243,11 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs, run
     const unsaved = scope.unsavedPaths.size
       ? `\nWarning: unsaved editor changes are not visible to this command: ${[...scope.unsavedPaths].join(', ')}`
       : '';
-    const scrubbed = removed ? `\nenvironment: ${removed} credential-like variable(s) withheld` : '';
+    const scrubbed = (removed ? `\nenvironment: ${removed} credential-like variable(s) withheld` : '') +
+      (redactedCount ? `\noutput: ${redactedCount} secret-like value(s) redacted` : '');
     return {
       ok: true,
-      text: `$ ${args.command}\ncwd: ${rel || '.'}\nprotection: read-only host filesystem; private temporary files; no network\nexit code: ${exitCode ?? 'none'}${killed}\n${changes}${unsaved}${scrubbed}\n--- stdout ---\n${capped(stdout)}\n--- stderr ---\n${capped(stderr)}`,
+      text: `$ ${redact(args.command, secrets).text}\ncwd: ${rel || '.'}\nprotection: only the workspace and system runtime visible (read-only); private temporary files; no network\nexit code: ${exitCode ?? 'none'}${killed}\n${changes}${unsaved}${scrubbed}\n--- stdout ---\n${capped(stdout)}\n--- stderr ---\n${capped(stderr)}`,
     };
   } finally {
     scope.running.delete(controller);

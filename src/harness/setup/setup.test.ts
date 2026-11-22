@@ -76,7 +76,7 @@ test('buildAgents makes primary and -fallback variants from each template, with 
   for (const a of agents) {
     const m = a.manifest as Record<string, any>;
     assert.deepEqual(m['mcpServers'][0].requireApprovalForTools, ['propose_edit', 'run_command']);
-    assert.equal(m['config'].dynamicSubAgents.enabled, false);
+    assert.equal(m['config'].dynamicSubAgents.enabled, a.name.startsWith('forge-coder'), `${a.name}: sub-agents on by default for forge-coder only`);
     assert.equal(m['config'].generativeUi.enabled, false);
     assert.equal(m['config'].askUserQuestions.enabled, false);
     assert.equal(m['config'].sandbox.enabled, false);
@@ -92,9 +92,11 @@ test('buildAgents makes primary and -fallback variants from each template, with 
   assert.equal((templates[0]!.manifest['model'] as Record<string, unknown>)['name'], undefined, 'templates are not mutated');
 });
 
-test('buildAgents --subagents: dynamic sub-agents and the delegation instructions on forge-coder only', () => {
-  const plain = buildAgents(templates, example, 'vscode');
-  const agents = buildAgents(templates, example, 'vscode', { subAgents: true });
+test('buildAgents: dynamic sub-agents and the delegation instructions on forge-coder by default; --no-subagents turns them off', () => {
+  const plain = buildAgents(templates, example, 'vscode', { subAgents: false });
+  const agents = buildAgents(templates, example, 'vscode');
+  assert.deepEqual(buildAgents(templates, example, 'vscode', { subAgents: true }), agents, 'on is the default');
+  for (const a of plain) assert.equal(((a.manifest as Record<string, any>)['config'].dynamicSubAgents ?? { enabled: false }).enabled, false, `${a.name} off with --no-subagents`);
   const byName = Object.fromEntries(agents.map((a) => [a.name, a]));
   const plainByName = Object.fromEntries(plain.map((a) => [a.name, a]));
   for (const name of ['forge-coder', 'forge-coder-fallback']) {

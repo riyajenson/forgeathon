@@ -45,13 +45,13 @@ export interface AgentTemplate {
   name: string;
   description: string;
   manifest: Record<string, unknown> & { model?: { params?: Record<string, unknown> } };
-  /** Present on templates that may delegate: with setup --subagents, TrueForge's dynamic sub-agents are enabled for
+  /** Present on templates that may delegate: unless setup --no-subagents, TrueForge's dynamic sub-agents are enabled for
    * this agent and these instructions are appended to its own. Not part of the manifest. */
   subAgents?: { instructions: string };
 }
 
 export interface BuildOptions {
-  /** Enable dynamic sub-agents on templates that define `subAgents` (setup --subagents). Default off. */
+  /** Enable dynamic sub-agents on templates that define `subAgents`. Default on; false is setup --no-subagents. */
   subAgents?: boolean;
 }
 
@@ -141,7 +141,7 @@ export function planProvider(p: ProviderConfig, env: NodeJS.ProcessEnv, usedProv
 export function buildAgents(templates: AgentTemplate[], cfg: ModelsConfig, connectorName: string, options: BuildOptions = {}): AgentDefinition[] {
   const out: AgentDefinition[] = [];
   for (const t of templates) {
-    const delegate = options.subAgents === true && typeof t.subAgents?.instructions === 'string';
+    const delegate = options.subAgents !== false && typeof t.subAgents?.instructions === 'string';
     for (const [suffix, model, fallbackNote] of [['', cfg.agents.primaryModel, ''], [FALLBACK_SUFFIX, cfg.agents.fallbackModel, ' (fallback model)']] as const) {
       const manifest = structuredClone(t.manifest) as Record<string, unknown>;
       let note: string = fallbackNote;
@@ -177,7 +177,7 @@ export interface SetupOptions {
   env: NodeJS.ProcessEnv;
   log(line: string): void;
   dryRun?: boolean;
-  /** setup --subagents: dynamic sub-agents for templates that define them (forge-coder). */
+  /** Dynamic sub-agents for templates that define them (forge-coder): default on; false is setup --no-subagents. */
   subAgents?: boolean;
 }
 
@@ -194,7 +194,7 @@ export async function runSetup(o: SetupOptions): Promise<SetupReport> {
   const used = new Set([providerOf(o.cfg.agents.primaryModel), providerOf(o.cfg.agents.fallbackModel)]);
   const plans = o.cfg.providers.map((p) => planProvider(p, o.env, used));
   const connector = { ...DEFAULT_CONNECTOR, ...(o.cfg.connector ?? {}) };
-  const agents = buildAgents(o.templates, o.cfg, connector.name, { subAgents: o.subAgents === true });
+  const agents = buildAgents(o.templates, o.cfg, connector.name, { subAgents: o.subAgents !== false });
   const report: SetupReport = { providers: plans, connector: connector.name, agents: [], missingModels: [] };
 
   for (const plan of plans) {

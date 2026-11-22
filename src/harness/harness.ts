@@ -40,6 +40,8 @@ export interface HarnessOptions {
   contextBudgetTokens?: number;
   /** Mask credential-shaped strings (provider key shapes, PEM keys, known key values) in workspace text sent to the model. Default true. */
   maskSourceSecrets?: boolean;
+  /** Offer several line ranges per read_file call (fewer read round trips; changes the tool schema the model sees). Default false. */
+  multiRangeRead?: boolean;
   /** Name of the MCP connector registered in TrueForge. Default "vscode". */
   connectorName?: string;
   /** JSON-lines log of every turn (models, attempts, tokens, timing; no content). Default ~/.forge/turns.jsonl
@@ -104,7 +106,7 @@ class ForgeHarnessImpl implements ForgeHarness {
     }
     const listenPort = this.options.mcpPort ?? 47615;
     try {
-      this.mcp = await startMcpServer({ port: bridge, scopes: this.scopes, listenPort, maskSecrets: this.options.maskSourceSecrets !== false });
+      this.mcp = await startMcpServer({ port: bridge, scopes: this.scopes, listenPort, maskSecrets: this.options.maskSourceSecrets !== false, multiRangeRead: this.options.multiRangeRead === true });
     } catch (e) {
       if ((e as { code?: string }).code !== 'EADDRINUSE') throw e;
       throw new Error(`The editor-tools port 127.0.0.1:${listenPort} is in use (another VS Code window with Forge, or another program). Close it, or set "forge.mcpPort" to a free port.`);

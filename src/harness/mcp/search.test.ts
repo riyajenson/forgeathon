@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { FakePort, readFileTool, searchWorkspaceTool, type ToolContext } from './index';
+import { mergeRanges } from './tools';
 import { listFilesTool } from './symbol-tools';
 import { buildIndex } from '../context/workspace-index';
 import { LIST_LIMIT } from '../context/files';
@@ -101,4 +102,21 @@ test('a plain-text search over a large workspace runs off the event loop and sti
     assert.ok(r.ok && /^30 match\(es\) in 30 file/.test(r.text), r.ok ? r.text : r.message);
     assert.ok(ticks >= 1, 'the event loop ran while the search was matching');
   } finally { await fs.rm(big, { recursive: true, force: true }); }
+});
+
+test('read_file ranges (forge.tools.multiRangeRead): merged, numbered, one hash, invalid ranges refused', async () => {
+  await fs.writeFile(path.join(root, 'long.py'), Array.from({ length: 30 }, (_, i) => `line${i + 1}`).join('\n') + '\n');
+  assert.deepEqual(mergeRanges([{ start_line: 10, end_line: 12 }, { start_line: 1, end_line: 3 }, { start_line: 4, end_line: 5 }, { start_line: 11, end_line: 40 }], 30), [[1, 5], [10, 30]]);
+  const r = await readFileTool(ctx, { path: 'long.py', ranges: [{ start_line: 20, end_line: 21 }, { start_line: 2, end_line: 3 }, { start_line: 3, end_line: 4 }, { start_line: 50, end_line: 60 }] });
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  const lines = r.text.split('\n');
+  assert.match(lines[1]!, /^sha256: [0-9a-f]{64}$/);
+  assert.equal(lines[2], 'lines: 30 (showing 2-4, 20-21)');
+  assert.deepEqual(lines.slice(3), ['--- lines 2-4', ' 2\tline2', ' 3\tline3', ' 4\tline4', '--- lines 20-21', '20\tline20', '21\tline21', '[past the end of the file (30 lines): 50-60]']);
+  for (const ranges of [[], [{ start_line: 5, end_line: 4 }], Array.from({ length: 9 }, () => ({ start_line: 1, end_line: 1 }))]) {
+    const bad = await readFileTool(ctx, { path: 'long.py', ranges });
+    assert.equal(bad.ok, false);
+  }
+  await fs.rm(path.join(root, 'long.py'));
 });

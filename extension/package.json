@@ -129,6 +129,11 @@
           "default": 120,
           "minimum": 30,
           "description": "Seconds the model may stay silent while a request is in flight (a long edit can stream nothing for a while) before the turn is stopped as unresponsive. Other waits keep the 45 s limit. A stop after the turn changed files offers Resume."
+        },
+        "forge.tools.multiRangeRead": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Let the agent read several line ranges of one file in one `read_file` call (fewer model round trips). Off by default: it changes the tool schema the model sees. Applies after reconnect."
         }
       }
     }

@@ -147,6 +147,8 @@ test('tools/list exposes the five tools with read-only annotations on the reader
   assert.equal(byName['read_file']!.annotations?.readOnlyHint, true);
   assert.equal(byName['search_workspace']!.annotations?.readOnlyHint, true);
   assert.equal(byName['propose_edit']!.annotations?.readOnlyHint, false);
+  // Multi-range reads are off by default: the model sees the read_file schema unchanged.
+  assert.equal(Object.keys((byName['read_file']!.inputSchema as { properties: object }).properties).includes('ranges'), false);
 });
 
 test('read_file returns sha256 and numbered lines, honours ranges', async () => {
@@ -372,4 +374,19 @@ test('propose_edit with an unparseable edits string is refused with a message th
   if (built.ok) return;
   assert.equal(built.code, 'INVALID_EDIT');
   assert.match(built.message, /JSON array of \{"old_text".*not a string|Pass the array itself/);
+});
+
+test('with multiRangeRead on, read_file offers ranges and a call returns several ranges with one hash', async () => {
+  const s2 = await startMcpServer({ port, scopes, listenPort: 0, multiRangeRead: true });
+  const c = new Client({ name: 'test', version: '0' });
+  await c.connect(new StreamableHTTPClientTransport(new URL(s2.url), { requestInit: { headers: { Authorization: `Bearer ${s2.token}` } } }));
+  try {
+    const { tools } = await c.listTools();
+    const rf = tools.find((t) => t.name === 'read_file')!;
+    assert.ok(Object.keys((rf.inputSchema as { properties: object }).properties).includes('ranges'));
+    const r = await c.callTool({ name: 'read_file', arguments: { path: 'src/flask/helpers.py', ranges: [{ start_line: 1, end_line: 1 }, { start_line: 3, end_line: 3 }] } });
+    const text = (r.content as Array<{ text: string }>)[0]!.text;
+    assert.equal(r.isError ?? false, false, text);
+    assert.match(text, /showing 1-1, 3-3/);
+  } finally { await c.close(); await s2.close(); }
 });

@@ -14,7 +14,7 @@ import { runCommandTool } from './command';
 import { gatherContextTool } from './context-tool';
 import { findSymbolTool, listFilesTool } from './symbol-tools';
 import { maskedNote, maskSourceSecrets } from './redact';
-import { proposeEditTool, readFileTool, searchWorkspaceTool, type ToolContext, type ToolOutcome } from './tools';
+import { proposeEditTool, READ_FILE_MAX_RANGES, readFileTool, searchWorkspaceTool, type ToolContext, type ToolOutcome } from './tools';
 
 export const MCP_PATH = '/mcp';
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -24,6 +24,8 @@ export interface McpServerOptions {
   scopes: ScopeRegistry;
   /** Mask credential-shaped strings in tool output (default true). */
   maskSecrets?: boolean;
+  /** Offer read_file's ranges argument (default false). */
+  multiRangeRead?: boolean;
   /** 0 picks a free port (tests). */
   listenPort: number;
   /** Generated when omitted. */
@@ -66,9 +68,12 @@ export function buildMcpServer(ctx: ToolContext): McpServer {
       path: z.string().describe('Workspace-relative path, e.g. src/flask/cli.py'),
       start_line: z.number().int().min(1).optional().describe('First line to show (1-based)'),
       end_line: z.number().int().min(1).optional().describe('Last line to show (inclusive)'),
+      // Offered only when multi-range reads are enabled (forge.tools.multiRangeRead): the default tool schema is unchanged.
+      ...(ctx.multiRangeRead ? { ranges: z.array(z.object({ start_line: z.number().int().min(1), end_line: z.number().int().min(1) })).min(1).max(READ_FILE_MAX_RANGES).optional()
+        .describe('Several line ranges of this file in one call (instead of start_line/end_line); overlapping ranges are merged') } : {}),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, (args) => run(ctx, () => readFileTool(ctx, args)));
+  }, (args) => run(ctx, () => readFileTool(ctx, { ...args, ...(ctx.multiRangeRead ? {} : { ranges: undefined }) })));
 
   server.registerTool('search_workspace', {
     description:
@@ -185,7 +190,7 @@ export async function startMcpServer(options: McpServerOptions): Promise<Running
       const body = await readBody(req);
       const header = req.headers[SESSION_HEADER];
       const runtimeSessionId = Array.isArray(header) ? header[0] : header;
-      const server = buildMcpServer({ port: editor, scope: scopes.get(runtimeSessionId), maskSecrets: options.maskSecrets !== false });
+      const server = buildMcpServer({ port: editor, scope: scopes.get(runtimeSessionId), maskSecrets: options.maskSecrets !== false, multiRangeRead: options.multiRangeRead === true });
       const transport = new StreamableHTTPServerTransport({}) // no sessionIdGenerator: stateless mode;
       res.on('close', () => { void transport.close(); void server.close(); });
       await server.connect(transport);

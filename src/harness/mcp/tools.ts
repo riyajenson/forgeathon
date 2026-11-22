@@ -34,6 +34,8 @@ export interface ToolContext {
   scope: SessionScope | undefined;
   /** Mask credential-shaped strings in tool output before it reaches the model (default true; see maskSourceSecrets). */
   maskSecrets?: boolean | undefined;
+  /** Offer read_file's `ranges` argument (several ranges of one file in one call). Default false. */
+  multiRangeRead?: boolean | undefined;
 }
 
 export interface ProposeEditArgs {
@@ -77,6 +79,23 @@ export interface ReadFileArgs {
   path: string;
   start_line?: number | undefined;
   end_line?: number | undefined;
+  /** Several ranges of one file in one call (forge.tools.multiRangeRead); merged when they overlap or touch. */
+  ranges?: Array<{ start_line: number; end_line: number }> | undefined;
+}
+
+/** At most this many ranges per call. */
+export const READ_FILE_MAX_RANGES = 8;
+
+/** Sorted, merged ranges (overlapping or adjacent ones become one), clamped to the file. */
+export function mergeRanges(ranges: ReadonlyArray<{ start_line: number; end_line: number }>, total: number): Array<[number, number]> {
+  const sorted = ranges.map((r) => [Math.max(1, Math.floor(r.start_line)), Math.min(total, Math.floor(r.end_line))] as [number, number])
+    .filter(([a, b]) => a <= b).sort((x, y) => x[0] - y[0]);
+  const out: Array<[number, number]> = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]); else out.push([r[0], r[1]]);
+  }
+  return out;
 }
 
 export async function readFileTool(ctx: ToolContext, args: ReadFileArgs): Promise<ToolOutcome> {
@@ -91,6 +110,7 @@ export async function readFileTool(ctx: ToolContext, args: ReadFileArgs): Promis
   const lines = snap.text.split(/\r?\n/);
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
   const total = lines.length;
+  if (args.ranges !== undefined) return readRanges(path, snap.sha256, lines, args.ranges);
   const start = Math.max(1, Math.floor(args.start_line ?? 1));
   const requestedEnd = Math.floor(args.end_line ?? total);
   let end = Math.min(total, requestedEnd, start + READ_FILE_MAX_LINES - 1);
@@ -113,6 +133,40 @@ export async function readFileTool(ctx: ToolContext, args: ReadFileArgs): Promis
   return {
     ok: true,
     text: `path: ${path}\nsha256: ${snap.sha256}\nlines: ${total} (showing ${start}-${end})\n---\n${body}${more}`,
+  };
+}
+
+/** read_file with ranges: one base hash, each merged range numbered, the same line and character caps over all of them. */
+function readRanges(path: string, sha256: string, lines: string[], ranges: ReadonlyArray<{ start_line: number; end_line: number }>): ToolOutcome {
+  if (!Array.isArray(ranges) || !ranges.length || ranges.length > READ_FILE_MAX_RANGES ||
+      ranges.some((r) => !Number.isInteger(r?.start_line) || !Number.isInteger(r?.end_line) || r.start_line < 1 || r.end_line < r.start_line)) {
+    return fail('INVALID_ARGS', `ranges must be 1-${READ_FILE_MAX_RANGES} items of {start_line, end_line} with 1 <= start_line <= end_line`);
+  }
+  const total = lines.length;
+  const merged = mergeRanges(ranges, total);
+  const width = String(total).length;
+  const blocks: string[] = [];
+  const omitted: string[] = [];
+  let shownLines = 0, chars = 0;
+  for (const [a, b] of merged) {
+    const shown: string[] = [];
+    let n = a;
+    for (; n <= b; n++) {
+      const line = `${String(n).padStart(width)}\t${capLine(lines[n - 1]!)}`;
+      if (shownLines >= READ_FILE_MAX_LINES || chars + line.length + 1 > READ_FILE_MAX_CHARS) break;
+      shown.push(line); shownLines++; chars += line.length + 1;
+    }
+    if (shown.length) blocks.push(`--- lines ${a}-${n - 1}\n${shown.join('\n')}`);
+    if (n <= b) omitted.push(`${n}-${b}`);
+  }
+  const beyond = ranges.filter((r) => r.start_line > total).map((r) => `${r.start_line}-${r.end_line}`);
+  const notes = [
+    ...(omitted.length ? [`[not shown (line or character cap): ${omitted.join(', ')}; call read_file again for them]`] : []),
+    ...(beyond.length ? [`[past the end of the file (${total} lines): ${beyond.join(', ')}]`] : []),
+  ];
+  return {
+    ok: true,
+    text: `path: ${path}\nsha256: ${sha256}\nlines: ${total} (showing ${merged.map(([a, b]) => `${a}-${b}`).join(', ') || 'none'})\n${blocks.join('\n')}${notes.length ? '\n' + notes.join('\n') : ''}`,
   };
 }
 

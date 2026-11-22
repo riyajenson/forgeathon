@@ -26,7 +26,8 @@ Merged from `harness/p14-trueforge-depth`, `feature/hybrid-efficiency-native` an
   corrected call, without using the budget; the panel shows the observed result of the last test run next to the model's
   claim, and marks it stale when files changed after it.
 - **Resilience:** a 120 s silence limit while a model request is in flight (45 s otherwise); a turn stopped after writes by a
-  429 or a stall offers **Resume** in the same TrueForge conversation; Stop also kills a sandboxed command that had just started.
+  429 or a stall offers **Resume** in the same TrueForge conversation (after a fallback: the fallback's conversation and
+  model); Stop also kills a sandboxed command that had just started.
 - **TrueForge depth:** compaction at 40k input tokens (once per Task B, its start and end shown); dynamic sub-agents on for
   `forge-coder` (the model decides; "read-only" is an instruction, and a sub-agent's edits still go through the same review;
   Nemotron did not delegate in 6 real runs); opt-in Daytona sandbox, git skill and Code Mode
@@ -36,7 +37,7 @@ Merged from `harness/p14-trueforge-depth`, `feature/hybrid-efficiency-native` an
   reranking (`forge.context.semanticSearch`, off by default; embedding model `onnx-community/all-MiniLM-L6-v2-ONNX`, CPU,
   downloaded from Hugging Face on first use after `scripts/enable-semantic-search.sh`).
 - **Evidence (22 Nov, real models, nvidia-free, one run each):** on the finals code (`0be9897`, the merged build; later commits
-  change docs, tests and tooling only): **Task B 6/6, first diff 100.3 s, 216.8 s, 48 requests**; A 6/6; C 3/3 (401 → OpenRouter);
+  change docs, tests and tooling, plus the Resume-after-fallback fix `c47e092`, tested with the scripted model only): **Task B 6/6, first diff 100.3 s, 216.8 s, 48 requests**; A 6/6; C 3/3 (401 → OpenRouter);
   no 429. On `harness/p14-trueforge-depth` at `5710431`, before the hybrid merge: B 6/6 (63.0 s / 184 s, 45 requests), B with
   a sub-agent request 6/6 (59.9 s / 203 s, 44 requests, no delegation), A 6/6, C 3/3. Details:
   [`docs/writeup/rehearsal.json`](docs/writeup/rehearsal.json), [`docs/STATUS.md`](docs/STATUS.md).
@@ -124,7 +125,7 @@ How one turn runs:
    has a daily cap (50 requests without credit), so it covers throttling and key problems, not an NVIDIA outage.
    **Resume (branch `harness/p14-trueforge-depth`):** when a turn stops on a rate limit (429), for example after
    edits were saved, the panel offers **Resume** after about a minute. Resume sends the same request as a new turn
-   in the same TrueForge conversation, tells the model which files are already changed, and carries over what the
+   in the same TrueForge conversation (if the turn had fallen back, the fallback's conversation, on the fallback model), tells the model which files are already changed, and carries over what the
    interrupted turn used of the command budgets. A turn can be resumed once. The same Resume is offered when the
    model stops responding after the turn changed files: while a model request is in flight the silence limit is
    120 s (`forge.watchdog.modelRequestSec`), 45 s for other waits.
@@ -629,7 +630,7 @@ scripts/dev-mock.sh
 Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
 real model solves the tasks: the scripted model knows the fixed tasks and, in Task B, supplies the file paths
 and edits, so a mock run is no evidence of file discovery. Real-model results: `docs/writeup/rehearsal.json`
-(this build; the first round-1 build: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 204 unit, 25 integration and 17 script tests (`node --test scripts/*.test.mjs`).
+(this build; the first round-1 build: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 205 unit, 26 integration and 17 script tests (`node --test scripts/*.test.mjs`).
 
 | Command | What it proves | Needs |
 |---|---|---|

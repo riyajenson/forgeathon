@@ -99,7 +99,7 @@ fastest with correct streamed tool calls among five NVIDIA models probed once ea
 429; p14 `5710431`: B 6/6 twice (184 s, 203 s); 21 Nov hybrid build: B 6/6 in 3 of 3 runs on `f2f87bb`; tag `round1-submission`: A, B, C. TrueForge resends a 429'd request up to 4
 times; then, before any write, auth errors fall back at once and other errors retry once, then fall back to the `-fallback`
 agent in a fresh TrueForge session. **No retry or fallback after a write:** the turn ends, and a stop after writes (429, or no
-output for 45 s, 120 s while a model request is in flight) offers **Resume** in the same TrueForge conversation. The free
+output for 45 s, 120 s while a model request is in flight) offers **Resume** in the same TrueForge conversation (the fallback's, after a fallback; mock-tested, `c47e092`). The free
 fallback shares NVIDIA's backend: it covers throttling and key problems, not an NVIDIA outage.
 
 ## 6. Scorecard
@@ -118,7 +118,7 @@ fallback shares NVIDIA's backend: it covers throttling and key problems, not an 
 
 Timestamps: current video (first round-1 build); this build's multi-select hunk picker is covered by the native UI tests.
 Automated checks use a **scripted model** that supplies Task B's paths and edits (plumbing, not discovery): `scripts/e2e-mock.sh`
-(26 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in VS Code), 204 unit, 25 integration (TrueForge 0.185.1) and 17 script tests;
+(26 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in VS Code), 205 unit, 26 integration (TrueForge 0.185.1) and 17 script tests;
 responsiveness gates (host blocks ≤ 150 ms, webview renders ≤ 100 ms) pass 3/3 and fail an injected 200 ms stall.
 
 ## 7. Tools used

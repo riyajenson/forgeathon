@@ -31,6 +31,7 @@ type EventBody =
   | { t: 'error'; error: ProtocolError }
   // tests (0.4.6, agent turns): the observed outcome of the last test command (pytest, python -m pytest) that ran in
   // this turn, from its exit code and output, independent of what the model says; 'not_run' when none ran.
+  // editedAfter (0.4.7): files saved (or applied to a buffer) after that test command, so its result may be stale.
   | { t: 'done'; status: 'done' | 'cancelled' | 'error'; summary?: string; usage?: { inputTokens: number; outputTokens: number };
-      tests?: { status: 'passed' | 'failed' | 'not_run'; command?: string; exitCode?: number | null; passed?: number; failed?: number; summary?: string } };
+      tests?: { status: 'passed' | 'failed' | 'not_run'; command?: string; exitCode?: number | null; passed?: number; failed?: number; summary?: string; editedAfter?: string[] } };
 export type HarnessEvent = TurnRef & { version: Version; sequence: number } & EventBody;

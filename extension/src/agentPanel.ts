@@ -26,7 +26,7 @@ export class AgentViewState {
   files: Record<string, {reviews: number; hunks: number; accepted: number; status: string}> = {};
   /** Set when the turn ends: every file the turn changed (then reviewed files left unchanged), on one screen. */
   summary: string[] = [];
-  command?: {command: string; cwd: string; warning?: string};
+  command?: {command: string; cwd: string; warning?: string; facts?: string};
   /** Set when the turn stopped on a rate limit or a stall: Resume is offered from `at` (ms since epoch). */
   resume?: {at: number; files: string[]; reason: 'rate_limited' | 'stalled'};
   /** Proposals in this turn with hunks that delete a whole class or function. */
@@ -76,7 +76,7 @@ export class AgentViewState {
           this.tools.push({id:'auto:' + e.callId, label:'auto-approved: ' + e.command, detail:'cwd: ' + e.cwd});
           break;
         }
-        this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
+        this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, facts: commandFacts(e.unrestricted === true), ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
       case 'command_budget_reached': {
         // Refused by the harness without a prompt: the model was told to stop running commands (or tests).
         const which = e.kind === 'test' ? 'test-command budget' : 'command budget';
@@ -126,6 +126,13 @@ export class AgentViewState {
     return [...all.filter(([, f]) => f.accepted > 0).map(([path, f]) => path + ' | ' + counts(f) + ' | ' + f.status),
       ...all.filter(([, f]) => f.accepted === 0).map(([path, f]) => path + ' | ' + counts(f) + ' | not changed')];
   }
+}
+
+/** Two independent facts for a command approval: the allowlist classification, and the isolation it will run under. */
+export function commandFacts(unrestricted: boolean): string {
+  return (unrestricted ? '\u26a0 Outside the verification allowlist (pytest, python -m pytest, python -c, flask, git status, git diff)'
+    : '\u2713 On the verification allowlist') +
+    ' \u00b7 Sandbox: active (bubblewrap: read-only workspace, no network, no home directory, no API keys; refused if unavailable)';
 }
 
 /** The fallback as one card: which model failed and why, which model took over, and what that means for the workspace. */

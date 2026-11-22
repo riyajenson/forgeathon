@@ -49,7 +49,7 @@
     setHidden('trace', !s.trace);
     setHidden('cmd', !s.command);
     setText('cmdText', s.command
-      ? (s.command.warning ? '⚠ ' + s.command.warning + '\n' : '') + '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' : '');
+      ? (s.command.warning ? '⚠ ' + s.command.warning + '\n' : '') + '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' + (s.command.facts ? '\n' + s.command.facts : '') : '');
     setText('text', s.text);
     setHidden('activity', !s.tools.length);
     list('tools',s.tools.map(t => t.label + ' | ' + t.detail));

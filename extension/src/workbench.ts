@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { EditorPort, ForgeHarness, HarnessEvent, PromptContext, Version } from 'forge-harness';
 import { createFileLister, createStatusLogger } from './editorPort';
-import { AgentPanel } from './agentPanel';
+import { AgentPanel, commandFacts } from './agentPanel';
 import { InlineReview } from './inlineReview';
 import { EditReview } from './review';
 import { TurnController } from './turn';
@@ -75,7 +75,7 @@ export class Workbench implements vscode.Disposable {
     const picker = vscode.window.createQuickPick();
     this.commandPicker = picker;
     picker.title = (warning ? '⚠ Unrestricted command. ' : '') + 'Allow this command in ' + cwd + '?';
-    picker.placeholder = warning || command;
+    picker.placeholder = commandFacts(warning !== undefined);
     picker.items = [{label:'Deny'}, {label:'Allow once', detail:command, ...(warning ? {description: warning} : {})}];
     return new Promise<boolean>(resolve => {
       let allow = false;

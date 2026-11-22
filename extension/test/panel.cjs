@@ -89,6 +89,9 @@ exports.run = async () => {
   assert.match(flagged.command.warning, /without hunk review/, 'the panel carries the unrestricted warning');
   flagged.update({t:'command_request',callId:'y',command:'pytest -q',cwd:'.'});
   assert.equal(flagged.command.warning, undefined, 'listed commands carry no warning');
+  assert.equal(flagged.command.facts, '\u2713 On the verification allowlist \u00b7 Sandbox: active (bubblewrap: read-only workspace, no network, no home directory, no API keys; refused if unavailable)');
+  flagged.update({t:'command_request',callId:'z',command:'ls src',cwd:'.',unrestricted:true,warning:'Unrestricted command'});
+  assert.match(flagged.command.facts, /^\u26a0 Outside the verification allowlist .* \u00b7 Sandbox: active/, 'the two facts are stated separately');
   const auto = new AgentViewState();
   auto.update({t:'command_request',callId:'z',command:'python -m pytest tests/test_x.py -q',cwd:'.',autoApproved:true});
   assert.equal(auto.command, undefined, 'no Allow/Deny prompt for an auto-approved command');

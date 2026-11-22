@@ -64,3 +64,12 @@ test('Resume honours the provider wait hint beyond the 30 s retry cap, up to an 
   assert.equal(retryAfterHintMs('[Model Error] Request failed (500): retry in 5s'), undefined, 'not a rate limit');
   assert.equal(retryDelayMs('[Model Error] Request failed (429): try again in 600s', 2000), 30000, 'the automatic retry stays capped');
 });
+
+test('an explicit transient status wins over auth-like wording; 401/403 and status-less auth wording still fall back at once', () => {
+  assert.equal(classifyTurnError('[Model Error] Request failed (429): Rate limit exceeded for this API key. Add credits to continue.'), 'MODEL_UNAVAILABLE');
+  assert.equal(classifyTurnError('[Model Error] Request failed (503): credential service temporarily unavailable'), 'MODEL_UNAVAILABLE');
+  assert.equal(classifyTurnError('[Model Error] Request failed (408): authentication handshake timed out'), 'MODEL_UNAVAILABLE');
+  assert.equal(classifyTurnError('[Model Error] Request failed (401): Unauthorized'), 'MODEL_AUTH', 'Task C');
+  assert.equal(classifyTurnError('[Model Error] Request failed (403): rate limit on this key'), 'MODEL_AUTH');
+  assert.equal(classifyTurnError('[Model Error] Request failed (400): API key not valid.'), 'MODEL_AUTH');
+});

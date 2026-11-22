@@ -15,8 +15,12 @@ const AUTH_WORDING = /api[ _-]?key|unauthori[sz]ed|authenticat|permission[ _]den
 export function classifyTurnError(message: string | undefined): TurnErrorClass {
   const m = message ?? '';
   if (!m.includes('[Model Error]')) return 'OTHER';
-  if (/\((401|403)\)/.test(m) || AUTH_WORDING.test(m)) return 'MODEL_AUTH';
-  if (m.includes('Cannot connect to API') || /timeout|timed out|overloaded|unavailable/i.test(m) || /\((408|429|5\d\d)\)/.test(m)) return 'MODEL_UNAVAILABLE';
+  // An explicit status decides first: 401/403 are auth (immediate fallback), 408/429/5xx are transient (retry, then
+  // fallback) even when the provider's text mentions keys or credits. Wording decides only without a status.
+  if (/\((401|403)\)/.test(m)) return 'MODEL_AUTH';
+  if (/\((408|429|5\d\d)\)/.test(m)) return 'MODEL_UNAVAILABLE';
+  if (AUTH_WORDING.test(m)) return 'MODEL_AUTH';
+  if (m.includes('Cannot connect to API') || /timeout|timed out|overloaded|unavailable/i.test(m)) return 'MODEL_UNAVAILABLE';
   return 'MODEL_OTHER';
 }
 
@@ -27,10 +31,6 @@ export function isRateLimited(message: string | undefined): boolean {
   return /\(429\)|rate.?limit|too many requests/i.test(message ?? '');
 }
 
-/**
- * Delay before the single retry. Rate-limit errors (429) honour a retry hint in the provider message
- * ("Retry-After: 12", "try again in 1.5s", "retry after 800ms"), else wait 5 s; capped at 30 s.
- */
 /** Longest provider wait honoured for a Resume suggestion. */
 export const MAX_RESUME_HINT_MS = 60 * 60 * 1000;
 
@@ -48,6 +48,10 @@ export function retryAfterHintMs(message: string | undefined): number | undefine
   return Math.min(MAX_RESUME_HINT_MS, Math.ceil(Number(m[1]) * factor));
 }
 
+/**
+ * Delay before the single retry. Rate-limit errors (429) honour a retry hint in the provider message
+ * ("Retry-After: 12", "try again in 1.5s", "retry after 800ms"), else wait 5 s; capped at 30 s.
+ */
 export function retryDelayMs(message: string | undefined, baseMs: number): number {
   if (!isRateLimited(message)) return baseMs;
   const m = /(?:retry[- ]after|try again in|retry in|wait)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|sec|seconds?)?/i.exec(message ?? '');

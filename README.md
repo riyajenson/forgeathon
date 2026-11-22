@@ -1,7 +1,7 @@
 # Forge: a VS Code coding agent on TrueForge
 
-> **Round-1 submission:** the code as submitted is tag [`round1-submission`](../../tree/round1-submission). `main` is
-> frozen (tag `round1-final`); later work lives on branches (current: `harness/p14-trueforge-depth`).
+> **Builds:** the round-1 submission is tag [`round1-submission`](../../tree/round1-submission) (then `round1-final`).
+> This finals build on `main` is tag `round1-extended`: see [What's new](#whats-new-in-the-finals-build).
 
 Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
 Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing ·
@@ -15,6 +15,28 @@ automatically to a model from another provider, in a fresh TrueForge session; an
 command budget. **No keys?** [Run with the mock](#run-with-the-mock-no-keys-from-a-clean-clone).
 
 Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
+
+## What's new in the finals build
+
+Merged from `harness/p14-trueforge-depth`, `feature/hybrid-efficiency-native` and `harness/p15-daytona` (protocol 0.4.8):
+
+- **Review:** a multi-select hunk picker whose diff follows the checked hunks (✓ accept all, ✕ reject all); edits are applied
+  and undone hunk by hunk; hunks that delete a whole class or function are flagged ("Destructive hunks").
+- **Guardrails:** separate per-turn budgets for test runs (3) and other commands (3); `cd … && …` is refused with the
+  corrected call, without using the budget; the panel shows the observed result of the last test run next to the model's
+  claim, and marks it stale when files changed after it.
+- **Resilience:** a 120 s silence limit while a model request is in flight (45 s otherwise); a turn stopped after writes by a
+  429 or a stall offers **Resume** in the same TrueForge conversation; Stop also kills a sandboxed command that had just started.
+- **TrueForge depth:** compaction at 40k input tokens (once per Task B, its start and end shown); dynamic sub-agents on for
+  `forge-coder` (the model decides; Nemotron did not delegate in 6 real runs); opt-in Daytona sandbox, git skill and Code Mode
+  spike (`scripts/daytona-spike.sh`, needs `DAYTONA_API_KEY` in `.env.daytona` with sandbox and snapshot write/delete
+  permissions; files Code Mode reads go to Daytona's cloud; edits stay approval-gated).
+- **Context:** the workspace index is built in the background; 4,000-token default budget; **opt-in** local semantic
+  reranking (`forge.context.semanticSearch`, off by default; embedding model `onnx-community/all-MiniLM-L6-v2-ONNX`, CPU,
+  downloaded from Hugging Face on first use after `scripts/enable-semantic-search.sh`).
+- **Evidence (22 Nov, real models, nvidia-free):** on this build A 6/6, B 6/6 (48 requests, 217 s), C 3/3 (401 → OpenRouter),
+  no 429; on `harness/p14-trueforge-depth` before the merge A, B, C and a sub-agent-prompted B also passed. Details:
+  [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Demo
 
@@ -226,7 +248,10 @@ Which models were used for what:
   Groq `qwen/qwen3.8-27b` (Task C runs and the rehearsal in `docs/STATUS.md`); it is now the spare.
 - **Probed only** (one request each, not used for the tasks): on NVIDIA, Kimi K3.1 Pro, GLM-5.3 Flash, Step-5,
   Mistral Large 4 and MiniMax M3.1 Flash (`docs/STATUS.md`, "Models").
-- **Examples only, never run:** Gemini, Anthropic, OpenAI and `groq/gpt-oss-120b` in `config/models.example.json`.
+- **Examples only, never run:** Gemini, Anthropic, OpenAI, `groq/gpt-oss-120b` and the paid profile's
+  `qwen/qwen3-coder-next` (OpenRouter) in `config/models.example.json`.
+- **Embeddings (opt-in, not used in the demo):** `onnx-community/all-MiniLM-L6-v2-ONNX`, local CPU, for semantic reranking.
+- **Service (opt-in spike, not used in the demo):** Daytona sandboxes through TrueForge's sandbox provider.
 
 ### 5. Start TrueForge (keep this terminal open)
 
@@ -512,7 +537,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `forge.trueforgeUrl` | `http://127.0.0.1:8790` | TrueForge server |
 | `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token, generated each time the server starts) |
 | `forge.context.budgetTokens` | `4000` | Agent-mode context budget |
-| `forge.context.semanticSearch` | `true` | Use cached local semantic scores for a weak keyword/structure shortlist; cache misses warm in the background |
+| `forge.context.semanticSearch` | `false` | Opt-in: use cached local semantic scores for a weak keyword/structure shortlist; cache misses warm in the background (needs `scripts/enable-semantic-search.sh`) |
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
 | `forge.commandBudget.agent` | `3` | Most commands per agent turn, test runs not included |
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
@@ -527,7 +552,7 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 
 Automatic context ranking combines BM25 keyword matches, identifier/symbol and basename matches, path-term rarity, Python and relative JavaScript/TypeScript imports, reverse importers, and nearby test and documentation files. Structural expansion is bounded to one hop. A direct “CLI command” request also prioritizes a matching CLI entry-point file over output/support modules. Explicit selection and `@file`/`@symbol` references stay pinned ahead of automatic results; the active file contributes a compact outline. Automatic context adds query-focused outlines for at most eight files (up to 120 estimated tokens each), then packs relevant chunks or focused excerpts (up to 600 tokens, and no more than 30% of the context budget per excerpt). The report shows the chosen paths, ranking reasons, omitted ranges, and skipped files. This uses a bounded repo map and targeted excerpts instead of spending the budget on whole large files.
 
-When the top five files cover less than 40% of task terms or the top two scores are within 10%, semantic retrieval can rerank the bounded shortlist. It is enabled by default but uses an optional local install. A default install (`npm ci` in `src/harness`) does not include its runtime and stays the same size as before (about 70 MB of `node_modules`). To use semantic reranking, run `scripts/enable-semantic-search.sh` once. It installs the pinned `@huggingface/transformers` runtime into `src/harness/semantic-runtime/` (about 230 MB, CPU only: ONNX Runtime's CUDA/TensorRT download is skipped, and only this platform's binaries are kept). `--remove` deletes it again. Model files and vectors stay outside the workspace. A fully cached semantic result may rank the current request; on a cache miss, Forge returns lexical/structural context immediately and warms semantic vectors in the background for a later request. If the runtime is absent or inference fails, it keeps the lexical/structural result and reports why. Set `forge.context.semanticSearch` to `false` to turn semantic retrieval off.
+When the top five files cover less than 40% of task terms or the top two scores are within 10%, semantic retrieval can rerank the bounded shortlist. It is opt-in (off by default) and uses an optional local install. A default install (`npm ci` in `src/harness`) does not include its runtime and stays the same size as before (about 70 MB of `node_modules`). To use semantic reranking, run `scripts/enable-semantic-search.sh` once. It installs the pinned `@huggingface/transformers` runtime into `src/harness/semantic-runtime/` (about 230 MB, CPU only: ONNX Runtime's CUDA/TensorRT download is skipped, and only this platform's binaries are kept). `--remove` deletes it again. Model files and vectors stay outside the workspace. A fully cached semantic result may rank the current request; on a cache miss, Forge returns lexical/structural context immediately and warms semantic vectors in the background for a later request. If the runtime is absent or inference fails, it keeps the lexical/structural result and reports why. Set `forge.context.semanticSearch` to `true` to turn semantic retrieval on; the embedding model is `onnx-community/all-MiniLM-L6-v2-ONNX` (about 54 MB, downloaded from Hugging Face on first use).
 
 ### Context-selection benchmark
 

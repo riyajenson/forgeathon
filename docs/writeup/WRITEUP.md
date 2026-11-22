@@ -102,7 +102,7 @@ These are directional retrieval measurements, not end-to-end coding success.
 | Service, opt-in spike | Daytona sandbox (TrueForge sandbox provider, skill, Code Mode; `scripts/daytona-spike.sh`) · Daytona cloud | no | free credit |
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
-**switching models is a config change plus rerunning setup** (or `scripts/use-models.sh <profile>`). Nemotron-3 Ultra was the
+**switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`). Nemotron-3 Ultra was the
 fastest with correct streamed tool calls among five NVIDIA models probed once each. **Real-model evidence:** the first round-1
 build passed A, B, C (tag `round1-submission`); 21 Nov build (`docs/writeup/rehearsal.json`): Task B 6/6 in 3 of 3 runs, then
 A, B, C; this finals build, 22 Nov: A, B, C passed (B: 48 requests, 217 s, no 429). TrueForge resends a 429'd request up to 4

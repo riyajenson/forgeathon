@@ -710,6 +710,23 @@ test('resume after a fallback: a write on the fallback then a 429 is resumable i
   assert.ok(tf2.inputs[0]!.startsWith('Resumed turn:'));
 });
 
+test('resume: the write barrier covers the resumed turn: an error before its own first write is not retried and does not fall back', async () => {
+  for (const [message, resumable] of [['[Model Error] Request failed (500): upstream exploded', false], ['[Model Error] Request failed (429): Too Many Requests', true]] as const) {
+    const tf = new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-1' }), done('error', message)) });
+    const run = makeRun(tf, { resumeFrom: { turnId: 't-before', reason: 'rate_limited', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 } });
+    await run.start();
+    const evs = events(run);
+    assert.equal(tf.inputs.length, 1, `${message}: one attempt only (no retry)`);
+    assert.equal(evs.filter((e) => e.t === 'fallback').length, 0, `${message}: no fallback`);
+    const err = evs.find((e) => e.t === 'error') as Extract<HarnessEvent, { t: 'error' }>;
+    assert.match(err.error.message, /the interrupted turn this one resumes already changed the workspace/);
+    assert.equal(err.error.workspaceEffect, 'changed');
+    assert.equal(err.error.retryable, false);
+    assert.equal(evs.some((e) => e.t === 'resumable'), resumable, `${message}: Resume offered again only for a rate limit`);
+    if (resumable) assert.deepEqual(run.resumable?.changedFiles, [FILE]);
+  }
+});
+
 test('resume: no resumable event for failures that are not rate limits', async () => {
   for (const message of ['[Model Error] Request failed (401): Unauthorized', '[Model Error] Request failed (503): overloaded', 'iteration limit reached']) {
     const run = makeRun(editThenError(message));

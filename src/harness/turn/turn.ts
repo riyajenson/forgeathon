@@ -380,9 +380,12 @@ export class TurnRun {
         return void emit({ t: 'done', status: 'error', ...this.testsField() });
       }
       const wrote = scope.writes > 0;
+      // The write barrier covers the whole task: a resumed turn whose interrupted turn changed files counts as written,
+      // so it is never retried or handed to the fallback automatically (Resume stays the only way on).
+      const lineageWrote = (this.deps.resumeFrom?.changedFiles.length ?? 0) > 0;
       // An approved write or command that had not finished counts as a write: no retry, no fallback.
-      const mayHaveWritten = wrote || unexecuted > 0 || !settled;
-      const effect: ProtocolError['workspaceEffect'] = !settled ? 'unknown' : wrote ? 'changed' : 'unchanged';
+      const mayHaveWritten = wrote || lineageWrote || unexecuted > 0 || !settled;
+      const effect: ProtocolError['workspaceEffect'] = !settled ? 'unknown' : wrote || lineageWrote ? 'changed' : 'unchanged';
 
       if (result.status === 'done' || (result.status === 'cancelled' && this.cancelRequested)) {
         this.record(agent, model, runtimeSessionId, result, attemptStart);
@@ -438,6 +441,7 @@ export class TurnRun {
       const code: ProtocolError['code'] = cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';
       const prefix = cls === 'MODEL_AUTH' ? 'Model authentication failed' : cls === 'MODEL_UNAVAILABLE' ? 'Model unavailable' : cls === 'MODEL_OTHER' ? 'Model error' : 'Turn failed';
       const note = wrote ? ' (no retry or fallback: this turn already changed the workspace)'
+        : lineageWrote ? ' (no retry or fallback: the interrupted turn this one resumes already changed the workspace)'
         : mayHaveWritten ? ' (no retry or fallback: an approved change from this attempt had not finished)'
           : onFallback ? ' (fallback model also failed)' : '';
       return this.fail({ code, message: `${prefix}: ${message}${note}`, retryable: cls === 'MODEL_UNAVAILABLE' && !mayHaveWritten, workspaceEffect: effect });

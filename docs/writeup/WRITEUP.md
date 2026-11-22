@@ -36,7 +36,7 @@ agent-mode compaction fires at 40k input tokens (inline: 60k), its start and fin
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
 the prompt): a per-turn command budget (3 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached"), approved commands run in **bubblewrap** (only the
+without prompting and the panel shows "command budget reached"; `cd … && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (only the
 workspace and system runtime, read-only; no home directory; private `/tmp`, no network, no provider keys; output
 redacted for key patterns; refused if unavailable), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
@@ -63,25 +63,43 @@ every tool call of the failed attempt has settled and no approved edit or comman
 
 ## 4. How context is selected
 
-1. **Pinned first:** the selection, `@symbol:Name` (resolved through a Python def/class index),
-   `@file:path`, and an outline of the active file.
-2. **Automatic retrieval:** the workspace is chunked (functions/classes with decorators, doc sections),
-   identifiers are split (`routes_command` → `routes`, `command`), and chunks are scored with BM25 plus
-   symbol-name, decorator and file-name boosts. A file's score sums its best chunks and term coverage; code
-   is weighted above docs and tests, which then rise through **neighbour bonuses**: `src/x.py` →
-   `tests/test_x.py`, docs that mention the module or its symbols, and one-hop imports.
-3. **Packing within the budget** (default 8,000 tokens, chars/4): outlines of the top files, then whole
-   functions and sections; anything that does not fit is listed as **skipped** with the reason.
-4. The **context report** (items, ranks, plain-English reasons, used/budget, skipped) is shown in the agent
-   panel; the agent can ask for more with `gather_context`.
-5. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
+1. **Pinned first:** the user's selection, `@symbol:Name` (resolved through the symbol index),
+   `@file:path`, then an outline of the active file. Automatic results cannot displace these choices.
+2. **Automatic retrieval:** the workspace is chunked into functions, classes, and doc sections. BM25 searches
+   split identifiers and prose; symbol, decorator, exact path, and inverse-document-frequency path terms add
+   evidence when filenames matter more than body wording. Code, tests, and docs are joined by bounded
+   one-hop imports, reverse importers, test names, and symbol mentions.
+3. **Budgeted packing** (default 4,000 estimated tokens, chars/4; resent with every request): up to eight
+   query-focused outlines use at most 120 estimated tokens each. Relevant chunks are packed next; a large
+   chunk is represented by a focused excerpt capped at 600 tokens and 30% of the total budget. The excerpt
+   marks omitted lines and tells the agent to read the full file before editing. Everything else appears in
+   **skipped** with a reason. The ranked paths and reasons are visible in the context report.
+4. The agent can request more context with `gather_context`; explicit choices, automatic selections, ranks,
+   token use, omissions, and skipped paths remain inspectable.
+5. **Selective semantic ranking** (`forge.context.semanticSearch`, on by default): only weak lexical/structural
+   shortlists are considered. Fully cached semantic scores can reorder that shortlist synchronously. On a cache
+   miss, Forge returns the lexical/structural result immediately and warms vectors in the background for later
+   requests. The optional CPU runtime is installed with `scripts/enable-semantic-search.sh` (~230 MB); when it
+   is absent or fails, the context report explains why the deterministic fallback was used.
+6. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
    `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
    files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; binary files are
    refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name.
 
-Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s): for Task B, `src/flask/cli.py` ranks first and the
-packed context (7,456 of 8,000 tokens, 28 items, 7 skipped) includes `tests/test_cli.py` and `docs/cli.rst`.
-Four unrelated Flask tasks also rank their source file first (regression test in the repo).
+The workspace index is built in the background at start-up and reused. On the 13-task Forge + pinned Flask 3.1.3
+retrieval benchmark, the default 4,000-token budget improved recall@5 from 0.699 to 0.801 and MRR from 0.660 to
+0.733 versus the prior single-run baseline. Relevant-file density changed from 0.461 to 0.492 files per 1,000
+packed tokens. The number of labeled expected files present in packed context rose from 9/30 to 25/30. Median
+assembly changed from 4.55 ms to 4.04 ms, an 11.1% reduction. Thus this same-budget run improves
+retrieval and file coverage but does not improve every metric, and it does not establish a 50% gain across the
+board.
+
+At 8,000 tokens, the older single run measured recall@5 0.699, MRR 0.660, density 0.244, and 203.16 ms median
+assembly with the old cold/missing-semantic wait. Three current runs measured 0.801, 0.733, 0.315, and a median
+4.06 ms, respectively. Most of the latency difference comes from returning immediately on semantic cache
+misses. The semantic ranking quality was deliberately not included in these comparisons: benchmark inference
+was disabled to isolate lexical and structural retrieval. These results are directional; the baseline was a
+single run and source-index contents changed as the implementation evolved.
 
 ## 5. Model setup
 
@@ -95,9 +113,9 @@ Models are configured only in TrueForge, from `config/models.json` via `node scr
 **switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`, one of three named profiles). The NVIDIA catalog offered no Qwen3 Coder or
 DeepSeek model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
 fastest with correct streamed tool calls. Gemini,
-Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** Task B
-passed on real models in earlier rehearsals (133–259 s); the result of A, B and C on the submitted commit is in
-`docs/writeup/rehearsal.json`. TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
+Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** the first round-1 build passed
+A, B, C (tag `round1-submission`). This updated build, 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
+runs (92–124 s, 25–27 requests, ~1M input tokens), then A, B, C passed on the final commit (B: 30 requests, 244 s). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
 turn. Then the harness's policy, for failures before any write: authentication errors fall back immediately;
 unreachable/timeouts/5xx/429 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and
 then fall back to the `-fallback` agent, which **starts a fresh TrueForge session**. There is **no retry or
@@ -111,19 +129,23 @@ watchdog stops a turn that streams nothing for 45 s.
 | Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
 |---|---|---|
 | Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | 00:03 |
-| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests) | 00:52 |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests); this build: 3 of 3 runs and the rehearsal | 00:52 |
 | Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
 | Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
 | Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
-| Resilience (10) | [video] Task C: invalid primary key → fallback banner → Reject All → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
+| Resilience (10) | [video] Task C: invalid primary key → fallback banner → ✕ (reject all hunks) → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
 | TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | 03:05 |
 | Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
 | PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
+Timestamps: current video, recorded on the first round-1 build (Accept All / Reject All prompt); this build
+uses a multi-select hunk picker (✓ / ✕), covered by the native UI tests.
+
 Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
 discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
-VS Code), 134 unit and 19 integration tests against TrueForge 0.185.1; no extension-host block over 150 ms in
-measured scripted B runs (peaks 95–139 ms).
+VS Code), 163 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
+renders ≤ 100 ms) passed 3/3 suite runs (peaks 49–106 ms) and fails an injected 200 ms stall; one earlier run had
+an unexplained 605 ms block in VS Code's `postMessage`.
 
 ## 7. Tools used
 
@@ -157,7 +179,6 @@ Nemotron never delegated, even when asked. Opt-in Daytona Code Mode sends files 
 to Daytona's cloud; edits stay in review. One workspace
 folder; tested on WSL only.
 
-**With another month:** embeddings and language-server symbols for retrieval, evaluated across repositories and
+**With another month:** faster embeddings and language-server symbols for retrieval, evaluated across repositories and
 models; per-hunk CodeLens; conversation history across fallback; read confinement for
-`run_command`; cost-aware model routing; Marketplace packaging. A hybrid-efficiency branch (multi-select picker, optional semantic
-search) is in progress on feature/hybrid-efficiency-native; not part of this submission.
+`run_command`; cost-aware model routing; Marketplace packaging.

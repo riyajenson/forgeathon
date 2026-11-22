@@ -6,6 +6,7 @@ import {
   type Request, type Response, type ReviewDecision, type SessionId, type SessionStatus, type TurnRef, type TurnRequest,
 } from './contract-types';
 import { ScopeRegistry } from './mcp/scope';
+import { buildIndex, disposeContextResources } from './context';
 import { canonicalJson } from './review/canonical';
 import { startMcpServer, type RunningMcpServer } from './mcp/server';
 import { isTrueForgeUnreachable, safeMessage } from './trueforge/errors';
@@ -20,6 +21,8 @@ export interface HarnessOptions {
   mcpPort?: number;
   /** TrueForge agent names. Defaults forge-inline / forge-coder; fallbacks are `${name}-fallback`. */
   agents?: { inline?: string; agent?: string };
+  /** Index the workspace in the background once started (default true), so the first turn's context is warm. */
+  prewarmIndex?: boolean;
   /** How long cancel waits for TrueForge to confirm. Default 5000 ms. */
   cancelTimeoutMs?: number;
   /** No TrueForge events for this long while running → cancel and treat as model unavailable. Default 45000 ms.
@@ -32,7 +35,8 @@ export interface HarnessOptions {
   settleMs?: number;
   /** Delay before the single retry of an unavailable model. Default 2000 ms. */
   retryDelayMs?: number;
-  /** Token budget for automatically assembled context in agent mode (setting forge.context.budgetTokens). Default 8000. */
+  /** Token budget for automatically assembled context in agent mode (setting forge.context.budgetTokens). Default 4000:
+   * every agent request resends it, and on Task B 4000 still holds the outlines of cli.py, cli.rst and test_cli.py. */
   contextBudgetTokens?: number;
   /** Name of the MCP connector registered in TrueForge. Default "vscode". */
   connectorName?: string;
@@ -124,6 +128,11 @@ class ForgeHarnessImpl implements ForgeHarness {
     this.sdk = sdk;
     this.client = client;
     bridge.log('info', `forge-harness ready: TrueForge ${this.url}, MCP ${this.mcp.url}`);
+    // Index the workspace in the background (in slices) while the user types, so the first turn starts from a
+    // warm analysis cache instead of tokenizing every file right after Send. Local only; nothing leaves the machine.
+    if (this.options.prewarmIndex !== false) {
+      void buildIndex(bridge).catch((e) => bridge.log('warn', `background indexing failed: ${safeMessage((e as Error).message)}`));
+    }
   }
 
   async createSession(req: Request<{ workspaceRoot: string }>): Promise<Response<SessionStatus>> {
@@ -230,7 +239,7 @@ class ForgeHarnessImpl implements ForgeHarness {
     if (bad) return refuse(req, bad);
     const run = this.sessions.get(req.body?.sessionId)?.turns.get(req.body?.turnId);
     if (!run) return refuse(req, err('invalid', 'unknown turn'));
-    return reply(req, await run.cancel());
+    return reply(req, run.requestCancel());
   }
 
   async getSessionStatus(req: Request<{ sessionId: SessionId }>): Promise<Response<SessionStatus>> {
@@ -255,6 +264,7 @@ class ForgeHarnessImpl implements ForgeHarness {
   async dispose(): Promise<void> {
     const running = [...this.sessions.values()].map((s) => s.active).filter((r): r is TurnRun => !!r && !r.done);
     await Promise.allSettled(running.map((r) => r.cancel()));
+    await disposeContextResources();
     this.scopes.closeAll();
     await this.mcp?.close();
     this.mcp = undefined;

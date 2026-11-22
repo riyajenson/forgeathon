@@ -1,4 +1,4 @@
-// In-memory index of the workspace: chunks with term counts, a Python symbol table and import edges.
+// In-memory index of the workspace: chunks with term counts, symbols and local import edges.
 import type { EditorPort } from '../mcp/port';
 import { chunkFile, type Chunk } from './chunks';
 import { isIndexable, LIST_LIMIT, MAX_INDEX_CHARS, visibleFiles } from './files';
@@ -6,6 +6,9 @@ import { countTerms, normalise, splitIdentifier, terms } from './text';
 
 export interface IndexedChunk extends Chunk {
   id: number;
+  sha256: string;
+  /** Shared with the hash-keyed FileAnalysis; this cache is memory-only. */
+  semanticVectors: Map<string, readonly number[]>;
   tf: Map<string, number>;
   length: number;
   /** Normalised parts of the chunk's own name. */
@@ -19,7 +22,7 @@ export interface IndexedFile {
   chunks: IndexedChunk[];
   /** Dotted Python module name, e.g. flask.cli. */
   module?: string;
-  /** Workspace paths this file imports (Python, resolved inside the workspace). */
+  /** Workspace paths this file imports (resolved inside the workspace). */
   imports: string[];
   pathTerms: Set<string>;
 }
@@ -59,6 +62,54 @@ function parseImports(text: string, module: string | undefined, isPackage: boole
   return out;
 }
 
+const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+function localImportSpecifiers(text: string): string[] {
+  const found: string[] = [];
+  const patterns = [
+    /\b(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s*)?['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const specifier = match[1];
+      if (specifier?.startsWith('./') || specifier?.startsWith('../')) found.push(specifier);
+    }
+  }
+  return found;
+}
+
+function relativeWorkspacePath(sourcePath: string, specifier: string): string | undefined {
+  const segments = sourcePath.split('/').slice(0, -1);
+  for (const segment of specifier.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (!segments.length) return undefined;
+      segments.pop();
+    } else segments.push(segment);
+  }
+  return segments.length ? segments.join('/') : undefined;
+}
+
+function resolveSourceImport(sourcePath: string, specifier: string, files: ReadonlyMap<string, IndexedFile>): string | undefined {
+  const base = relativeWorkspacePath(sourcePath, specifier);
+  if (!base) return undefined;
+  const candidates = [base];
+  const extension = base.slice(base.lastIndexOf('/') + 1).match(/\.[^.]+$/)?.[0];
+  if (extension && SOURCE_EXTENSIONS.includes(extension)) {
+    // TypeScript projects commonly write runtime imports with a .js suffix while the source is .ts.
+    if (['.js', '.jsx', '.mjs', '.cjs'].includes(extension)) {
+      const stem = base.slice(0, -extension.length);
+      for (const ext of ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']) candidates.push(stem + ext);
+    }
+  } else if (!extension) {
+    for (const ext of SOURCE_EXTENSIONS) candidates.push(base + ext);
+  }
+  for (const ext of SOURCE_EXTENSIONS) candidates.push(`${base}/index${ext}`);
+  return candidates.find((candidate) => files.has(candidate));
+}
+
 async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
@@ -72,7 +123,12 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => 
 }
 
 /** Per-file analysis, reused while the file's sha256 is unchanged (indexing runs for every context request). */
-interface FileAnalysis { sha256: string; chunks: Array<Omit<IndexedChunk, 'id'>>; pathTerms: Set<string> }
+interface FileAnalysis {
+  sha256: string;
+  chunks: Array<Omit<IndexedChunk, 'id' | 'sha256' | 'semanticVectors'>>;
+  pathTerms: Set<string>;
+  semanticVectors: Map<string, readonly number[]>;
+}
 const analyses = new WeakMap<EditorPort, Map<string, FileAnalysis>>();
 
 /** Yields to the event loop after ~SLICE_MS of synchronous work: the harness shares the editor's thread. */
@@ -89,7 +145,21 @@ function slicer() {
 /** Origin's name for the inventory limit; the shared listing limit (LIST_LIMIT, 20000) applies. */
 export const INDEX_FILE_LIMIT = LIST_LIMIT;
 
+/** The index build in progress per port: a second caller waits for it and then reuses its analyses. */
+const building = new WeakMap<EditorPort, Promise<unknown>>();
+
 export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
+  const previous = building.get(port);
+  const current = (async () => {
+    if (previous) await previous.catch(() => undefined);
+    return buildIndexNow(port);
+  })();
+  building.set(port, current);
+  try { return await current; }
+  finally { if (building.get(port) === current) building.delete(port); }
+}
+
+async function buildIndexNow(port: EditorPort): Promise<WorkspaceIndex> {
   const visible = await visibleFiles(port);
   const skipped: Array<{ path: string; reason: string }> = [];
   if (visible.truncated) skipped.push({ path: '.', reason: `workspace listing stopped at ${LIST_LIMIT} files; retrieval coverage may be incomplete (files after that were not considered)` });
@@ -116,13 +186,20 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
     const mod = moduleName(p);
     let analysis = cache.get(p);
     if (analysis?.sha256 !== snap.sha256) {
+      // One large file (thousands of lines) takes tens of ms to tokenize: yield between its chunks as well.
+      const raw = chunkFile(p, snap.text);
+      await yieldNow();
+      const analysed: FileAnalysis['chunks'] = [];
+      for (const c of raw) {
+        const tokens = terms(`${c.text}`);
+        analysed.push({ ...c, tf: countTerms(tokens), length: tokens.length, nameParts: c.name ? splitIdentifier(c.name).map(normalise) : [] });
+        await yieldNow();
+      }
       analysis = {
         sha256: snap.sha256,
+        semanticVectors: new Map(),
         pathTerms: new Set(p.split('/').flatMap((seg) => splitIdentifier(seg.replace(/\.[^.]+$/, '')).map(normalise))),
-        chunks: chunkFile(p, snap.text).map((c) => {
-          const tokens = terms(`${c.text}`);
-          return { ...c, tf: countTerms(tokens), length: tokens.length, nameParts: c.name ? splitIdentifier(c.name).map(normalise) : [] };
-        }),
+        chunks: analysed,
       };
       cache.set(p, analysis);
     }
@@ -132,7 +209,7 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
       pathTerms: analysis.pathTerms,
     };
     for (const c of analysis.chunks) {
-      const ic: IndexedChunk = { ...c, id: chunks.length };
+      const ic: IndexedChunk = { ...c, id: chunks.length, sha256: analysis.sha256, semanticVectors: analysis.semanticVectors };
       chunks.push(ic);
       file.chunks.push(ic);
     }
@@ -143,11 +220,17 @@ export async function buildIndex(port: EditorPort): Promise<WorkspaceIndex> {
   const modules = new Map<string, string>();
   for (const f of files.values()) if (f.module) modules.set(f.module, f.path);
   for (const f of files.values()) {
-    if (!f.module) continue;
     const targets = new Set<string>();
-    for (const imp of parseImports(f.text, f.module, f.path.endsWith('__init__.py'))) {
-      const hit = modules.get(imp) ?? modules.get(imp.split('.').slice(0, -1).join('.'));
-      if (hit && hit !== f.path) targets.add(hit);
+    if (f.module) {
+      for (const imp of parseImports(f.text, f.module, f.path.endsWith('__init__.py'))) {
+        const hit = modules.get(imp) ?? modules.get(imp.split('.').slice(0, -1).join('.'));
+        if (hit && hit !== f.path) targets.add(hit);
+      }
+    } else {
+      for (const specifier of localImportSpecifiers(f.text)) {
+        const hit = resolveSourceImport(f.path, specifier, files);
+        if (hit && hit !== f.path) targets.add(hit);
+      }
     }
     f.imports = [...targets];
     await yieldNow();

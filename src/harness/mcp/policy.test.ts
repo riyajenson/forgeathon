@@ -39,7 +39,7 @@ before(async () => {
 after(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
 const req = (over: Partial<TurnRequest>): TurnRequest => ({
-  protocolVersion: '0.4.4', sessionId: 's', turnId: 't', mode: 'agent', instruction: 'fix the handler', ...over,
+  protocolVersion: '0.4.5', sessionId: 's', turnId: 't', mode: 'agent', instruction: 'fix the handler', ...over,
 } as unknown as TurnRequest);
 
 test('@file mentions and references of credentials files are refused with a visible reason', async () => {

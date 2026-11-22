@@ -141,6 +141,9 @@ export function isTestCommand(command: string): boolean {
   return TEST_COMMANDS.some((re) => re.test(bare));
 }
 
+/** How long Stop waits for bwrap to report its sandbox process before signalling anyway (it takes a few ms). */
+const SANDBOX_REPORT_WAIT_MS = 1000;
+
 export const UNRESTRICTED_WARNING = 'Unrestricted command: not on the verification list. It runs write-protected and offline, but can read any file you can and run any program.';
 
 function capped(buf: string): string {
@@ -209,21 +212,54 @@ export async function runCommandTool(ctx: ToolContext, args: RunCommandArgs, run
     const exitCode = await new Promise<number | null>((resolve) => {
       // Only these variables reach the command: no credentials, no editor IPC handles.
       const base = venv ? venvBase(venv) : undefined;
-      const child = runtime.spawn('bwrap', protectedArgs(cwd, args.command, root, [...(venv ? [venv] : []), ...(base ? [base] : [])], hiddenInWorkspace()), {
+      // fd 3 is bwrap's --info-fd: once the sandbox process exists, bwrap writes {"child-pid": N} there and closes it.
+      // With --new-session that process leads its own session and process group, and it arms --die-with-parent only
+      // after it starts. A Stop within a few ms of spawn used to kill bwrap's group alone, before that: the sandbox
+      // kept running the command and holding stdout/stderr, so the turn waited for the command to end. Stop
+      // therefore waits (bounded) until bwrap has reported the sandbox or closed fd 3, then kills both.
+      const child = runtime.spawn('bwrap', ['--info-fd', '3', ...protectedArgs(cwd, args.command, root, [...(venv ? [venv] : []), ...(base ? [base] : [])], hiddenInWorkspace())], {
         cwd, env: { PATH: env['PATH'], VIRTUAL_ENV: venv, HOME: '/tmp', TMPDIR: '/tmp',
           LANG: env['LANG'] ?? 'C.UTF-8', PYTHONDONTWRITEBYTECODE: '1', PYTEST_ADDOPTS: '-p no:cacheprovider' },
-        detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true, stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
       });
+      const info = (child.stdio as readonly unknown[] | undefined)?.[3] as NodeJS.ReadableStream | null | undefined;
+      let sandboxPid: number | undefined;
+      let infoClosed = !info;
+      let infoText = '';
       const killGroup = (signal: NodeJS.Signals) => { try { if (child.pid) process.kill(-child.pid, signal); } catch { /* already gone */ } };
+      // The sandbox process is the init of its own pid namespace: it ignores SIGTERM sent from outside, and right
+      // after it starts it may not have its own process group yet. It gets SIGKILL by pid, as --die-with-parent
+      // would give it, which ends everything in the sandbox.
+      const killSandbox = () => { try { if (sandboxPid) process.kill(sandboxPid, 'SIGKILL'); } catch { /* already gone */ } };
       let escalation: NodeJS.Timeout | undefined;
-      const stop = () => { if (escalation) return; killGroup('SIGTERM'); escalation = setTimeout(() => killGroup('SIGKILL'), 2000); escalation.unref(); };
+      let deferred: NodeJS.Timeout | undefined;
+      const stop = () => {
+        if (escalation) return;
+        if (!infoClosed && sandboxPid === undefined) {
+          deferred ??= setTimeout(() => { infoClosed = true; stop(); }, SANDBOX_REPORT_WAIT_MS);
+          return;
+        }
+        clearTimeout(deferred);
+        killGroup('SIGTERM');
+        killSandbox();
+        escalation = setTimeout(() => killGroup('SIGKILL'), 2000); escalation.unref();
+      };
+      const stopWaiting = () => deferred !== undefined && !escalation;
+      info?.on('data', (c: Buffer) => {
+        if (sandboxPid !== undefined) return;
+        infoText += c.toString('utf8');
+        const m = /"child-pid"\s*:\s*(\d+)/.exec(infoText);
+        if (m) { sandboxPid = Number(m[1]); if (stopWaiting()) stop(); }
+      });
+      info?.on('close', () => { infoClosed = true; if (stopWaiting()) stop(); });
+      info?.on('error', () => { /* reported by close */ });
       const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutSec * 1000);
       controller.signal.addEventListener('abort', stop, { once: true });
       if (controller.signal.aborted) stop();
       child.stdout!.on('data', (c: Buffer) => { if (stdout.length < COMMAND_OUTPUT_CAP * 4) stdout += c.toString('utf8'); });
       child.stderr!.on('data', (c: Buffer) => { if (stderr.length < COMMAND_OUTPUT_CAP * 4) stderr += c.toString('utf8'); });
       child.on('error', (e) => { stderr += `\n${e.message}`; });
-      child.on('close', (code) => { clearTimeout(timer); clearTimeout(escalation); controller.signal.removeEventListener('abort', stop); resolve(code); });
+      child.on('close', (code) => { clearTimeout(timer); clearTimeout(escalation); clearTimeout(deferred); controller.signal.removeEventListener('abort', stop); resolve(code); });
     });
     // Provider keys and credential shapes never leave this function: not to the model, the turn, the panel or logs.
     const secrets = runtime.secrets ? runtime.secrets() : secretValues();

@@ -1,4 +1,4 @@
-// The shared contracts (contracts/, protocol 0.4.0) as seen by the harness. All contract shapes come from
+// The shared contracts (contracts/, protocol 0.4.8; see contracts/protocol.ts) as seen by the harness. All contract shapes come from
 // contracts/; this file only adds two derived helper types the contracts do not export.
 import type { EditorBridge } from '../../contracts/edits';
 import type { HarnessEvent } from '../../contracts/events';

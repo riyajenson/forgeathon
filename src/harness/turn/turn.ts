@@ -82,7 +82,7 @@ export type ReviewSubmitResult = { ok: true } | { ok: false; error: ProtocolErro
 const FALLBACK_SUFFIX = '-fallback';
 
 /** Default most run_command calls per turn (presented to the user or auto-approved), by mode. */
-export const DEFAULT_COMMAND_BUDGET = { agent: 3, inline: 1 } as const;
+export const DEFAULT_COMMAND_BUDGET = { agent: 5, inline: 1 } as const;
 
 export function commandBudgetOf(req: Pick<TurnRequest, 'mode' | 'commandBudget'>): number {
   const b = req.commandBudget;
@@ -103,6 +103,12 @@ export function testCommandBudgetOf(req: Pick<TurnRequest, 'mode' | 'testCommand
 export const TEST_BUDGET_EXHAUSTED =
   'test-command budget for this turn exhausted; do not run more tests, finish edits and summarize with the last test result';
 
+/** `cd <dir> && <command>` or `cd <dir>; <command>`: commands already start in the workspace root, and run_command takes a cwd. */
+export function cdPrefix(command: string): { dir: string; rest: string } | undefined {
+  const m = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*(\S[\s\S]*)$/.exec(command);
+  return m ? { dir: m[1]!.replace(/^["']|["']$/g, ''), rest: m[2]!.trim() } : undefined;
+}
+
 /** propose_edit refusals caused by the shape of the arguments rather than by the file's content. */
 const ARGUMENT_ERROR_CODES = new Set(['INVALID_ARGS', 'INVALID_EDIT', 'OUTSIDE_WORKSPACE']);
 
@@ -118,6 +124,7 @@ export class TurnRun {
   private attempt: Attempt | undefined;
   private scope: SessionScope | undefined;
   private cancelRequested = false;
+  private readonly contextAbort = new AbortController();
   private cancelPromise: Promise<CancelStatus> | undefined;
   private wakeRetry: (() => void) | undefined;
   private readonly waiters = new Map<string, ReviewWaiter>();
@@ -228,6 +235,7 @@ export class TurnRun {
     if (this.done) return Promise.resolve('already_terminal');
     this.cancelPromise ??= (async () => {
       this.cancelRequested = true;
+      this.contextAbort.abort();
       this.buffer.emit({ t: 'status', state: 'cancelling' });
       this.scope?.cancel();
       for (const w of this.waiters.values()) w.resolve('cancelled');
@@ -254,13 +262,30 @@ export class TurnRun {
     return this.cancelPromise;
   }
 
+  /** Start cancellation synchronously and acknowledge without waiting for stream confirmation. */
+  requestCancel(): CancelStatus {
+    if (this.done) return 'already_terminal';
+    void this.cancel().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.deps.port.log('error', `cancellation request failed: ${message}`);
+    });
+    // The caller must keep consuming the event stream. Only its terminal `done` event confirms the outcome.
+    return 'unconfirmed';
+  }
+
   // ------------------------------------------------------------------ main loop
 
   private async run(): Promise<void> {
     const emit = this.buffer.emit.bind(this.buffer);
     emit({ t: 'turn_started' });
     emit({ t: 'status', state: 'starting' });
-    const built = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens);
+    const built = await buildTurnInput(this.req, this.deps.port, this.deps.contextBudgetTokens, this.contextAbort.signal, {
+      onSemanticProgress: (event) => {
+        const progress = typeof event.progress === 'number' ? ` (${Math.floor(event.progress)}%)` : '';
+        const file = event.file ?? event.name;
+        emit({ t: 'status', state: 'starting', detail: `Loading local context model${progress}${file ? ` · ${file}` : ''}` });
+      },
+    });
     const { context } = built;
     const input = this.deps.resumeFrom ? `${resumeNote(this.deps.resumeFrom)}\n${built.input}` : built.input;
     if (this.deps.resumeFrom) {
@@ -299,6 +324,7 @@ export class TurnRun {
 
       const scope = this.deps.scopes.open(runtimeSessionId);
       scope.resetForTurn();
+      scope.semanticSearch = this.req.semanticSearch === true;
       scope.onApplied = (result) => {
         if (result.status === 'saved' || result.status === 'buffer_applied' || result.status === 'save_failed') {
           this.changedFiles.add(result.path);
@@ -520,6 +546,13 @@ export class TurnRun {
         const command = typeof a.command === 'string' ? a.command : '';
         const cwd = typeof a.cwd === 'string' && a.cwd ? a.cwd : '.';
         if (!command) { deny('INVALID_ARGS: command must be a non-empty string'); continue; }
+        const cd = cdPrefix(command);
+        if (cd) {
+          // A shape the instructions rule out; refused before the budget and the user see it, with the corrected call.
+          const where = cd.dir === '.' || cd.dir.startsWith('/') || cd.dir.startsWith('~') ? '' : ` and cwd "${cd.dir}"`;
+          deny(`COMMAND_SHAPE: commands already start in the workspace root; drop the cd prefix and call run_command with command "${cd.rest}"${where}. Nothing was run and the command budget was not used.`);
+          continue;
+        }
         // Hard per-turn limits, enforced here rather than trusted to the instructions: refused without a prompt.
         // Test runs and other commands have separate budgets, so a debug command cannot use up the test reruns.
         const test = isTestCommand(command);

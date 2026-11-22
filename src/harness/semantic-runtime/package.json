@@ -1,0 +1,9 @@
+{
+  "name": "forge-semantic-runtime",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Optional runtime for forge.context.semanticSearch (local MiniLM embeddings on the CPU). Not installed by default: run scripts/enable-semantic-search.sh.",
+  "dependencies": {
+    "@huggingface/transformers": "4.3.2"
+  }
+}

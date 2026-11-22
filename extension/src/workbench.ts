@@ -128,7 +128,9 @@ export class Workbench implements vscode.Disposable {
       // Test runs (pytest, python -m pytest) have their own budget (default 3 agent, 1 inline).
       const tests = cfg.get<unknown>(`testCommandBudget.${mode}`);
       const testCommandBudget = typeof tests === 'number' && Number.isInteger(tests) && tests >= 0 ? tests : undefined;
-      await controller.run(mode, instruction, context, {autoApproveSafeCommands, ...(commandBudget === undefined ? {} : {commandBudget}),
+      // Opt-in local semantic reranking (hybrid branch); off unless the setting is true.
+      const semanticSearch = cfg.get<unknown>('context.semanticSearch', false) === true;
+      await controller.run(mode, instruction, context, {autoApproveSafeCommands, semanticSearch, ...(commandBudget === undefined ? {} : {commandBudget}),
         ...(testCommandBudget === undefined ? {} : {testCommandBudget}), ...(resumeOf === undefined ? {} : {resumeOf})});
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Turn failed';

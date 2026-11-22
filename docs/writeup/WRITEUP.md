@@ -152,8 +152,8 @@ Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
 9–15 requests/min, Groq's free tier (7,000 tokens/min) cannot take B's ~11k-token requests, and the OpenRouter
 fallback allows 50 requests/day without credit (one B takes 40–70). Compaction fires once in Task B, after the first edit; the
-model then re-reads the ranges it still has to edit. TrueForge's dynamic sub-agents work end to end on the mock, but
-Nemotron never delegated in 4 real runs, even when told to delegate first; they are on by default. Opt-in Daytona Code Mode sends files it reads
+model then re-reads the ranges it still has to edit. Sub-agents are on by default; in 6 real runs
+Nemotron never delegated, even when asked. Opt-in Daytona Code Mode sends files it reads
 to Daytona's cloud; edits stay in review. One workspace
 folder; tested on WSL only.
 

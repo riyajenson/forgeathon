@@ -103,7 +103,7 @@ without a warning (`python -c …`, `flask …`; 0–3). Deny any ⚠ Unrestrict
 | Each diff | **✓** (*Accept all hunks*) in the picker's title bar |
 | Command prompt **without** a warning (`python -c …`, `flask …`) | **Allow once** |
 | Command prompt with **⚠ Unrestricted** (pipes, here-docs, `python -m flask …`) | **Deny**. The refusal goes back to the model; tested on the mock (`e2e-mock.sh --deny-unrestricted`) |
-| "auto-approved: …" and "command budget reached (5 per turn): …" lines | Nothing; they are shown only |
+| "auto-approved: …" and "command budget reached (3 per turn): …" or "test-command budget reached (3 per turn): …" lines | Nothing; they are shown only |
 
 Earlier runs (before the sandbox merge; STATUS.md): first diff 39–53 s, whole turn 133–259 s, 6–12 reviews.
 

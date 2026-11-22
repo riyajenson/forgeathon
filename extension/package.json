@@ -83,7 +83,7 @@
         "forge.context.semanticSearch": {
           "type": "boolean",
           "default": false,
-          "description": "Opt-in local semantic reranking (CPU) when keyword/structure evidence is weak: waits up to 200 ms, then keeps the lexical/structural shortlist. Needs scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the embedding model onnx-community/all-MiniLM-L6-v2-ONNX (about 54 MB) downloads from Hugging Face on first use. Off by default."
+          "description": "Opt-in local semantic reranking (CPU), used only when keyword/structure evidence is weak. Fully cached scores rerank at once; on a cache miss the turn uses the lexical/structural shortlist immediately and vectors warm in the background for later turns. Needs scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the embedding model onnx-community/all-MiniLM-L6-v2-ONNX (about 54 MB) downloads from Hugging Face on first use. Off by default."
         },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",

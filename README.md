@@ -4,7 +4,7 @@
 > This finals build on `main` is tag `round1-extended-3` (research sprint merged; earlier builds: `round1-extended-2`, `round1-extended`): see [What's new](#whats-new-in-the-finals-build).
 
 Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
-Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing ·
+Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/163YQqkbmGEb9qOgsLrB36MQ8vokfUd3f/view?usp=sharing (3:58) ·
 Write-up: [`docs/writeup/WRITEUP.pdf`](docs/writeup/WRITEUP.pdf)
 
 Forge is a VS Code-native coding agent whose entire agent loop (sessions, turns, model calls and tool
@@ -73,7 +73,7 @@ Merged from `harness/p14-trueforge-depth`, `feature/hybrid-efficiency-native` an
 
 ## Demo
 
-- **Video:** https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing
+- **Video:** https://drive.google.com/file/d/163YQqkbmGEb9qOgsLrB36MQ8vokfUd3f/view?usp=sharing (3:58)
 - **Screenshots:** pending; the shots needed are listed in [`docs/images/README.md`](docs/images/README.md).
   <!-- ![Inline diff review](docs/images/inline-review.png) -->
   <!-- ![Agent panel with the Context block](docs/images/agent-panel-context.png) -->

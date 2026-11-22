@@ -104,19 +104,19 @@ fallback shares NVIDIA's backend: it covers throttling and key problems, not an 
 
 ## 6. Scorecard
 
-| Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
+| Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video (3:58) |
 |---|---|---|
-| Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | 00:03 |
-| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] sprint build `255107f`: B 8/8 checks in 1 of 1 run (3 files, 8 reviews, 60 requests); `0be9897`: 1 of 1; `f2f87bb`: 3 of 3 | 00:52 |
-| Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
-| Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
-| Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
-| Resilience (10) | [video] Task C: invalid primary key → fallback banner → ✕ (reject all hunks) → `git status` clean. [harness rehearsal] C passed (401 → OpenRouter) | 03:17 |
-| TrueForge depth (10) | [video] Session view of Task B: the turn, its tool calls and approvals (deferred tools via `call_tool` only if the model uses them) | 03:05 |
-| Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
-| PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
+| Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] one hunk saves exactly that hunk | 0:02 (diff/accept/saved 0:10–0:19) |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`. [harness rehearsal] `255107f`: B 8/8 (60 requests) | 0:32; diff 0:51, compaction 1:04, test 1:10, docs 1:16, approval 1:21, tests 1:33, masked JSON 1:45 |
+| Streaming / cancellation (10) | [video] streamed text, context and tool calls; Stop settles with nothing applied. [native test] Stop during a review or command → nothing applied; after an approved edit → that edit is saved first | Stop 2:24 |
+| Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items; Attach… pins a symbol and a file | 0:45; pinned context 3:50 |
+| Diff safety (10) | [video] hunk picker; unrestricted command denied, hunk-level accept, destructive warning. [native test] undo after each hunk | 2:37; denied 2:38, hunk-level 2:48, warning 3:02 |
+| Resilience (10) | [video] Task C: invalid key (401) → fallback banner → ✕ (reject all) → `git status` clean | 1:54; fallback 1:58, clean 2:15 |
+| TrueForge depth (10) | [video] "Open TrueForge session" in the panel; Task B's session (turn, tool calls, approvals); Daytona; deferred `find_symbol` via `call_tool` | session 3:28–3:42; Daytona 3:13; `find_symbol` 3:42 |
+| Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 0:02 · B 0:32 · C 1:54 |
+| PDF write-up (15) | This document; [video] the final 3 s show the repository link | 3:55 |
 
-Timestamps: current video (first round-1 build); this build's multi-select hunk picker is covered by the native UI tests.
+Timestamps: final video (3:58), recorded on this build with the real model.
 Automated checks use a **scripted model** that supplies Task B's paths and edits (plumbing, not discovery): `scripts/e2e-mock.sh`
 (26 checks), `scripts/test-extension-e2e.sh` (A, B, Undo this turn, Stop, C in VS Code), 219 unit, 26 integration (TrueForge 0.185.1) and 19 script tests;
 responsiveness gates (host blocks ≤ 150 ms, webview renders ≤ 100 ms) pass 3/3 and fail an injected 200 ms stall.

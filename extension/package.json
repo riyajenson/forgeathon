@@ -47,6 +47,10 @@
       {
         "command": "forgeathon.newConversation",
         "title": "Forge-a-thon: New Agent Conversation"
+      },
+      {
+        "command": "forgeathon.showSettings",
+        "title": "Forge-a-thon: Show Effective Settings"
       }
     ],
     "keybindings": [

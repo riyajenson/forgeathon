@@ -224,6 +224,18 @@ exports.run = async () => {
     assert.equal(resumed, 1, 'a different resumable turn is not resumed by an older schedule');
     p.dispose();
   }
+  // Effective settings: every contributed forge.* key, its value and source, and when a change applies.
+  {
+    const { effectiveSettings, forgeSettingKeys } = require('../out/settingsView');
+    const keys = forgeSettingKeys();
+    assert.ok(keys.includes('context.maskSecrets') && keys.includes('commandBudget.agent') && keys.length >= 11, keys.join(','));
+    const rows = effectiveSettings(vscode.workspace.getConfiguration('forge'), keys);
+    const row = (k) => rows.find((r) => r.key === 'forge.' + k);
+    assert.deepEqual(row('context.maskSecrets'), {key:'forge.context.maskSecrets',value:'true',source:'default',applies:'after reconnect (reload the window)'});
+    assert.equal(row('commandBudget.agent').applies, 'next turn');
+    const ext = vscode.extensions.all.find((e) => e.packageJSON?.name === 'forgeathon-editor');
+    assert.ok(ext.packageJSON.contributes.commands.some((c) => c.command === 'forgeathon.showSettings'), 'the command is contributed');
+  }
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

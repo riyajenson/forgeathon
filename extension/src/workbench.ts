@@ -18,7 +18,7 @@ export class Workbench implements vscode.Disposable {
     send: text => this.run('agent', text, this.activeContext()),
     stop: () => this.stop(), review: () => this.choose(),
     command: allow => this.commandAnswer?.(allow),
-    resume: () => this.resume(), attach: () => pickAttachments(this.folder)
+    resume: () => this.resume(), attach: () => pickAttachments(this.folder), undoTurn: () => this.undoTurn()
   });
   private controller?: TurnController;
   private harness?: ForgeHarness;
@@ -66,6 +66,15 @@ export class Workbench implements vscode.Disposable {
   async undo() {
     const id = this.edits.latestUndoId();
     if (id) await this.edits.undo(id); else this.notice('No reviewed edit to undo.');
+  }
+  /** Undo every reviewed change of the latest turn (all files, newest first), or none if one was edited since. */
+  async undoTurn() {
+    if (this.panel.state.busy) { this.notice('Stop the running turn before undoing its changes.'); return; }
+    const r = await this.edits.undoTurn();
+    if (!r.undone.length && !r.error) { this.notice('No reviewed changes to undo.'); return; }
+    const files = (l: string[]) => l.length + (l.length === 1 ? ' file' : ' files') + ' (' + l.join(', ') + ')';
+    this.notice(r.error ? 'Undo stopped: ' + r.error + '.' + (r.undone.length ? ' Undone: ' + files(r.undone) + '.' : '') + ' Still changed: ' + files(r.remaining) + '.'
+      : 'Undid the turn\'s reviewed changes: ' + files(r.undone) + '.');
   }
   async stop() {
     this.pendingRun?.abort();

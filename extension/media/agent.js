@@ -5,7 +5,7 @@
   const setText = (id, value) => { const node = el(id); if (node.textContent !== value) node.textContent = value; };
   const setHidden = (id, value) => { const node = el(id); if (node.hidden !== value) node.hidden = value; };
   const setDisabled = (id, value) => { const node = el(id); if (node.disabled !== value) node.disabled = value; };
-  for (const id of ['stop','review','trace','allow','deny','resume','autoResume','attach']) el(id).onclick = () => vscode.postMessage({action:id});
+  for (const id of ['stop','review','trace','allow','deny','resume','autoResume','attach','undoTurn']) el(id).onclick = () => vscode.postMessage({action:id});
   let resumeTimer;
   // Resume is enabled once the suggested wait after a rate limit has passed; the label counts down until then.
   const showResume = s => {
@@ -81,6 +81,7 @@
     setHidden('turnFiles', !s.summary.length);
     setText('turnFilesTitle', 'Files changed in this turn: ' + s.summary.filter(line => !line.endsWith('| not changed')).length);
     list('summary',s.summary);
+    setHidden('undoTurn', s.busy || !s.outcome || !s.summary.some(line => line.endsWith('| saved')));
     setHidden('changes', !s.edits.length);
     list('edits',s.edits);
     const domUpdatedAt = performance.now();

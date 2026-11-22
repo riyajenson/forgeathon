@@ -51,6 +51,10 @@
       {
         "command": "forgeathon.showSettings",
         "title": "Forge-a-thon: Show Effective Settings"
+      },
+      {
+        "command": "forgeathon.undoTurn",
+        "title": "Forge-a-thon: Undo All Reviewed Changes of Last Turn"
       }
     ],
     "keybindings": [

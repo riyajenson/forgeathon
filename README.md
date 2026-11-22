@@ -43,6 +43,9 @@ end-to-end, VS Code suites); protocol unchanged (0.4.8):
   `forge.tools.multiRangeRead` (several line ranges per `read_file`), `forge.tools.editHints` (a no-match `propose_edit`
   refusal names the closest current text).
 - **Benchmark:** corrected labels (`--labels=corrected`; a gold path that never existed); original labels kept.
+- **Evidence (real models, nvidia-free, one paced run each, 22 Nov 19:05–19:13 IST, `255107f`):** A 6/6 (first diff
+  13.9 s, 3 requests), **B 8/8 checks (first diff 46.5 s, 421.8 s, 60 requests, two compactions)**, C 3/3 (401 → OpenRouter,
+  4 requests); no 429. One run cannot show a speed-up or slow-down against the earlier B (216.8 s, 48 requests).
 
 Merged from `harness/p14-trueforge-depth`, `feature/hybrid-efficiency-native` and `harness/p15-daytona` (protocol 0.4.8):
 

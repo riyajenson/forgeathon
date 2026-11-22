@@ -94,8 +94,8 @@ These are directional retrieval measurements, not end-to-end coding success.
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
 **switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`). Nemotron-3 Ultra was the
 fastest with correct streamed tool calls among five NVIDIA models probed once each. **Real-model evidence** (one run each unless stated;
-`docs/writeup/rehearsal.json`): finals code `0be9897`: **Task B 6/6, first diff 100.3 s, 216.8 s, 48 requests**, A 6/6, C 3/3, no
-429; p14 `5710431`: B 6/6 twice (184 s, 203 s); 21 Nov hybrid build: B 6/6 in 3 of 3 runs on `f2f87bb`; tag `round1-submission`: A, B, C. TrueForge resends a 429'd request up to 4
+`docs/writeup/rehearsal.json`): sprint build `255107f`: **Task B 8/8 checks, first diff 46.5 s, 421.8 s, 60 requests**, A 6/6, C 3/3
+(401 → OpenRouter), no 429; finals code `0be9897`: B 6/6 (216.8 s, 48 requests); p14 `5710431`: B 6/6 twice; `f2f87bb`: B 3 of 3. TrueForge resends a 429'd request up to 4
 times; then, before any write, auth errors fall back at once and other errors retry once (an explicit 408/429/5xx status
 counts as transient whatever the wording), then fall back to the `-fallback` agent in a fresh TrueForge session. **No retry or fallback after a write:** the turn ends, and a stop after writes (429, or no
 output for 45 s, 120 s while a model request is in flight) offers **Resume** in the same TrueForge conversation (the fallback's, after a fallback), after the provider's wait hint, or
@@ -107,7 +107,7 @@ fallback shares NVIDIA's backend: it covers throttling and key problems, not an 
 | Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
 |---|---|---|
 | Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | 00:03 |
-| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] finals code `0be9897`: B 6/6 in 1 of 1 run (3 files, 6 reviews, 48 requests); `f2f87bb`: 3 of 3 | 00:52 |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] sprint build `255107f`: B 8/8 checks in 1 of 1 run (3 files, 8 reviews, 60 requests); `0be9897`: 1 of 1; `f2f87bb`: 3 of 3 | 00:52 |
 | Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
 | Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
 | Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |

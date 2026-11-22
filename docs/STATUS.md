@@ -1,5 +1,19 @@
 # Project status
 
+**2026-11-22, research sprint (`sprint/round1-research` from `28e8f9e`, protocol 0.4.8 unchanged):** 49 recommendations triaged from six
+research reports (`docs/ROUND1-SPRINT.md`); 21 in: verification verdict, write barrier across Resume, source secret masking
+(default on; 0 hits in Flask 3.1.3), fallback recovery card, grouped context report, long wait hints for Resume,
+status-first error classification, three-state Stop, command-prompt facts, Resume when ready, Attach picker, Show Effective
+Settings, Undo this turn's changes, inline stale-selection refusal, collapsible tool timeline, "tested saved files only",
+destructive-hunk links, corrected benchmark labels; opt-in and off: multi-range `read_file`, `propose_edit` no-match hints.
+Agent-loop or model-facing: write barrier, masking, classification (and the two opt-in settings when enabled). Offline on
+`8f40a93`: 219 unit, 19 script tests, 26 integration, e2e-mock 26/26 in both modes, UI suites, UI e2e (A, B, Undo this
+turn, Stop ×2, C), live, responsiveness 3/3 (injected 200 ms stall fails by design); CI green on `385b037` (unit, extension,
+mock). **Real smoke on `255107f`** (fresh TrueForge :8792, nvidia-free, meter 3 s minimum interval, one run each, no
+retries): A 6/6 (13.9 s first diff, 15.6 s, 3 requests), B 8/8 (46.5 s, 421.8 s, 60 requests, 2 compactions, model hit
+and fixed the `timedelta` JSON error itself), C 3/3 (401 → OpenRouter, 9.9 s, 4 requests); 0 × 429.
+`docs/writeup/rehearsal.json`; records `~/forge-review/finals/sprint-real-1905/`.
+
 **2026-11-22, finals build (`harness/p14-trueforge-depth` → `main`, tag `round1-extended`, protocol 0.4.8):**
 - **Daytona (p15, merged):** `scripts/daytona-spike.sh` 8/8 with a key that has sandbox and snapshot write/delete permissions
   (environment ready in 10–20 s, whole spike 27–35 s; sandboxes 1 vCPU / 1 GiB / 3 GiB, auto-stopped after ~5 min, deleted 10 min

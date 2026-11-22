@@ -136,6 +136,31 @@ exports.run = async () => {
   const inlineDone = new AgentViewState();
   inlineDone.update({t:'done',status:'done'});
   assert.equal(inlineDone.tests, '', 'no test line without done.tests (inline turns)');
+  // Verification verdict at turn end: a turn that changed code is "Verified" only when the last observed test run passed
+  // after the last edit; failing, stale or missing tests end as "Unverified" with the reason, and a contradicting reply is named.
+  const changedTurn = (events) => {
+    const v = new AgentViewState();
+    v.update({t:'review_request',proposal:{path:'src/flask/cli.py',hunks:[{hunkId:'0'}]}});
+    v.update({t:'edit_applied',result:{path:'src/flask/cli.py',status:'saved',appliedHunkIds:['0']}});
+    for (const e of events) v.update(e);
+    return v;
+  };
+  const failedRun = {status:'failed',command:'python -m pytest tests/test_cli.py -q',exitCode:1,failed:2,summary:'2 failed, 55 passed, 3 skipped in 0.14s'};
+  const vFailed = changedTurn([{t:'text',delta:'Done. All tests pass.'},{t:'done',status:'done',summary:'Done. All tests pass.',tests:failedRun}]);
+  assert.equal(vFailed.verification, '\u26a0 Unverified: the last test run failed (2 failed, 55 passed, 3 skipped in 0.14s). The reply says the tests pass; the observed result does not back that. Review the changes and run the tests before relying on them.');
+  const vStale = changedTurn([{t:'done',status:'done',tests:{...failedRun,editedAfter:['tests/test_cli.py']}}]);
+  assert.match(vStale.verification, /^\u26a0 Unverified: tests\/test_cli\.py changed after the last test run\./);
+  const vNone = changedTurn([{t:'done',status:'done',tests:{status:'not_run'}}]);
+  assert.match(vNone.verification, /^\u26a0 Unverified: code changed, but no test ran in this turn\./);
+  const vOk = changedTurn([{t:'text',delta:'57 passed'},{t:'done',status:'done',tests:{status:'passed',command:'pytest -q',exitCode:0,passed:57,summary:'57 passed in 0.2s'}}]);
+  assert.equal(vOk.verification, '\u2713 Verified: the last test run passed after the last edit');
+  const vNoChange = new AgentViewState();
+  vNoChange.update({t:'done',status:'done',tests:{status:'not_run'}});
+  assert.equal(vNoChange.verification, '', 'nothing changed: no verdict');
+  const vError = changedTurn([{t:'done',status:'error',tests:failedRun}]);
+  assert.equal(vError.verification, '', 'an error or cancelled turn already says so; no verdict');
+  const vInline = changedTurn([{t:'done',status:'done'}]);
+  assert.equal(vInline.verification, '', 'inline turns carry no test outcome: no verdict');
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

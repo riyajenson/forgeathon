@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { ContextReport, HarnessEvent } from 'forge-harness';
 import { proposalWarnings } from './destructive';
+import { verificationLine } from './verification';
 
 export class AgentViewState {
   text = '';
@@ -29,6 +30,8 @@ export class AgentViewState {
   warnings: string[] = [];
   /** Set when an agent turn ends: the observed outcome of its last test command, shown next to the model's summary. */
   tests = '';
+  /** Set when an agent turn that changed files ends: Verified, or Unverified with the reason (see verification.ts). */
+  verification = '';
   private compaction?: {id: string; label: string; detail: string};
 
   update(e: HarnessEvent) {
@@ -102,6 +105,7 @@ export class AgentViewState {
         if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
         this.summary = this.fileSummary();
         this.tests = testsLine(e.tests);
+        this.verification = verificationLine(e.status, e.tests, this.summary.filter((l) => !l.endsWith('| not changed')).length, this.text);
         break;
     }
   }
@@ -215,11 +219,11 @@ export class AgentPanel implements vscode.Disposable {
 <style nonce="${nonce}">body{font:var(--vscode-font-size) var(--vscode-font-family);color:var(--vscode-foreground);padding:12px}
 textarea{display:block;box-sizing:border-box;width:100%;margin:6px 0;padding:8px;color:var(--vscode-input-foreground);background:var(--vscode-input-background)}
 button{color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;padding:5px 10px;cursor:pointer}
-button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere} #banner{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:8px}
+button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere} #banner,#verification.unverified{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:8px} #verification.verified{border-left:3px solid var(--vscode-testing-iconPassed,var(--vscode-charts-green));padding-left:8px}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><p id="verification" role="alert" hidden></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
 <section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></section>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>

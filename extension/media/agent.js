@@ -59,6 +59,9 @@
       setHidden('skippedTitle', !s.context.skipped.length);
       list('skipped',s.context.skipped.map(i => i.path + ' | ' + i.reason + ' | ' + i.estimatedTokens + ' tokens'));
     }
+    setHidden('verification', !s.verification);
+    setText('verification', s.verification || '');
+    { const node = el('verification'), cls = (s.verification || '').startsWith('\u26a0') ? 'unverified' : 'verified'; if (node.className !== cls) node.className = cls; }
     setHidden('tests', !s.tests);
     setText('tests', s.tests || '');
     setHidden('warnings', !s.warnings.length);

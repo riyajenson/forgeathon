@@ -11,6 +11,7 @@ export async function configuredHarness() {
     trueforgeUrl: url.toString().replace(/\/$/, ''),
     mcpPort: cfg.get('mcpPort', 47615),
     contextBudgetTokens: cfg.get('context.budgetTokens', 4000),
+    maskSourceSecrets: cfg.get('context.maskSecrets', true),
     modelWatchdogMs: Math.max(30, cfg.get('watchdog.modelRequestSec', 120)) * 1000
   }) };
 }

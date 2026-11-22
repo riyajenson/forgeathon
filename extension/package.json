@@ -85,6 +85,12 @@
           "default": false,
           "description": "Opt-in local semantic reranking (CPU), used only when keyword/structure evidence is weak. Fully cached scores rerank at once; on a cache miss the turn uses the lexical/structural shortlist immediately and vectors warm in the background for later turns. Needs scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the embedding model onnx-community/all-MiniLM-L6-v2-ONNX (about 54 MB) downloads from Hugging Face on first use. Off by default."
         },
+        "forge.context.maskSecrets": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Mask high-confidence credential shapes (provider API keys such as nvapi-/sk-/gsk_/ghp_, cloud tokens, PEM private keys, and the provider keys this process knows) in workspace text before it is sent to the model or stored in TrueForge traces: read_file, search results, gather_context, the selection and the context pack. Ordinary code such as SECRET_KEY = \"dev\" is sent unchanged. Applies after reconnect."
+        },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",
           "default": false,

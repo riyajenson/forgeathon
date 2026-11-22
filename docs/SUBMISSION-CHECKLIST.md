@@ -1,4 +1,4 @@
-# Submission checklist (Round 1 — extended deadline 22 Nov 2026, 23:59 IST; finals build, tag `round1-extended`)
+# Submission checklist (Round 1 — extended deadline 22 Nov 2026, 23:59 IST; finals build, tag `round1-extended-3`)
 
 Source: the official 13-page competition PDF (held by the team; not in this repository). The requirements below are
 copied from it so this checklist stands alone. Status: ✅ done and

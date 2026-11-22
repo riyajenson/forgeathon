@@ -1,7 +1,7 @@
 # Forge: a VS Code coding agent on TrueForge
 
 > **Builds:** the round-1 submission is tag [`round1-submission`](../../tree/round1-submission) (then `round1-final`).
-> This finals build on `main` is tag `round1-extended`: see [What's new](#whats-new-in-the-finals-build).
+> This finals build on `main` is tag `round1-extended-3` (research sprint merged; earlier builds: `round1-extended-2`, `round1-extended`): see [What's new](#whats-new-in-the-finals-build).
 
 Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
 Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing ·

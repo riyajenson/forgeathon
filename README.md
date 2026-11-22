@@ -1,5 +1,8 @@
 # Forge: a VS Code coding agent on TrueForge
 
+> **Round-1 submission:** the code as submitted is tag [`round1-submission`](../../tree/round1-submission); `main` is
+> frozen at it. Later work lives on branches (current: `harness/p14-trueforge-depth`).
+
 Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
 Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing ·
 Write-up: [`docs/writeup/WRITEUP.pdf`](docs/writeup/WRITEUP.pdf)
@@ -442,9 +445,14 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
     (without shell operators) is marked **⚠ Unrestricted** with a warning.
   - The working directory must resolve inside the workspace.
   - **Protected execution (bubblewrap):**
-    - The host filesystem, including the checkout, is mounted read-only, so a command cannot edit source
-      files. `/tmp` and `/run` are private and disposable, and there is no network.
+    - Only the system runtime (`/usr`, `/etc`, `/lib*`), the workspace and its virtualenv (with the Python it
+      was made from) are mounted, all read-only, so a command cannot edit source files. Your home directory
+      (`~/.ssh`, `~/.forge-keys.env`, other checkouts) does not exist inside, and this repo's `config/models.json`
+      reads as empty. `/tmp` is private and disposable, and there is no network.
     - Only `PATH`, `VIRTUAL_ENV` and the locale are passed: no API keys.
+    - Command output is redacted before it reaches the model, the panel or the logs: provider keys known to the
+      harness (credential-named variables and `apiKeyEnv` in the model config) and common key shapes (`nvapi-`,
+      `sk-…`, `gsk_`, `ghp_`, AWS keys, PEM private keys, `Bearer …`, `API_KEY=…`) become `[REDACTED]`.
     - Without bubblewrap the command is refused; there is no unprotected fallback.
   - A timeout (default 120 s, maximum 600 s) and an output cap apply.
   - As a backstop, `git status` before and after reports any file that still changed "outside review".
@@ -472,8 +480,8 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
   - The rule is name-based: a secret stored in an ordinary source file is not detected.
 - **Unsettled tools:** if a tool is still running when the model's turn ends, the session stays occupied until
   it finishes (Stop or the command timeout ends it). No retry, fallback or next turn starts in the meantime.
-- **Residual risk:** the sandbox is write protection, not a confidentiality boundary. A command you approve
-  can still read any file you can read, and use CPU and memory until its timeout. Commands that need the
+- **Residual risk:** a command you approve can still read every file in the workspace (secrets kept there are
+  only caught by the output redaction, which is pattern-based) and use CPU and memory until its timeout. Commands that need the
   network or need to write into the checkout (installs, builds into the tree) fail by design. Deny commands
   you do not understand.
 

@@ -1,0 +1,67 @@
+# Offline checks on every push and pull request: unit tests, integration against a local TrueForge with the
+# scripted model, and the mock end-to-end tasks on Flask 3.1.3. No secrets and no real model are used.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # src/harness engines: node >=22.14
+          cache: npm
+          cache-dependency-path: src/harness/package-lock.json
+      - name: Sandbox prerequisites (bubblewrap with unprivileged user namespaces)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: npm ci
+        working-directory: src/harness
+      - name: Contracts typecheck
+        run: src/harness/node_modules/.bin/tsc -p contracts/tsconfig.json
+      - name: Unit tests
+        run: npm test
+        working-directory: src/harness
+      - name: Script tests
+        run: node --test scripts/submission-readiness.test.mjs scripts/use-models.test.mjs scripts/preflight-model.test.mjs
+
+  mock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TRUEFORGE_PORT: '8790'
+      TF_URL: http://127.0.0.1:8790
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/harness/package-lock.json
+      - name: Sandbox prerequisites (bubblewrap with unprivileged user namespaces)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: npm ci
+        working-directory: src/harness
+      - name: Integration (scripted model, local TrueForge 0.185.1)
+        run: |
+          scripts/dev-mock.sh --background
+          trap 'scripts/dev-mock.sh stop' EXIT
+          npm --prefix src/harness run test:integration
+      - name: Flask 3.1.3 checkout for the end-to-end tasks
+        run: git clone -q --depth 1 --branch 3.1.3 https://github.com/pallets/flask "$HOME/flask-demo"
+      - name: Mock end-to-end (Tasks A, B, G, R, C)
+        run: scripts/e2e-mock.sh
+      - name: Mock end-to-end with safe commands auto-approved
+        run: scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted

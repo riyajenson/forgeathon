@@ -6,25 +6,37 @@ const {EditReview,hash}=require('../out/review');
 const {InlineReview}=require('../out/inlineReview');
 const {TurnController}=require('../out/turn');
 function fakeQuickPick(){
-  const accepts=[], hides=[], buttons=[];
+  const accepts=[], hides=[], buttons=[], selectionChanges=[];
   return {
     items:[], selectedItems:[], buttons:[], canSelectMany:false, acceptCount:0, hidden:false, disposed:false,
     onDidAccept(fn){accepts.push(fn);return {dispose(){}};},
     onDidHide(fn){hides.push(fn);return {dispose(){}};},
     onDidTriggerButton(fn){buttons.push(fn);return {dispose(){}};},
+    onDidChangeSelection(fn){selectionChanges.push(fn);return {dispose(){}};},
     show(){this.hidden=false;},
     hide(){if(this.hidden)return;this.hidden=true;for(const fn of hides)fn();},
     dispose(){this.disposed=true;},
     accept(){this.acceptCount++;for(const fn of accepts)fn();},
+    changeSelection(items){this.selectedItems=items;for(const fn of selectionChanges)fn(items);},
     triggerButton(button){for(const fn of buttons)fn(button);}
   };
 }
 async function directPickerChecks(){
   const originalCreateQuickPick=vscode.window.createQuickPick;
   const originalExecuteCommand=vscode.commands.executeCommand;
-  const picks=[];
+  const originalRegisterProvider=vscode.workspace.registerTextDocumentContentProvider;
+  const originalOnDidClose=vscode.workspace.onDidCloseTextDocument;
+  const picks=[], diffCalls=[], providers=[], closeHandlers=[];
   vscode.window.createQuickPick=()=>{const picker=fakeQuickPick();picks.push(picker);return picker;};
-  vscode.commands.executeCommand=async(command,...args)=>command==='vscode.diff'?undefined:originalExecuteCommand.call(vscode.commands,command,...args);
+  vscode.workspace.registerTextDocumentContentProvider=(scheme,provider)=>{
+    providers.push({scheme,provider});
+    return {dispose(){}};
+  };
+  vscode.workspace.onDidCloseTextDocument=handler=>{closeHandlers.push(handler);return {dispose(){}};};
+  vscode.commands.executeCommand=async(command,...args)=>{
+    if(command==='vscode.diff'){diffCalls.push(args);return undefined;}
+    return originalExecuteCommand.call(vscode.commands,command,...args);
+  };
   const original='one\ntwo\n', proposed='ONE\nTWO\n';
   const proposal={sessionId:'s',turnId:'t',callId:'c',proposalId:'direct',kind:'proposal',path:'src/task.py',
     originalText:original,proposedText:proposed,hunks:[
@@ -38,14 +50,42 @@ async function directPickerChecks(){
     const review=new InlineReview(edits), pending=review.request(proposal);
     await settle();
     const picker=picks[0];
+    const provider=providers.at(-1).provider, right=diffCalls[0][1];
+    assert.equal(typeof provider.onDidChange,'function','the open diff provider can signal live content changes');
+    const changedUris=[];
+    provider.onDidChange(uri=>changedUris.push(uri.toString()));
+    assert.equal(provider.provideTextDocumentContent(right),proposed,'the initial preview contains all proposed hunks');
     assert.equal(picks.length,1,'choosing one hunk opens one picker instead of the former action menu plus hunk picker');
     assert.equal(picker.canSelectMany,true,'each hunk has its own checkbox');
+    assert.match(picker.title,/diff updates as you check them/i,'the live editor preview is discoverable');
     assert.deepEqual(picker.items.map(item=>item.hunkId),['a','b'],'the direct picker exposes every hunk');
     assert.deepEqual(picker.buttons.map(button=>button.tooltip),['Accept all hunks','Reject all hunks']);
-    picker.selectedItems=[picker.items[1]];
+    const expected=['one\ntwo\n','ONE\ntwo\n','one\nTWO\n','ONE\nTWO\n'];
+    let exactLivePreviews=0, exactBaselinePreviews=0;
+    for(let mask=0;mask<4;mask++){
+      const selected=picker.items.filter((_item,index)=>mask&(1<<index));
+      const changesBefore=changedUris.length;
+      picker.changeSelection(selected);
+      const shown=provider.provideTextDocumentContent(right);
+      assert.equal(shown,expected[mask],
+        `the editor diff previews exactly the accepted subset for selection mask ${mask}`);
+      assert.equal(changedUris.length,changesBefore+1,'each changed selection invalidates the open proposed-side document');
+      if(shown===expected[mask])exactLivePreviews++;
+      if(proposed===expected[mask])exactBaselinePreviews++;
+      assert.equal(changedUris.at(-1),right.toString(),'updates target the open proposed-side URI');
+    }
+    assert.equal(exactLivePreviews,4);
+    assert.equal(exactBaselinePreviews,1);
+    console.log(`Inline diff preview-state benchmark: baseline ${exactBaselinePreviews}/4 (25%); live ${exactLivePreviews}/4 (100%); 4x coverage`);
+    picker.changeSelection([picker.items[1]]);
     picker.accept();
     assert.equal(picker.acceptCount,1,'a partial decision needs one submit action');
     assert.deepEqual((await pending).hunks,{a:'reject',b:'accept'});
+    assert.equal(provider.provideTextDocumentContent(right),'one\nTWO\n',
+      'the accepted-subset preview remains available while its diff tab is open');
+    closeHandlers.at(-1)({uri:diffCalls[0][0]});
+    closeHandlers.at(-1)({uri:right});
+    assert.equal(provider.provideTextDocumentContent(right),'','closed preview documents release their cached contents');
     assert.equal(picker.hidden,true,'accept closes the picker');
     assert.equal(review.open,false);
     assert.deepEqual(decisions[0],{a:'reject',b:'accept'});
@@ -56,6 +96,9 @@ async function directPickerChecks(){
       await settle();
       const allPicker=picks.at(-1);
       allPicker.triggerButton(allPicker.buttons[buttonIndex]);
+      const allProvider=providers.at(-1).provider, allRight=diffCalls.at(-1)[1];
+      assert.equal(allProvider.provideTextDocumentContent(allRight),choice==='accept'?proposed:original,
+        `${choice} all leaves the editor diff showing the exact decision result`);
       assert.deepEqual((await allPending).hunks,{a:choice,b:choice});
       assert.equal(allPicker.hidden,true,'Accept All and Reject All close the picker');
       allReview.dispose();
@@ -94,6 +137,8 @@ async function directPickerChecks(){
   }finally{
     vscode.window.createQuickPick=originalCreateQuickPick;
     vscode.commands.executeCommand=originalExecuteCommand;
+    vscode.workspace.registerTextDocumentContentProvider=originalRegisterProvider;
+    vscode.workspace.onDidCloseTextDocument=originalOnDidClose;
   }
 }
 exports.run=async()=>{
@@ -157,6 +202,85 @@ exports.run=async()=>{
   assert.equal(result.undo.expectedPostSha256,hash(replacement));
   await edits.undo(result.undo.undoId);
   assert.equal(await fs.readFile(file,'utf8'),original);
+  // Benchmark hunk-level application against the previous whole-document replacement.
+  {
+    const largePath=path.join(dir,'surgical.py'), largeLocal=path.basename(dir)+'/surgical.py';
+    const stable=Array.from({length:5000},(_,i)=>`# stable line ${i}\n`).join('');
+    const oldTexts=['first_old = 1','second_old = 2','third_old = 3'];
+    const newTexts=['first_new_value = 1','second_new = 2','third_new = 3'];
+    const largeOriginal=stable+oldTexts.map(text=>`\n${text}\n`).join('');
+    const hunks=oldTexts.map((oldText,i)=>{
+      const startOffset=largeOriginal.indexOf(oldText);
+      return {hunkId:['a','b','c'][i],startOffset,endOffset:startOffset+oldText.length,oldText,newText:newTexts[i]};
+    });
+    let fullProposal=largeOriginal;
+    for(const h of [...hunks].reverse()) fullProposal=fullProposal.slice(0,h.startOffset)+h.newText+fullProposal.slice(h.endOffset);
+    let reviewedText=largeOriginal;
+    for(const h of [...hunks].filter(h=>h.hunkId!=='b').reverse()) reviewedText=reviewedText.slice(0,h.startOffset)+h.newText+reviewedText.slice(h.endOffset);
+    await fs.writeFile(largePath,largeOriginal);
+    const largeProposal=make({proposalId:'surgical',callId:'surgical',path:largeLocal,baseSha256:hash(largeOriginal),
+      originalText:largeOriginal,proposedText:fullProposal,hunks});
+    edits.begin(largeProposal);
+    edits.decide(largeProposal,{a:'accept',b:'reject',c:'accept'});
+    const largeDoc=await vscode.workspace.openTextDocument(vscode.Uri.file(largePath));
+    const originalReplace=vscode.WorkspaceEdit.prototype.replace;
+    const originalApplyEdit=vscode.workspace.applyEdit;
+    const submitted=[];
+    let applyCount=0, applied;
+    vscode.WorkspaceEdit.prototype.replace=function(uri,range,text,...rest){
+      if(uri.toString()===largeDoc.uri.toString()) submitted.push({start:largeDoc.offsetAt(range.start),end:largeDoc.offsetAt(range.end),text});
+      return originalReplace.call(this,uri,range,text,...rest);
+    };
+    vscode.workspace.applyEdit=async function(edit,...args){applyCount++;return originalApplyEdit.call(vscode.workspace,edit,...args);};
+    try {
+      applied=await edits.applyText(request(largeProposal,{path:largeLocal,text:reviewedText,textSha256:hash(reviewedText),acceptedHunkIds:['a','c']}));
+    } finally {
+      vscode.WorkspaceEdit.prototype.replace=originalReplace;
+      vscode.workspace.applyEdit=originalApplyEdit;
+    }
+    assert.equal(applied.status,'saved');
+    const accepted=hunks.filter(h=>h.hunkId!=='b');
+    assert.deepEqual(submitted,accepted.map(h=>({start:h.startOffset,end:h.endOffset,text:h.newText})),
+      'the one atomic editor transaction contains only the accepted hunk ranges');
+    assert.equal(applyCount,1,'all accepted hunks are applied in one VS Code transaction');
+    const footprint=submitted.reduce((n,e)=>n+(e.end-e.start)+e.text.length,0);
+    const fullDocumentFootprint=largeOriginal.length+reviewedText.length;
+    const improvement=1-footprint/fullDocumentFootprint;
+    assert.ok(improvement>=0.5,'accepted-hunk edit footprint is at least 50% below the full-document baseline');
+    assert.equal(largeDoc.getText(),reviewedText,'the rejected middle hunk remains unchanged');
+    const inverseExpected=[];
+    let offsetDelta=0;
+    for(const h of accepted){
+      const start=h.startOffset+offsetDelta;
+      inverseExpected.push({start,end:start+h.newText.length,textLength:h.oldText.length});
+      offsetDelta+=h.newText.length-(h.endOffset-h.startOffset);
+    }
+    const undoSubmitted=[];
+    let undoApplyCount=0;
+    const replaceForUndo=vscode.WorkspaceEdit.prototype.replace;
+    const applyForUndo=vscode.workspace.applyEdit;
+    vscode.WorkspaceEdit.prototype.replace=function(uri,range,text,...rest){
+      if(uri.toString()===largeDoc.uri.toString()) undoSubmitted.push({
+        start:largeDoc.offsetAt(range.start),end:largeDoc.offsetAt(range.end),textLength:text.length
+      });
+      return replaceForUndo.call(this,uri,range,text,...rest);
+    };
+    vscode.workspace.applyEdit=async function(edit,...args){undoApplyCount++;return applyForUndo.call(vscode.workspace,edit,...args);};
+    try { await edits.undo(applied.undo.undoId); }
+    finally {
+      vscode.WorkspaceEdit.prototype.replace=replaceForUndo;
+      vscode.workspace.applyEdit=applyForUndo;
+    }
+    assert.deepEqual(undoSubmitted,inverseExpected,'undo uses inverse ranges mapped through earlier accepted hunk length changes');
+    assert.equal(undoApplyCount,1,'all inverse hunks are restored in one VS Code transaction');
+    const undoFootprint=undoSubmitted.reduce((n,e)=>n+(e.end-e.start)+e.textLength,0);
+    const wholeDocumentRoundTrip=fullDocumentFootprint+reviewedText.length+largeOriginal.length;
+    const hunkRoundTrip=footprint+undoFootprint;
+    const roundTripImprovement=1-hunkRoundTrip/wholeDocumentRoundTrip;
+    console.log(`Review edit footprint: whole-document baseline=${wholeDocumentRoundTrip} chars; current=${hunkRoundTrip}; reduction=${(roundTripImprovement*100).toFixed(2)}%`);
+    assert.ok(roundTripImprovement>=0.5,'apply plus undo edit footprint is at least 50% below the whole-document baseline');
+    assert.equal(largeDoc.getText(),largeOriginal,'undo restores the exact large-file original');
+  }
   const failing=new EditReview(folder,async()=>false);
   failing.begin(p); failing.decide(p,{a:'accept',b:'reject'});
   const failure=await failing.applyText(request(p));

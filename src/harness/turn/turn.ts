@@ -221,6 +221,17 @@ export class TurnRun {
     return this.cancelPromise;
   }
 
+  /** Start cancellation synchronously and acknowledge without waiting for stream confirmation. */
+  requestCancel(): CancelStatus {
+    if (this.done) return 'already_terminal';
+    void this.cancel().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.deps.port.log('error', `cancellation request failed: ${message}`);
+    });
+    // The caller must keep consuming the event stream. Only its terminal `done` event confirms the outcome.
+    return 'unconfirmed';
+  }
+
   // ------------------------------------------------------------------ main loop
 
   private async run(): Promise<void> {

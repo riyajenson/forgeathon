@@ -220,7 +220,7 @@ class ForgeHarnessImpl implements ForgeHarness {
     if (bad) return refuse(req, bad);
     const run = this.sessions.get(req.body?.sessionId)?.turns.get(req.body?.turnId);
     if (!run) return refuse(req, err('invalid', 'unknown turn'));
-    return reply(req, await run.cancel());
+    return reply(req, run.requestCancel());
   }
 
   async getSessionStatus(req: Request<{ sessionId: SessionId }>): Promise<Response<SessionStatus>> {

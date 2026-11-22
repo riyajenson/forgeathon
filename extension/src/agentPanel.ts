@@ -175,9 +175,9 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
 <p id="status" role="status"></p><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></section>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
-<section id="context" hidden><h2>Context</h2><p id="budget"></p><ul id="selected"></ul><h2 id="skippedTitle">Skipped</h2><ul id="skipped"></ul></section>
 <section id="changes" hidden><h2>Reviewed edits</h2><ul id="edits"></ul></section>
 <script nonce="${nonce}" src="${script}"></script></body></html>`;
     panel.onDidDispose(() => {

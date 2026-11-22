@@ -63,29 +63,43 @@ every tool call of the failed attempt has settled and no approved edit or comman
 
 ## 4. How context is selected
 
-1. **Pinned first:** the selection, `@symbol:Name` (resolved through a Python def/class index),
-   `@file:path`, and an outline of the active file.
-2. **Automatic retrieval:** the workspace is chunked (functions/classes with decorators, doc sections),
-   identifiers are split (`routes_command` → `routes`, `command`), and chunks are scored with BM25 plus
-   symbol-name, decorator and file-name boosts. A file's score sums its best chunks and term coverage; code
-   is weighted above docs and tests, which then rise through **neighbour bonuses**: `src/x.py` →
-   `tests/test_x.py`, docs that mention the module or its symbols, and one-hop imports.
-3. **Packing within the budget** (default 4,000 tokens, chars/4; resent with every request): outlines of the top files, then whole
-   functions and sections; anything that does not fit is listed as **skipped** with the reason.
-4. The **context report** (items, ranks, plain-English reasons, used/budget, skipped) is shown in the agent
-   panel; the agent can ask for more with `gather_context`.
-5. **Optional semantic reranking** (`forge.context.semanticSearch`, off): a pinned MiniLM model reranks weak
-   keyword matches on the CPU in a worker thread. Its runtime is an opt-in install
-   (`scripts/enable-semantic-search.sh`, ~230 MB); without it the Context block says ranking stayed lexical.
+1. **Pinned first:** the user's selection, `@symbol:Name` (resolved through the symbol index),
+   `@file:path`, then an outline of the active file. Automatic results cannot displace these choices.
+2. **Automatic retrieval:** the workspace is chunked into functions, classes, and doc sections. BM25 searches
+   split identifiers and prose; symbol, decorator, exact path, and inverse-document-frequency path terms add
+   evidence when filenames matter more than body wording. Code, tests, and docs are joined by bounded
+   one-hop imports, reverse importers, test names, and symbol mentions.
+3. **Budgeted packing** (default 4,000 estimated tokens, chars/4; resent with every request): up to eight
+   query-focused outlines use at most 120 estimated tokens each. Relevant chunks are packed next; a large
+   chunk is represented by a focused excerpt capped at 600 tokens and 30% of the total budget. The excerpt
+   marks omitted lines and tells the agent to read the full file before editing. Everything else appears in
+   **skipped** with a reason. The ranked paths and reasons are visible in the context report.
+4. The agent can request more context with `gather_context`; explicit choices, automatic selections, ranks,
+   token use, omissions, and skipped paths remain inspectable.
+5. **Selective semantic ranking** (`forge.context.semanticSearch`, on by default): only weak lexical/structural
+   shortlists are considered. Fully cached semantic scores can reorder that shortlist synchronously. On a cache
+   miss, Forge returns the lexical/structural result immediately and warms vectors in the background for later
+   requests. The optional CPU runtime is installed with `scripts/enable-semantic-search.sh` (~230 MB); when it
+   is absent or fails, the context report explains why the deterministic fallback was used.
 6. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
    `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
    files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; binary files are
    refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name.
 
-The workspace is indexed in the background at start-up. Measured on Flask 3.1.3 (index + rank ≈ 0.2–0.3 s cold): for Task B, `src/flask/cli.py` ranks first and the
-packed context (7,456 of 8,000 tokens, 28 items, 7 skipped) includes `tests/test_cli.py` and `docs/cli.rst`.
-Four unrelated Flask tasks also rank their source file first (regression test in the repo). On 11 benchmark tasks,
-semantic reranking gave +15% relevant-file density, +11% MRR, −2% recall@5, at 352 ms vs 2 ms median: off by default.
+The workspace index is built in the background at start-up and reused. On the 13-task Forge + pinned Flask 3.1.3
+retrieval benchmark, the default 4,000-token budget improved recall@5 from 0.699 to 0.801 and MRR from 0.660 to
+0.733 versus the prior single-run baseline. Relevant-file density changed from 0.461 to 0.492 files per 1,000
+packed tokens. The number of labeled expected files present in packed context rose from 9/30 to 25/30. Median
+assembly changed from 4.55 ms to 4.04 ms, an 11.1% reduction. Thus this same-budget run improves
+retrieval and file coverage but does not improve every metric, and it does not establish a 50% gain across the
+board.
+
+At 8,000 tokens, the older single run measured recall@5 0.699, MRR 0.660, density 0.244, and 203.16 ms median
+assembly with the old cold/missing-semantic wait. Three current runs measured 0.801, 0.733, 0.315, and a median
+4.06 ms, respectively. Most of the latency difference comes from returning immediately on semantic cache
+misses. The semantic ranking quality was deliberately not included in these comparisons: benchmark inference
+was disabled to isolate lexical and structural retrieval. These results are directional; the baseline was a
+single run and source-index contents changed as the implementation evolved.
 
 ## 5. Model setup
 

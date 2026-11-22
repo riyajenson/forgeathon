@@ -181,6 +181,8 @@ test('turn prompt includes the ranked shortlist and keeps an explicit reference 
     semanticSearch: true,
   } as TurnRequest;
   let semanticCalls = 0;
+  let markSemanticFinished!: () => void;
+  const semanticFinished = new Promise<void>((resolve) => { markSemanticFinished = resolve; });
   const progress: number[] = [];
   const options: ContextAssemblyOptions = {
     onSemanticProgress: (event) => { if (typeof event.progress === 'number') progress.push(event.progress); },
@@ -188,6 +190,7 @@ test('turn prompt includes the ranked shortlist and keeps an explicit reference 
       rank: async (_query, chunks, _signal, onProgress) => {
         semanticCalls++;
         onProgress?.({ status: 'progress_total', progress: 42 });
+        markSemanticFinished();
         return new Map(chunks.map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.95]));
       },
     },
@@ -198,6 +201,7 @@ test('turn prompt includes the ranked shortlist and keeps an explicit reference 
   assert.ok(turnInput.context?.text.includes('@file'));
   assert.equal(turnInput.context?.report.selections[0]?.path, FILE);
   assert.equal(turnInput.context?.report.selections[0]?.source, 'explicit');
+  await semanticFinished;
   assert.equal(semanticCalls, 1, 'the request setting reaches context assembly when keyword coverage is weak');
   assert.deepEqual(progress, [42], 'model progress reaches the active turn callback');
 });
@@ -233,6 +237,7 @@ test('coder and inline prompts use the ranked evidence workflow', async () => {
   // The coder prompt is main's (ecd4a06) verbatim: explore / edit / verify with the explicit command rules.
   assert.match(coder.manifest.instructions, /Work in three phases/);
   assert.match(coder.manifest.instructions, /context the editor ranked for this task/i);
+  assert.match(coder.manifest.instructions, /which candidate files you plan to inspect or change and why/i);
   assert.match(coder.manifest.instructions, /exactly ONE propose_edit per file/i);
   assert.match(coder.manifest.instructions, /Verify only with `python -m pytest <the test file you changed> -q`/);
   assert.match(coder.manifest.instructions, /task message states your run_command budget/);
@@ -247,15 +252,15 @@ test('coder and inline prompts use the ranked evidence workflow', async () => {
   assert.match(inline.manifest.instructions, /selected file only/i);
 });
 
-test('hybrid context setting stays off by default and the request contract is versioned', async () => {
+test('hybrid context reranking is enabled by default and the request contract is versioned', async () => {
   const repoRoot = path.resolve(__dirname, '../../../../../../');
   const extension = JSON.parse(await fs.readFile(path.join(repoRoot, 'extension/package.json'), 'utf8')) as {
     contributes: { configuration: { properties: Record<string, { default?: unknown; description?: string }> } };
   };
   const setting = extension.contributes.configuration.properties['forge.context.semanticSearch'];
   assert.ok(setting, 'the semantic-search setting is declared');
-  assert.equal(setting.default, false, 'benchmark results keep the slower semantic path opt-in');
-  assert.match(setting.description ?? '', /local|keyword/i);
+  assert.equal(setting.default, true, 'semantic reranking is enabled but confidence-gated and time-bounded');
+  assert.match(setting.description ?? '', /weak|200 ms/i);
   assert.equal(PROTOCOL_VERSION as string, '0.4.5');
 });
 

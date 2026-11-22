@@ -270,7 +270,7 @@ test('duplicate identical calls in one step: one review, the duplicate is denied
   });
 });
 
-test('cancel while paused for review: confirmed, nothing written, late decision refused', async () => {
+test('cancel while paused for review: request acknowledged, nothing written, late decision refused', async () => {
   await withHarness('it-coder', async (h, sid) => {
     let cancelStatus: string | undefined;
     let late: unknown;
@@ -282,14 +282,14 @@ test('cancel while paused for review: confirmed, nothing written, late decision 
         late = await h.submitReview({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: p.sessionId, turnId: p.turnId, callId: p.callId, kind: 'edit', proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((x) => [x.hunkId, 'accept'])) } });
       }
     });
-    assert.equal(cancelStatus, 'confirmed');
+    assert.equal(cancelStatus, 'unconfirmed', 'the RPC replies before terminal confirmation; the done event remains authoritative');
     assert.equal(doneOf(events).status, 'cancelled');
     assert.equal(await disk(), ORIGINAL);
     assert.equal((late as { ok: boolean }).ok, false);
   });
 });
 
-test('cancel while streaming: confirmed quickly, done cancelled', async () => {
+test('cancel while streaming: request acknowledged quickly, done cancelled', async () => {
   await withHarness('it-coder', async (h, sid) => {
     let cancelStatus: string | undefined;
     let cancelReplyMs = 0;
@@ -305,7 +305,7 @@ test('cancel while streaming: confirmed quickly, done cancelled', async () => {
       }
     });
     const cancelRequestToDoneMs = Date.now() - cancelRequestedAt;
-    assert.equal(cancelStatus, 'confirmed');
+    assert.equal(cancelStatus, 'unconfirmed', 'the RPC replies before terminal confirmation; the done event remains authoritative');
     assert.ok(cancelReplyMs < 2000, `cancel reply took ${cancelReplyMs} ms`);
     assert.equal(doneOf(events).status, 'cancelled');
     assert.ok(cancelRequestToDoneMs < 2000, `cancel request took ${cancelRequestToDoneMs} ms to reach the final done event`);
@@ -349,7 +349,7 @@ test('cancel while an approved command is running: process stops and workspace s
       cancelStatus = cancelled.ok ? cancelled.body : 'error';
       const events = await eventsPromise;
       const cancelRequestToDoneMs = Date.now() - cancelRequestedAt;
-      assert.equal(cancelStatus, 'confirmed');
+      assert.equal(cancelStatus, 'unconfirmed', 'the RPC replies before terminal confirmation; the done event remains authoritative');
       assert.ok(cancelReplyMs < 2000, `cancel reply took ${cancelReplyMs} ms`);
       assert.equal(doneOf(events).status, 'cancelled');
       assert.ok(cancelRequestToDoneMs < 2000, `command cancellation took ${cancelRequestToDoneMs} ms to reach done`);
@@ -368,17 +368,32 @@ test('cancel racing an in-flight apply: done waits, the write is reported before
   await withHarness('it-coder', async (h, sid) => {
     port.applyDelayMs = 1500;
     let ctlRef: Ctl | undefined;
+    let cancelStatus: string | undefined;
+    let cancelReplyMs = 0;
+    let applyCompleted = false;
+    let cancelReplyBeforeApplyCompleted = false;
     port.onApplyStart = () => {
-      if (ctlRef) void h.cancel({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: ctlRef.sessionId, turnId: ctlRef.turnId } });
+      if (ctlRef) {
+        const started = Date.now();
+        void h.cancel({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: ctlRef.sessionId, turnId: ctlRef.turnId } }).then((reply) => {
+          cancelReplyMs = Date.now() - started;
+          cancelStatus = reply.ok ? reply.body : 'error';
+          cancelReplyBeforeApplyCompleted = !applyCompleted;
+        });
+      }
     };
     const events = await runTurn(h, sid, 'SCENARIO:edit2', async (e, ctl) => {
+      if (e.t === 'edit_applied') applyCompleted = true;
       if (e.t === 'review_request') { ctlRef = ctl; await review(h, e, () => 'accept'); }
     });
     const done = doneOf(events);
     const appliedIdx = events.findIndex((e) => e.t === 'edit_applied');
     assert.ok(appliedIdx >= 0 && appliedIdx < events.length - 1, 'edit_applied is delivered before done');
+    assert.equal(cancelStatus, 'unconfirmed', 'cancellation is acknowledged while the approved write finishes');
+    assert.equal(cancelReplyBeforeApplyCompleted, true, 'the RPC reply does not wait for the approved write to settle');
     assert.equal(done.status, 'cancelled');
     assert.notEqual(await disk(), ORIGINAL, 'the in-flight write completed and was reported');
+    console.log(`CANCEL during approved apply: reply ${cancelReplyMs} ms; terminal waits for reported write`);
   });
 });
 

@@ -8,7 +8,12 @@ const rejectAllButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIco
 
 export class InlineReview implements vscode.Disposable {
   private readonly texts = new Map<string, string>();
+  private readonly contentChanged = new vscode.EventEmitter<vscode.Uri>();
+  private readonly closeDocuments = vscode.workspace.onDidCloseTextDocument(document => {
+    if (document.uri.scheme === 'forge-preview') this.texts.delete(document.uri.toString());
+  });
   private readonly registration = vscode.workspace.registerTextDocumentContentProvider('forge-preview', {
+    onDidChange: this.contentChanged.event,
     provideTextDocumentContent: uri => this.texts.get(uri.toString()) ?? ''
   });
   private pending?: { proposal: EditProposal; resolve: (value: ReviewDecision | undefined) => void; reject: (error: unknown) => void };
@@ -28,8 +33,10 @@ export class InlineReview implements vscode.Disposable {
     this.texts.set(left.toString(), p.originalText);
     this.texts.set(right.toString(), p.proposedText);
     this.diff = right;
+    let diffOpened = false;
     try {
       await vscode.commands.executeCommand('vscode.diff', left, right, p.path + ' - proposed changes');
+      diffOpened = true;
       if (!this.edits.isActive(p)) return undefined;
       this.status.show();
       return await new Promise((resolve, reject) => {
@@ -41,7 +48,7 @@ export class InlineReview implements vscode.Disposable {
       const picker = this.picker;
       this.picker = undefined;
       picker?.hide();
-      this.texts.delete(left.toString()); this.texts.delete(right.toString());
+      if (!diffOpened) { this.texts.delete(left.toString()); this.texts.delete(right.toString()); }
     }
   }
 
@@ -66,6 +73,20 @@ export class InlineReview implements vscode.Disposable {
     pending.reject(error);
   }
 
+  /** Keep the proposed side of the editor diff equal to the currently checked hunks. */
+  private showChoicePreview(p: EditProposal, accepted: ReadonlySet<string>) {
+    const uri = this.diff;
+    if (!uri) return;
+    const key = uri.toString();
+    if (!this.texts.has(key)) return;
+    const choices = Object.fromEntries(p.hunks.map(h => [h.hunkId, accepted.has(h.hunkId) ? 'accept' : 'reject'])) as
+      Record<string, 'accept' | 'reject'>;
+    const next = preview(p, choices);
+    if (this.texts.get(key) === next) return;
+    this.texts.set(key, next);
+    this.contentChanged.fire(uri);
+  }
+
   decideAll(choice: 'accept' | 'reject') {
     const pending = this.pending;
     if (!pending) return;
@@ -73,6 +94,7 @@ export class InlineReview implements vscode.Disposable {
     try {
       const p = pending.proposal;
       const decision = this.edits.decide(p, Object.fromEntries(p.hunks.map(h => [h.hunkId, choice])));
+      this.showChoicePreview(p, new Set(choice === 'accept' ? p.hunks.map(h => h.hunkId) : []));
       this.finish(pending, decision);
     } catch (error) { this.fail(pending, error); }
   }
@@ -84,7 +106,7 @@ export class InlineReview implements vscode.Disposable {
     if (!this.edits.isActive(p)) { this.finish(pending, undefined); return; }
     const picker = vscode.window.createQuickPick<vscode.QuickPickItem & {hunkId: string}>();
     this.picker = picker;
-    picker.title = 'Select hunks to accept. Enter submits; unchecked hunks are rejected';
+    picker.title = 'Select hunks to accept. The diff updates as you check them; Enter submits.';
     picker.placeholder = `Review ${p.hunks.length} hunks in ${p.path}. Escape hides this; "Review hunks" in the status bar reopens it.`;
     picker.ignoreFocusOut = true;
     picker.canSelectMany = true;
@@ -98,6 +120,10 @@ export class InlineReview implements vscode.Disposable {
       if (button === acceptAllButton) this.decideAll('accept');
       else if (button === rejectAllButton) this.decideAll('reject');
     });
+    picker.onDidChangeSelection(items => {
+      if (this.pending !== pending || !this.edits.isActive(p)) return;
+      this.showChoicePreview(p, new Set(items.map(i => i.hunkId)));
+    });
     picker.onDidAccept(() => {
       if (this.pending !== pending) { picker.hide(); return; }
       if (!this.edits.isActive(p)) { this.finish(pending, undefined); return; }
@@ -105,6 +131,7 @@ export class InlineReview implements vscode.Disposable {
       try {
         const decision = this.edits.decide(p, Object.fromEntries(p.hunks.map(h =>
           [h.hunkId, selected.has(h.hunkId) ? 'accept' : 'reject'])));
+        this.showChoicePreview(p, selected);
         this.finish(pending, decision);
       } catch (error) { this.fail(pending, error); }
     });
@@ -131,5 +158,8 @@ export class InlineReview implements vscode.Disposable {
   }
   /** The proposed side of the review's diff tab, while it may still be open. */
   private diff?: vscode.Uri;
-  dispose() { this.cancel(); this.texts.clear(); this.registration.dispose(); this.status.dispose(); }
+  dispose() {
+    this.cancel(); this.texts.clear(); this.registration.dispose(); this.closeDocuments.dispose();
+    this.contentChanged.dispose(); this.status.dispose();
+  }
 }

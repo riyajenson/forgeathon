@@ -82,8 +82,8 @@
         },
         "forge.context.semanticSearch": {
           "type": "boolean",
-          "default": false,
-          "description": "Use local semantic reranking (CPU) when keyword evidence is weak. Opt-in: first run scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the model (about 54 MB) downloads on first use. Without the runtime, ranking stays lexical and the Context block says so. Off by default: current benchmarks show higher retrieval latency."
+          "default": true,
+          "description": "Use local semantic reranking (CPU) only when keyword/structure evidence is weak. Waits up to 200 ms, then uses the lexical/structural shortlist while local vectors continue warming. Optional runtime: run scripts/enable-semantic-search.sh (about 230 MB); the model (about 54 MB) downloads on first use. Set false to disable."
         },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",

@@ -35,9 +35,9 @@ agent-mode compaction fires at 40k input tokens (inline: 60k), its start and fin
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
 the prompt): a per-turn command budget (3 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached"), approved commands run in **bubblewrap** (read-only
-checkout and host, private `/tmp`, no network, no provider keys in its environment; refused if unavailable;
-it can still read files, see section 8), a tool still running after a
+without prompting and the panel shows "command budget reached"), approved commands run in **bubblewrap** (only the
+workspace and system runtime, read-only; no home directory; private `/tmp`, no network, no provider keys; output
+redacted for key patterns; refused if unavailable), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
 
 **Editor tools are MCP tools** served by the harness inside the extension host (127.0.0.1, bearer token):
@@ -144,8 +144,9 @@ measured scripted B runs (peaks 95–139 ms).
 **Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
 a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
 instructions, hence the harness command budget (3 per turn); each step resends the whole conversation. Retrieval is lexical (no embeddings) and
-the symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` is write-protected, not confidential:** bubblewrap
-makes the checkout read-only and cuts the network, but an approved command can read any file you can; it needs
+the symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` sees the whole workspace:** bubblewrap hides
+the home directory and cuts the network, but a secret kept inside the workspace is only caught by pattern-based
+output redaction; it needs
 Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
 network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
 9–15 requests/min, Groq's free tier (7,000 tokens/min) cannot take B's ~11k-token requests, and the OpenRouter

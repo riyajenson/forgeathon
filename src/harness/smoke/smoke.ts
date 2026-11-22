@@ -16,7 +16,7 @@
 // judge the resumed turn's result. Off by default.
 // Task R (mock model only, scripts/e2e-mock.sh): the resume path. The scripted model makes Task A's edit, then
 // answers 429 until the turn stops with resumable; the smoke resumes it after 1 s and checks the outcome.
-// --subagents: Task C's temporary re-setup keeps dynamic sub-agents on (use it when the agents were set up with it).
+// --no-subagents: Task C's temporary re-setup turns dynamic sub-agents off (use it when the agents were set up so).
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -390,7 +390,7 @@ async function main(): Promise<void> {
       const templates = await loadTemplates(repo);
       const { client } = await createClient(url);
       const quiet = () => undefined;
-      const subAgents = process.argv.includes('--subagents');
+      const subAgents = !process.argv.includes('--no-subagents');
       await runSetup({ client, cfg, templates, env: { ...process.env, [prov.apiKeyEnv]: 'invalid-key-for-task-c' }, log: quiet, subAgents });
       try {
         const selection = await selectionOf(ws, 'src/flask/helpers.py', 'get_debug_flag');

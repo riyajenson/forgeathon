@@ -147,13 +147,15 @@ async function main(): Promise<void> {
     }
     const done = events.find((e) => e.t === 'done') as Extract<HarnessEvent, { t: 'done' }> | undefined;
     const fileAfter = await fs.readFile(path.join(root, FILE), 'utf8');
+    // Tool results reach the harness as a 200-character summary, so the file body may be cut off: the read_file header
+    // carries the file's sha256, which identifies the workspace file as well.
     const out1 = (name: string) => results.find((r) => r.step === name)?.output ?? '';
     const checks = [
       { name: 'turn done', ok: done?.status === 'done', detail: done?.status ?? 'none' },
       { name: 'sandbox exec runs (Linux, Python)', ok: /Linux/.test(out1('sandbox')) && /Python 3/.test(out1('sandbox')), detail: out1('sandbox').split('\n').slice(0, 3).join(' | ') },
       { name: 'no ~/.ssh in the sandbox', ok: /NO_SSH/.test(out1('sandbox')), detail: '' },
       { name: `git skill ${SKILL} mounted in the sandbox`, ok: new RegExp(`name: ${SKILL}`).test(out1('skill')), detail: out1('skill').split('\n')[0] ?? '' },
-      { name: 'Code Mode read_file reaches the workspace through the harness', ok: /def alpha/.test(out1('codemode-read')), detail: out1('codemode-read').slice(0, 160) },
+      { name: 'Code Mode read_file reaches the workspace through the harness', ok: /def alpha/.test(out1('codemode-read')) || out1('codemode-read').includes(sha256Hex(ORIGINAL)), detail: out1('codemode-read').slice(0, 160) },
       { name: 'Code Mode propose_edit is refused (approval-gated), no review shown', ok: reviews === 0 && !/applied|saved/i.test(out1('codemode-write')), detail: out1('codemode-write').slice(0, 200) },
       { name: 'workspace file unchanged', ok: fileAfter === ORIGINAL, detail: '' },
       { name: 'key never appears in the record', ok: true, detail: '' },

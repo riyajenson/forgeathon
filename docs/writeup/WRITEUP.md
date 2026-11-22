@@ -27,7 +27,7 @@ used unmodified as the harness (`npx @truefoundry/trueforge@0.185.1`, local mode
 **TrueForge owns the agent loop.** Two agent definitions live in the repo (`agent/forge-inline.json`,
 `agent/forge-coder.json`); the setup script registers them with the primary model and generates
 `-fallback` variants with the fallback model. Dynamic sub-agents are on for `forge-coder` (read-only exploration;
-edits and commands stay with the main agent); generative UI, ask-user and the TrueForge sandbox are off;
+edits and commands stay with the main agent); generative UI, ask-user and the TrueForge sandbox are off (Daytona: opt-in spike, §5);
 agent-mode compaction fires at 40k input tokens (inline: 60k), its start and finish shown as panel status lines; iteration limits 8 (inline) and 60 (agent).
 
 **Harness (`forge-harness`).** Maps each editor turn to a TrueForge session/turn via the TrueForge SDK
@@ -35,8 +35,8 @@ agent-mode compaction fires at 40k input tokens (inline: 60k), its start and fin
 (text, tool calls, results, context report, review/command requests, fallback, done) and handles approvals:
 on `tool.approval_required` it computes the hunks, waits for the user's per-hunk decision and answers
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
-the prompt): a per-turn command budget (3 agent, 1 inline; later `run_command` calls are refused to the model
-without prompting and the panel shows "command budget reached"; `cd … && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (only the
+the prompt): per-turn budgets of 3 test runs and 3 other commands (inline 1 + 1; later `run_command` calls are refused to the model
+without prompting and the panel names the budget; `cd … && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (only the
 workspace and system runtime, read-only; no home directory; private `/tmp`, no network, no provider keys; output
 redacted for key patterns; refused if unavailable), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
@@ -53,13 +53,10 @@ and returns one of six outcomes (stale, approval missing, failed before apply, a
 saved). The reviewed text is verified by hash; save-time formatters may alter the saved file. Undo, guarded by
 the post-save hash, restores the reviewed original text (saved without save participants).
 
-**Cancellation.** Stop closes the approval gate, cancels the TrueForge turn, kills a running command's
-process group and closes the open review; an approved command never starts after Stop. `done` waits (bounded) for in-flight tool calls, because TrueForge 0.185.1 reports the turn
-cancelled before an MCP call returns. If Stop comes after an approved edit reached VS Code, that edit is saved and
-reported before `done` (tested); edits saved earlier stay, so a stopped multi-file task can be partly done. Waits on TrueForge are bounded: if it stays silent, the harness stops
-observing after twice the cancel timeout and ends the turn exactly once. A tool still running when the turn
-ends is waited for until it finishes (the command timeout, at most 600 s, or Stop). Retry and fallback happen only when
-every tool call of the failed attempt has settled and no approved edit or command is unfinished.
+**Cancellation.** Stop closes the approval gate, cancels the TrueForge turn, kills a running command's process group
+and closes the open review; an approved command never starts after Stop. An approved edit that already reached VS Code
+is saved and reported before `done`; edits saved earlier stay. Waits on TrueForge are bounded (the turn ends exactly once),
+and retry or fallback happen only when every tool call of the failed attempt has settled and nothing approved is unfinished.
 
 ## 4. How context is selected
 
@@ -76,53 +73,43 @@ every tool call of the failed attempt has settled and no approved edit or comman
    **skipped** with a reason. The ranked paths and reasons are visible in the context report.
 4. The agent can request more context with `gather_context`; explicit choices, automatic selections, ranks,
    token use, omissions, and skipped paths remain inspectable.
-5. **Selective semantic ranking** (`forge.context.semanticSearch`, on by default): only weak lexical/structural
+5. **Selective semantic ranking** (`forge.context.semanticSearch`, opt-in, off by default): only weak lexical/structural
    shortlists are considered. Fully cached semantic scores can reorder that shortlist synchronously. On a cache
    miss, Forge returns the lexical/structural result immediately and warms vectors in the background for later
-   requests. The optional CPU runtime is installed with `scripts/enable-semantic-search.sh` (~230 MB); when it
+   requests. The optional CPU runtime is installed with `scripts/enable-semantic-search.sh` (~230 MB; embedding model in §5); when it
    is absent or fails, the context report explains why the deterministic fallback was used.
 6. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
    `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
    files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; binary files are
    refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name.
 
-The workspace index is built in the background at start-up and reused. On the 13-task Forge + pinned Flask 3.1.3
-retrieval benchmark, the default 4,000-token budget improved recall@5 from 0.699 to 0.801 and MRR from 0.660 to
-0.733 versus the prior single-run baseline. Relevant-file density changed from 0.461 to 0.492 files per 1,000
-packed tokens. The number of labeled expected files present in packed context rose from 9/30 to 25/30. Median
-assembly changed from 4.55 ms to 4.04 ms, an 11.1% reduction. Thus this same-budget run improves
-retrieval and file coverage but does not improve every metric, and it does not establish a 50% gain across the
-board.
-
-At 8,000 tokens, the older single run measured recall@5 0.699, MRR 0.660, density 0.244, and 203.16 ms median
-assembly with the old cold/missing-semantic wait. Three current runs measured 0.801, 0.733, 0.315, and a median
-4.06 ms, respectively. Most of the latency difference comes from returning immediately on semantic cache
-misses. The semantic ranking quality was deliberately not included in these comparisons: benchmark inference
-was disabled to isolate lexical and structural retrieval. These results are directional; the baseline was a
-single run and source-index contents changed as the implementation evolved.
+The workspace index is built in the background at start-up and reused. On a 13-task Forge + Flask 3.1.3 retrieval
+benchmark (lexical/structural only, semantic inference disabled), the 4,000-token budget reached recall@5 0.801 and MRR
+0.733 (prior single-run baseline 0.699 / 0.660), 25/30 expected files packed (was 9/30), median assembly ~4 ms.
+These are directional retrieval measurements, not end-to-end coding success.
 
 ## 5. Model setup
 
-| Role | Model | Hosting | Approx. cost for the demo |
+| Role | Model · provider | Used in demo | Cost |
 |---|---|---|---|
-| Primary | `nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA API Catalog, free tier | $0 |
-| Fallback | `nvidia/nemotron-3-ultra-550b-a55b:free` (same model; NVIDIA serves it upstream; 50 requests/day without credit) | OpenRouter, free model | $0 |
-| Spare: configured; fallback in earlier rehearsals, before OpenRouter replaced it | `qwen/qwen3.8-27b` | Groq, free tier | $0 |
+| Primary (agent and inline) | `nvidia/nemotron-3-ultra-550b-a55b` · NVIDIA API Catalog, free tier | yes | $0 |
+| Fallback | `nvidia/nemotron-3-ultra-550b-a55b:free` (same model, NVIDIA upstream; 50 requests/day) · OpenRouter | yes (Task C) | $0 |
+| Spare (fallback in earlier rehearsals) | `qwen/qwen3.8-27b` · Groq, free tier | no | $0 |
+| Paid profile (`--paid-ok`), never run | `qwen/qwen3-coder-next` · OpenRouter | no | paid |
+| Examples in the config, never run | `openai/gpt-oss-120b` (Groq), `gemini-flash-latest` (Google), `claude-sonnet-5-5`, `claude-haiku-5-5` (Anthropic), `gpt-6-luna` (OpenAI) | no | — |
+| Embeddings for opt-in semantic ranking | `onnx-community/all-MiniLM-L6-v2-ONNX`, local CPU; downloaded from Hugging Face on first use | no (off) | $0 |
+| Automated tests | scripted demo model (local, no network) | no | $0 |
+| Service, opt-in spike | Daytona sandbox (TrueForge sandbox provider, skill, Code Mode; `scripts/daytona-spike.sh`) · Daytona cloud | no | free credit |
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
-**switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`, one of three named profiles). The NVIDIA catalog offered no Qwen3 Coder or
-DeepSeek model. Probed once each: Kimi K3.1 Pro, GLM-5.3 Flash, Step-5, Mistral Large 4, MiniMax M3.1 Flash; Nemotron-3 Ultra was the
-fastest with correct streamed tool calls. Gemini,
-Anthropic and OpenAI appear in the example config only and were never run. **Real-model evidence:** the first round-1 build passed
-A, B, C (tag `round1-submission`). This updated build, 21 Nov (`docs/writeup/rehearsal.json`): Task B passed 6/6 in 3 of 3
-runs (92–124 s, 25–27 requests, ~1M input tokens), then A, B, C passed on the final commit (B: 30 requests, 244 s). TrueForge resends a 429'd model request up to 4 times (1–8 s backoff) below the
-turn. Then the harness's policy, for failures before any write: authentication errors fall back immediately;
-unreachable/timeouts/5xx/429 retry once (429 waits for the provider's `Retry-After` hint, capped at 30 s) and
-then fall back to the `-fallback` agent, which **starts a fresh TrueForge session**. There is **no retry or
-fallback after a write** (or while a tool call is unsettled): the turn ends with the error. Errors are classified
-from the provider's status and wording. The free fallback shares NVIDIA's backend, so it covers throttling and
-key problems, not an NVIDIA outage. A
-watchdog stops a turn that streams nothing for 45 s.
+**switching models is a config change plus rerunning setup** (or `scripts/use-models.sh <profile>`). Nemotron-3 Ultra was the
+fastest with correct streamed tool calls among five NVIDIA models probed once each. **Real-model evidence:** the first round-1
+build passed A, B, C (tag `round1-submission`); 21 Nov build (`docs/writeup/rehearsal.json`): Task B 6/6 in 3 of 3 runs, then
+A, B, C; this finals build, 22 Nov: A, B, C passed (B: 48 requests, 217 s, no 429). TrueForge resends a 429'd request up to 4
+times; then, before any write, auth errors fall back at once and other errors retry once, then fall back to the `-fallback`
+agent in a fresh TrueForge session. **No retry or fallback after a write:** the turn ends, and a stop after writes (429, or no
+output for 45 s, 120 s while a model request is in flight) offers **Resume** in the same TrueForge conversation. The free
+fallback shares NVIDIA's backend: it covers throttling and key problems, not an NVIDIA outage.
 
 ## 6. Scorecard
 
@@ -138,14 +125,10 @@ watchdog stops a turn that streams nothing for 45 s.
 | Demo video (10) | [video] Tasks A, B, C in order, each verified on screen | A 00:03 · B 00:52 · C 03:17 |
 | PDF write-up (15) | This document (`docs/writeup/WRITEUP.pdf` in the repository); [video] the closing frame links the repository | 03:51 |
 
-Timestamps: current video, recorded on the first round-1 build (Accept All / Reject All prompt); this build
-uses a multi-select hunk picker (✓ / ✕), covered by the native UI tests.
-
-Automated checks use a **scripted model** that supplies Task B's paths and edits: they show the plumbing, not
-discovery. `scripts/e2e-mock.sh` (A, B, C, guardrails; 21 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in
-VS Code), 163 unit and 20 integration tests against TrueForge 0.185.1. Responsiveness (host blocks ≤ 150 ms, webview
-renders ≤ 100 ms) passed 3/3 suite runs (peaks 49–106 ms) and fails an injected 200 ms stall; one earlier run had
-an unexplained 605 ms block in VS Code's `postMessage`.
+Timestamps: current video (first round-1 build); this build's multi-select hunk picker is covered by the native UI tests.
+Automated checks use a **scripted model** that supplies Task B's paths and edits (plumbing, not discovery): `scripts/e2e-mock.sh`
+(24 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in VS Code), 204 unit and 25 integration tests on TrueForge 0.185.1;
+responsiveness gates (host blocks ≤ 150 ms, webview renders ≤ 100 ms) pass 3/3 and fail an injected 200 ms stall.
 
 ## 7. Tools used
 
@@ -164,20 +147,15 @@ an unexplained 605 ms block in VS Code's `postMessage`.
 
 ## 8. Known limitations and what you would do with another month
 
-**Limitations.** Development and automated tests used a scripted model; real-model behaviour was checked in
-a few runs with one model pair. In Task B the real model over-verified (7–17 commands) and split one file's edits over several reviews despite
-instructions, hence the harness command budget (3 per turn); each step resends the whole conversation. Retrieval is lexical (no embeddings) and
-the symbol index covers Python only; ranking weights were tuned on Flask. **`run_command` sees the whole workspace:** bubblewrap hides
-the home directory and cuts the network, but a secret kept inside the workspace is only caught by pattern-based
-output redaction; it needs
-Linux/WSL with bubblewrap (otherwise commands are refused), and tests that write into the tree or need the
-network fail by design. Free tiers limit Task B: on 19 Nov NVIDIA throttled at
-9–15 requests/min, Groq's free tier (7,000 tokens/min) cannot take B's ~11k-token requests, and the OpenRouter
-fallback allows 50 requests/day without credit (one B takes 40–70). Compaction fires once in Task B, after the first edit; the
-model then re-reads the ranges it still has to edit. Sub-agents are on by default; in 6 real runs
-Nemotron never delegated, even when asked. Opt-in Daytona Code Mode sends files it reads
-to Daytona's cloud; edits stay in review. One workspace
-folder; tested on WSL only.
+**Limitations.** Real-model behaviour was checked in a few runs with one model pair; Task B over-verifies and splits a file's
+edits over several reviews, hence the harness budgets. Each step resends the whole conversation. Retrieval is lexical by default
+(local embeddings opt-in); the symbol index covers Python only; weights were tuned on Flask. **`run_command` is write-protected,
+not confidential:** bubblewrap hides the home directory and cuts the network, but workspace secrets are only caught by output
+redaction; it needs Linux/WSL with bubblewrap. Free tiers limit Task B (NVIDIA throttled at 9–15 requests/min on 19 Nov;
+OpenRouter's free fallback allows 50 requests/day; Groq's 7,000 tokens/min cannot take B). Compaction fires once in Task B,
+usually after the first edit (once before it, first diff 100 s). Sub-agents are on by default; in 6 real runs Nemotron never
+delegated, even when asked. Opt-in Daytona Code Mode sends files it reads to Daytona's cloud; edits stay in review. One
+workspace folder; tested on WSL only.
 
 **With another month:** faster embeddings and language-server symbols for retrieval, evaluated across repositories and
 models; per-hunk CodeLens; conversation history across fallback; read confinement for

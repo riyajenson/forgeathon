@@ -10,14 +10,14 @@
   // Resume is enabled once the suggested wait after a rate limit has passed; the label counts down until then.
   const showResume = s => {
     clearTimeout(resumeTimer);
-    el('resumeBox').hidden = !s.resume || s.busy;
+    setHidden('resumeBox', !s.resume || s.busy);
     if (!s.resume || s.busy) return;
     const files = s.resume.files.length ? ' Already changed: ' + s.resume.files.join(', ') + '.' : ' No file was changed.';
     const why = s.resume.reason === 'stalled' ? 'Stopped: the model did not respond in time.' : 'Stopped by a model rate limit (HTTP 429).';
-    el('resumeText').textContent = why + files + ' Resume continues the task in this conversation.';
+    setText('resumeText', why + files + ' Resume continues the task in this conversation.');
     const wait = s.resume.at - Date.now();
-    el('resume').disabled = wait > 0;
-    el('resume').textContent = wait > 0 ? 'Resume (in ' + Math.ceil(wait / 1000) + ' s)' : 'Resume';
+    setDisabled('resume', wait > 0);
+    setText('resume', wait > 0 ? 'Resume (in ' + Math.ceil(wait / 1000) + ' s)' : 'Resume');
     if (wait > 0) resumeTimer = setTimeout(() => showResume(s), Math.min(wait, 1000));
   };
   el('send').onclick = () => {

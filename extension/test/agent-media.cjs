@@ -38,7 +38,7 @@ exports.run = async () => {
   const vscode = { postMessage: message => messages.push(message) };
   const source = fs.readFileSync(path.join(__dirname, '../media/agent.js'), 'utf8');
   vm.runInNewContext(source, {
-    document, window, Number,
+    document, window, Number, setTimeout, clearTimeout,
     performance: { now: () => now },
     Date: { now: () => wall },
     acquireVsCodeApi: () => vscode,
@@ -51,7 +51,7 @@ exports.run = async () => {
     renderSequence: 17, renderEventWallAt: 1000, renderTextEventWallAt: 1010,
     busy: false, reviewing: false, status: 'Ready', model: '', usage: '',
     banner: '', trace: '', command: undefined, text: 'visible text', tools: [], context: undefined,
-    summary: [], edits: []
+    summary: [], edits: [], warnings: [], tests: '', resume: undefined
   };
   onMessage({ data: state });
   assert.equal(element('text').textContent, 'visible text', 'the DOM is updated before frame acknowledgement');

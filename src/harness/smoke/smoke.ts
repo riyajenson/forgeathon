@@ -93,7 +93,7 @@ interface TurnStats {
   /** Accepted hunks that delete a whole class or function (also listed in warnings). */
   destructiveHunks: string[];
   /** The observed outcome of the last test command (done.tests) and any contradiction in the model's reply. */
-  tests?: { status: 'passed' | 'failed' | 'not_run'; command?: string; summary?: string };
+  tests?: { status: 'passed' | 'failed' | 'not_run'; command?: string; summary?: string; editedAfter?: string[] };
   testClaimMismatch?: string;
   error?: string;
   usage?: { inputTokens: number; outputTokens: number };
@@ -219,7 +219,7 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
         stats.status = e.status;
         if (e.usage) stats.usage = e.usage;
         if (e.tests) {
-          stats.tests = { status: e.tests.status, ...(e.tests.command ? { command: e.tests.command } : {}), ...(e.tests.summary ? { summary: e.tests.summary } : {}) };
+          stats.tests = { status: e.tests.status, ...(e.tests.command ? { command: e.tests.command } : {}), ...(e.tests.summary ? { summary: e.tests.summary } : {}), ...(e.tests.editedAfter ? { editedAfter: e.tests.editedAfter } : {}) };
           const mismatch = testClaimMismatch(stats.text, e.tests);
           if (mismatch) { stats.testClaimMismatch = mismatch; console.log(`  [${task}] WARNING test claim mismatch: ${mismatch}`); }
         }
@@ -425,7 +425,7 @@ async function main(): Promise<void> {
     console.log(`   propose_edit failures: ${s.malformedEdits} malformed, ${s.refusedEdits} refused; warnings: ${s.warnings.length}`);
     console.log(`   test runs refused by the test-command budget: ${s.testBudgetReached}; sub-agent delegations: ${s.subagents.length}${s.subagents.length ? ` ${JSON.stringify(s.subagents.map((x) => ({ name: x.name, ok: x.ok, task: x.task?.slice(0, 120) })))}` : ''}`);
     if (s.resumable) console.log(`   stopped (${s.resumable.reason === 'stalled' ? 'model stopped responding' : 'rate limit'}): resumable (${s.resumable.changedFiles.join(', ') || 'no files changed'})`);
-    if (s.tests) console.log(`   last test command: ${s.tests.status}${s.tests.summary ? ` (${s.tests.summary})` : ''}${s.testClaimMismatch ? `; MISMATCH: ${s.testClaimMismatch}` : '; matches the reply'}`);
+    if (s.tests) console.log(`   last test command: ${s.tests.editedAfter ? `edited after last test run (${s.tests.editedAfter.join(', ')}); last result ` : ''}${s.tests.status}${s.tests.summary ? ` (${s.tests.summary})` : ''}${s.testClaimMismatch ? `; MISMATCH: ${s.testClaimMismatch}` : '; matches the reply'}`);
     for (const w of s.warnings) console.log(`   WARNING ${w}`);
     if (s.error) console.log(`   error: ${s.error}`);
     if (s.session) console.log(`   trace: ${s.session}`);

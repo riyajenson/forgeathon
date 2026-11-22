@@ -43,9 +43,14 @@ export function claimedTests(reply: string): 'passed' | 'failed' | undefined {
 }
 
 /** A mismatch between the model's claim and the observed outcome of the last test command, or undefined. */
-export function testClaimMismatch(reply: string, observed: { status: 'passed' | 'failed' | 'not_run'; summary?: string } | undefined): string | undefined {
+export function testClaimMismatch(reply: string, observed: { status: 'passed' | 'failed' | 'not_run'; summary?: string; editedAfter?: readonly string[] } | undefined): string | undefined {
   const claim = claimedTests(reply);
-  if (!observed || !claim || claim === observed.status) return undefined;
+  if (!observed || !claim) return undefined;
+  // Files changed after the last test run: no claim about the final state is backed by a test result.
+  if (observed.editedAfter?.length && observed.status !== 'not_run') {
+    return `the reply says the tests ${claim === 'passed' ? 'pass' : 'fail'}, but ${observed.editedAfter.join(', ')} changed after the last test run (last result: ${observed.status}${observed.summary ? `, ${observed.summary}` : ''})`;
+  }
+  if (claim === observed.status) return undefined;
   if (observed.status === 'not_run') return claim === 'passed' ? 'the reply says the tests pass, but no test command ran' : undefined;
   return `the reply says the tests ${claim === 'passed' ? 'pass' : 'fail'}, but the last test command ${observed.status}${observed.summary ? ` (${observed.summary})` : ''}`;
 }

@@ -51,4 +51,6 @@ test('a mismatch is recorded only when the claim contradicts the observed outcom
   assert.equal(testClaimMismatch('All tests pass.', { status: 'passed' }), undefined);
   assert.equal(testClaimMismatch('Done.', { status: 'failed' }), undefined);
   assert.equal(testClaimMismatch('All tests pass.', undefined), undefined);
+  assert.equal(testClaimMismatch('All tests pass.', { status: 'passed', summary: '3 passed in 0.1s', editedAfter: ['src/a.py'] }),
+    'the reply says the tests pass, but src/a.py changed after the last test run (last result: passed, 3 passed in 0.1s)', 'a stale pass backs no claim');
 });

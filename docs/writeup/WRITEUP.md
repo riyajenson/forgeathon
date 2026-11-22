@@ -26,9 +26,9 @@ used unmodified as the harness (`npx @truefoundry/trueforge@0.185.1`, local mode
 
 **TrueForge owns the agent loop.** Two agent definitions live in the repo (`agent/forge-inline.json`,
 `agent/forge-coder.json`); the setup script registers them with the primary model and generates
-`-fallback` variants with the fallback model. Dynamic sub-agents are on for `forge-coder` (read-only exploration;
-edits and commands stay with the main agent); generative UI, ask-user and the TrueForge sandbox are off (Daytona: opt-in spike, §5);
-agent-mode compaction fires at 40k input tokens (inline: 60k), its start and finish shown as panel status lines; iteration limits 8 (inline) and 60 (agent).
+`-fallback` variants with the fallback model. Dynamic sub-agents are on for `forge-coder` (told to explore read-only; a
+sub-agent's edits would still pass the same review); generative UI, ask-user and the TrueForge sandbox are off (Daytona: opt-in spike, §5);
+agent-mode compaction fires at 40k input tokens (inline: 60k), its start and finish shown as panel status lines; iteration limits 8 (inline) and 80 (agent).
 
 **Harness (`forge-harness`).** Maps each editor turn to a TrueForge session/turn via the TrueForge SDK
 (`createTurnStream`, `subscribeToTurn`, `createTurnEvents`, `sessions.cancel`), normalises the event stream
@@ -37,7 +37,7 @@ on `tool.approval_required` it computes the hunks, waits for the user's per-hunk
 TrueForge with allow/deny (the deny reason reaches the model). **Harness-enforced guardrails** (not left to
 the prompt): per-turn budgets of 3 test runs and 3 other commands (inline 1 + 1; later `run_command` calls are refused to the model
 without prompting and the panel names the budget; `cd … && …` is refused with the corrected call, free), approved commands run in **bubblewrap** (only the
-workspace and system runtime, read-only; no home directory; private `/tmp`, no network, no provider keys; output
+workspace, its venv and base interpreter prefix, and the system runtime, read-only; no home directory; private `/tmp`, no network, no provider keys; output
 redacted for key patterns; refused if unavailable), a tool still running after a
 turn holds the session (no retry or fallback until it ends).
 
@@ -81,11 +81,12 @@ and retry or fallback happen only when every tool call of the failed attempt has
 6. **One read policy for every source** (retrieval, `@file`, `@symbol`, selection, active file, and the
    `read_file`, `search_workspace`, `list_files`, `find_symbol`, `gather_context` tools): credentials-shaped
    files (`.env*`, keys, `.netrc`, …) are never sent and are reported as skipped or refused; binary files are
-   refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name.
+   refused; `read_file` output is capped (600 lines / 60,000 characters), each cut marked. Detection is by file name only; other files sent to the model are
+   also kept in TrueForge's local traces (SQLite).
 
 The workspace index is built in the background at start-up and reused. On a 13-task Forge + Flask 3.1.3 retrieval
-benchmark (lexical/structural only, semantic inference disabled), the 4,000-token budget reached recall@5 0.801 and MRR
-0.733 (prior single-run baseline 0.699 / 0.660), 25/30 expected files packed (was 9/30), median assembly ~4 ms.
+benchmark at 4,000 tokens (lexical/structural; reproduced on `c865952`, 3 runs): recall@5 0.776, MRR 0.721, 25/30 expected
+files packed, median assembly 3–5 ms (0.801 / 0.733 on `658243d`; the earlier single-run baseline 0.699 / 0.660, 9/30).
 These are directional retrieval measurements, not end-to-end coding success.
 
 ## 5. Model setup
@@ -98,14 +99,14 @@ These are directional retrieval measurements, not end-to-end coding success.
 | Paid profile (`--paid-ok`), never run | `qwen/qwen3-coder-next` · OpenRouter | no | paid |
 | Examples in the config, never run | `openai/gpt-oss-120b` (Groq), `gemini-flash-latest` (Google), `claude-sonnet-5-5`, `claude-haiku-5-5` (Anthropic), `gpt-6-luna` (OpenAI) | no | — |
 | Embeddings for opt-in semantic ranking | `onnx-community/all-MiniLM-L6-v2-ONNX`, local CPU; downloaded from Hugging Face on first use | no (off) | $0 |
-| Automated tests | scripted demo model (local, no network) | no | $0 |
+| Automated tests, mock mode | scripted demo model as `demo-primary/scripted` and `demo-fallback/scripted` (local) | no | $0 |
 | Service, opt-in spike | Daytona sandbox (TrueForge sandbox provider, skill, Code Mode; `scripts/daytona-spike.sh`) · Daytona cloud | no | free credit |
 
 Models are configured only in TrueForge, from `config/models.json` via `node scripts/setup-trueforge.mjs`;
 **switching models is a config change plus rerunning setup** (or `scripts/use-models.sh openrouter-free`). Nemotron-3 Ultra was the
-fastest with correct streamed tool calls among five NVIDIA models probed once each. **Real-model evidence:** the first round-1
-build passed A, B, C (tag `round1-submission`); 21 Nov build (`docs/writeup/rehearsal.json`): Task B 6/6 in 3 of 3 runs, then
-A, B, C; this finals build, 22 Nov: A, B, C passed (B: 48 requests, 217 s, no 429). TrueForge resends a 429'd request up to 4
+fastest with correct streamed tool calls among five NVIDIA models probed once each. **Real-model evidence** (one run each unless stated;
+`docs/writeup/rehearsal.json`): finals code `0be9897`: **Task B 6/6, first diff 100.3 s, 216.8 s, 48 requests**, A 6/6, C 3/3, no
+429; p14 `5710431`: B 6/6 twice (184 s, 203 s); 21 Nov hybrid build: B 6/6 in 3 of 3 runs on `f2f87bb`; tag `round1-submission`: A, B, C. TrueForge resends a 429'd request up to 4
 times; then, before any write, auth errors fall back at once and other errors retry once, then fall back to the `-fallback`
 agent in a fresh TrueForge session. **No retry or fallback after a write:** the turn ends, and a stop after writes (429, or no
 output for 45 s, 120 s while a model request is in flight) offers **Resume** in the same TrueForge conversation. The free
@@ -116,7 +117,7 @@ fallback shares NVIDIA's backend: it covers throttling and key problems, not an 
 | Criterion (points) | What we show ([video] recording · [native test] VS Code UI tests · [harness rehearsal] `rehearsal.json`) | Video |
 |---|---|---|
 | Inline edit (10) | [video] Task A: selection → instruction → in-editor diff → hunk picker → accept → saved → verification `False`. [native test] choosing one hunk saves exactly that hunk | 00:03 |
-| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] B passed on `f67c719` (3 files, 5 reviews, 37 requests); this build: 3 of 3 runs and the rehearsal | 00:52 |
+| Agent mode (10) | [video] Task B: no files named; the agent finds and edits `cli.py`, `test_cli.py`, `docs/cli.rst`; the panel lists the changed files at turn end. [harness rehearsal] finals code `0be9897`: B 6/6 in 1 of 1 run (3 files, 6 reviews, 48 requests); `f2f87bb`: 3 of 3 | 00:52 |
 | Streaming / cancellation (10) | [video] streamed text, context and tool calls. [native test] Stop during a pending review or a running command → cancelled, nothing applied; Stop after an approved edit reached VS Code → that edit is saved first | 00:40 |
 | Context assembly (15) | [video] Context block: used/budget, ranked files with reasons, skipped items | 00:54 |
 | Diff safety (10) | [video] hunk picker; Undo restores the file (`git status` empty). [native test] partial accept, undo after each hunk | 00:21 |
@@ -127,7 +128,7 @@ fallback shares NVIDIA's backend: it covers throttling and key problems, not an 
 
 Timestamps: current video (first round-1 build); this build's multi-select hunk picker is covered by the native UI tests.
 Automated checks use a **scripted model** that supplies Task B's paths and edits (plumbing, not discovery): `scripts/e2e-mock.sh`
-(24 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in VS Code), 204 unit and 25 integration tests on TrueForge 0.185.1;
+(24 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in VS Code), 204 unit, 25 integration (TrueForge 0.185.1) and 15 script tests;
 responsiveness gates (host blocks ≤ 150 ms, webview renders ≤ 100 ms) pass 3/3 and fail an injected 200 ms stall.
 
 ## 7. Tools used

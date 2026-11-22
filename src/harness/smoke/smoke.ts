@@ -331,6 +331,9 @@ async function main(): Promise<void> {
     if (tasks.includes('B')) {
       const bPrefix = arg('--task-b-prefix', '').trim();
       const bBody = { mode: 'agent' as const, instruction: bPrefix ? `${bPrefix} ${TASK_B}` : TASK_B, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) };
+      // Task B is judged against its own start state (after Task A in the same workspace), not the Flask checkout:
+      // `git stash create` records the working tree as a commit without changing it (empty when nothing changed).
+      const bStart = (await sh('git', ['stash', 'create'], ws)).out.trim() || 'HEAD';
       const b = await turn(h, ws, 'B', bBody, 'accept', meterLog);
       results.push(b);
       if (b.resumable && process.argv.includes('--resume-after-rate-limit')) {
@@ -341,9 +344,15 @@ async function main(): Promise<void> {
       }
       const bFinal = b.resumed ?? b;
       check(b.resumed ? 'B: turn done (after one Resume)' : 'B: turn done', bFinal.status === 'done', bFinal.error ?? '');
-      const changed = (await sh('git', ['diff', '--name-only'], ws)).out.trim().split('\n').filter(Boolean);
+      const changed = (await sh('git', ['diff', '--name-only', bStart], ws)).out.trim().split('\n').filter(Boolean);
       const needed = ['src/flask/cli.py', 'tests/test_cli.py', 'docs/cli.rst'];
       check('B: ≥3 files changed incl. cli.py, test_cli.py, cli.rst', needed.every((f) => changed.includes(f)), changed.join(', '));
+      const added = async (file: string) => (await sh('git', ['diff', bStart, '--', file], ws)).out.split('\n')
+        .filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+      const testAdded = await added('tests/test_cli.py');
+      check('B: the new test exercises the config command and asserts masking ("***")', /config/.test(testAdded) && /["']\*\*\*["']/.test(testAdded), '');
+      const docsAdded = await added('docs/cli.rst');
+      check('B: the docs mention flask config', /\bflask\b[^\n]*\bconfig\b/.test(docsAdded), docsAdded.split('\n').find((l) => /config/.test(l))?.slice(0, 120) ?? 'no added line mentions config');
       check('B: context report includes src/flask/cli.py', b.contextFiles.includes('src/flask/cli.py'), b.contextUsed ?? '');
       const t = await sh(py, ['-m', 'pytest', 'tests/test_cli.py', '-q'], ws);
       check('B: pytest tests/test_cli.py -q passes', t.ok, t.out.trim().split('\n').pop() ?? '');

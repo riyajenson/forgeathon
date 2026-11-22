@@ -237,17 +237,13 @@ test('coder and inline prompts use the ranked evidence workflow', async () => {
   const repoRoot = path.resolve(__dirname, '../../../../../../');
   const coder = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-coder.json'), 'utf8')) as { manifest: { instructions: string } };
   const inline = JSON.parse(await fs.readFile(path.join(repoRoot, 'agent/forge-inline.json'), 'utf8')) as { manifest: { instructions: string } };
-  // The coder prompt is main's (ecd4a06) verbatim: explore / edit / verify with the explicit command rules.
+  // The coder prompt is p14's (kept over the hybrid branch's in the merge): explore / edit / verify with the
+  // separate test-command budget enforced by the harness.
   assert.match(coder.manifest.instructions, /Work in three phases/);
   assert.match(coder.manifest.instructions, /context the editor ranked for this task/i);
-  assert.match(coder.manifest.instructions, /which candidate files you plan to inspect or change and why/i);
   assert.match(coder.manifest.instructions, /exactly ONE propose_edit per file/i);
-  assert.match(coder.manifest.instructions, /Verify only with `python -m pytest <the test file you changed> -q`/);
-  assert.match(coder.manifest.instructions, /task message states your run_command budget/);
-  assert.match(coder.manifest.instructions, /one more rerun of a test command that already ran/);
-  assert.match(coder.manifest.instructions, /re-read the request's requirements and check every assertion/);
-  assert.match(coder.manifest.instructions, /no python -c/);
-  assert.doesNotMatch(coder.manifest.instructions, /You have \d+ run_command calls/, 'the budget comes from the harness, not a number in the prompt');
+  assert.match(coder.manifest.instructions, /You have 2 run_command calls for the whole task/);
+  assert.match(coder.manifest.instructions, /run only the test file\(s\) you changed or that cover the change/);
   assert.match(coder.manifest.instructions, /no cd, no pipes or redirection/);
   assert.match(coder.manifest.instructions, /read-only host filesystem/);
   assert.match(coder.manifest.instructions, /never use shell commands to edit source files/);
@@ -255,7 +251,7 @@ test('coder and inline prompts use the ranked evidence workflow', async () => {
   assert.match(inline.manifest.instructions, /selected file only/i);
 });
 
-test('hybrid context reranking is enabled by default and the request contract is versioned', async () => {
+test('hybrid context reranking is opt-in and the request contract is versioned', async () => {
   const repoRoot = path.resolve(__dirname, '../../../../../../');
   const extension = JSON.parse(await fs.readFile(path.join(repoRoot, 'extension/package.json'), 'utf8')) as {
     contributes: { configuration: { properties: Record<string, { default?: unknown; description?: string }> } };

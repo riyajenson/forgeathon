@@ -901,6 +901,7 @@ test('sub-agents: a failed sub-agent is reported with its error', async () => {
   const fin = events(run).find((e) => e.t === 'subagent' && e.phase === 'finished') as Extract<HarnessEvent, { t: 'subagent' }>;
   assert.deepEqual([fin.ok, fin.error], [false, '[Model Error] Request failed (429): slow down']);
   assert.ok(events(run).some((e) => e.t === 'status' && e.detail === 'Sub-agent "scout" failed: [Model Error] Request failed (429): slow down'));
+});
 
 test('a cd-prefixed command is refused without a prompt and without using the budget, with the corrected call', async () => {
   const tf = stepwise([
@@ -930,8 +931,6 @@ test('isTestCommand: pytest and python -m pytest only, without shell operators',
     assert.equal(isTestCommand(c), true, c);
   for (const c of ['python -c "import pytest"', 'python -m pytest; rm -rf x', 'flask --help', 'git diff', 'pytest | tee log', 'python -m pytestx'])
     assert.equal(isTestCommand(c), false, c);
-});
-
 });
 
 test('autoApproveSafeCommands is narrowed: python -c, flask and path- or env-prefixed pytest still ask (not as unrestricted)', async () => {

@@ -665,9 +665,49 @@ test('resume: a rate limit after an applied edit emits resumable (changed files,
   assert.deepEqual([r.reason, r.changedFiles], ['rate_limited', [FILE]]);
   assert.ok(r.retryAfterMs >= RESUME_WAIT_MS);
   assert.equal(lastError(run)!.error.workspaceEffect, 'changed');
-  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'rate_limited', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 });
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'rate_limited', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0, ...stoppedIn(run) });
   run.markResumed('t-next');
   assert.equal(run.resumable, undefined, 'a turn is resumed once');
+});
+
+/** The agent and TrueForge session a turn last ran in (its last `session` event): what a Resume of it continues. */
+function stoppedIn(run: TurnRun): { agentName: string; runtimeSessionId: string } {
+  const s = events(run).filter((e) => e.t === 'session').at(-1) as Extract<HarnessEvent, { t: 'session' }>;
+  return { agentName: s.agentName, runtimeSessionId: s.runtimeSessionId };
+}
+
+test('resume after a fallback: a write on the fallback then a 429 is resumable in the fallback session, and Resume continues there', async () => {
+  // Turn 1 (primary session): 401 before any write → fallback. Turn 2 (fallback session): edit, then 429.
+  const tf = new FakeTrueForge({
+    onTurn: (ch, turn) => {
+      if (turn === 1) ch.push(ev('turn.created', { turnId: 'rt-1' }), done('error', '[Model Error] Request failed (401): Unauthorized'));
+      else ch.push(...toolCallNeedingApproval('c1', 'propose_edit', editArgs()));
+    },
+    onApproval: (sub, sessionId) => {
+      void proposeEditTool({ port, scope: scopeOf(sessionId) }, editArgs()).then(() => sub.push(done('error', '[Model Error] Request failed (429): Too Many Requests')));
+    },
+  });
+  const run = makeRun(tf);
+  void clickThrough(run);
+  await run.start();
+  assert.equal(events(run).filter((e) => e.t === 'fallback').length, 1);
+  const sessions = events(run).filter((e) => e.t === 'session') as Array<Extract<HarnessEvent, { t: 'session' }>>;
+  assert.deepEqual(sessions.map((e) => e.agentName), ['coder', 'coder-fallback']);
+  const fallbackSession = sessions[1]!.runtimeSessionId;
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'rate_limited', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0, agentName: 'coder-fallback', runtimeSessionId: fallbackSession });
+
+  // Resume: a new turn whose runtimeSession would hand out the primary's session; it must not be asked.
+  const tf2 = new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-9' }), done('done')) });
+  const asked: string[] = [];
+  const resumed = makeRun(tf2, { resumeFrom: run.resumable, runtimeSession: async (agent) => { asked.push(agent); return 'rs-primary-again'; } });
+  await resumed.start();
+  assert.deepEqual(asked, [], 'no new or primary session is opened');
+  const s2 = events(resumed).filter((e) => e.t === 'session') as Array<Extract<HarnessEvent, { t: 'session' }>>;
+  assert.deepEqual(s2.map((e) => [e.agentName, e.runtimeSessionId]), [['coder-fallback', fallbackSession]]);
+  assert.ok(events(resumed).some((e) => e.t === 'status' && /Resuming the turn that stopped on a rate limit \(1 file already changed\) on the fallback model/.test(e.detail ?? '')));
+  assert.equal(events(resumed).filter((e) => e.t === 'fallback').length, 0);
+  assert.equal(events(resumed).at(-1)?.t, 'done');
+  assert.ok(tf2.inputs[0]!.startsWith('Resumed turn:'));
 });
 
 test('resume: no resumable event for failures that are not rate limits', async () => {
@@ -699,7 +739,7 @@ test('resume: a resumed turn that is rate limited again lists the files of both 
   await run.start();
   const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
   assert.deepEqual(r.changedFiles, ['docs/x.rst', FILE]);
-  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'rate_limited', changedFiles: ['docs/x.rst', FILE], commandsUsed: 1, testsUsed: 2 });
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'rate_limited', changedFiles: ['docs/x.rst', FILE], commandsUsed: 1, testsUsed: 2, ...stoppedIn(run) });
 });
 
 test('watchdog: while a model request is in flight the longer limit applies; between steps the general one', async () => {
@@ -744,7 +784,7 @@ test('watchdog after an applied edit: the turn is resumable (reason stalled) ins
   const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
   assert.deepEqual([r.reason, r.changedFiles, r.retryAfterMs], ['stalled', [FILE], RESUME_AFTER_STALL_MS]);
   assert.match(lastError(run)!.error.message, /no response from the model for 0 s|no response from the model/);
-  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'stalled', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 });
+  assert.deepEqual(run.resumable, { turnId: run.req.turnId, reason: 'stalled', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0, ...stoppedIn(run) });
 
   const resumed = makeRun(new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-9' }), done('done')) }), { resumeFrom: run.resumable });
   await resumed.start();

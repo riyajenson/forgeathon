@@ -26,17 +26,21 @@ Merged from `harness/p14-trueforge-depth`, `feature/hybrid-efficiency-native` an
   corrected call, without using the budget; the panel shows the observed result of the last test run next to the model's
   claim, and marks it stale when files changed after it.
 - **Resilience:** a 120 s silence limit while a model request is in flight (45 s otherwise); a turn stopped after writes by a
-  429 or a stall offers **Resume** in the same TrueForge conversation; Stop also kills a sandboxed command that had just started.
+  429 or a stall offers **Resume** in the same TrueForge conversation (after a fallback: the fallback's conversation and
+  model); Stop also kills a sandboxed command that had just started.
 - **TrueForge depth:** compaction at 40k input tokens (once per Task B, its start and end shown); dynamic sub-agents on for
-  `forge-coder` (the model decides; Nemotron did not delegate in 6 real runs); opt-in Daytona sandbox, git skill and Code Mode
+  `forge-coder` (the model decides; "read-only" is an instruction, and a sub-agent's edits still go through the same review;
+  Nemotron did not delegate in 6 real runs); opt-in Daytona sandbox, git skill and Code Mode
   spike (`scripts/daytona-spike.sh`, needs `DAYTONA_API_KEY` in `.env.daytona` with sandbox and snapshot write/delete
   permissions; files Code Mode reads go to Daytona's cloud; edits stay approval-gated).
 - **Context:** the workspace index is built in the background; 4,000-token default budget; **opt-in** local semantic
   reranking (`forge.context.semanticSearch`, off by default; embedding model `onnx-community/all-MiniLM-L6-v2-ONNX`, CPU,
   downloaded from Hugging Face on first use after `scripts/enable-semantic-search.sh`).
-- **Evidence (22 Nov, real models, nvidia-free):** on this build A 6/6, B 6/6 (48 requests, 217 s), C 3/3 (401 → OpenRouter),
-  no 429; on `harness/p14-trueforge-depth` before the merge A, B, C and a sub-agent-prompted B also passed. Details:
-  [`docs/STATUS.md`](docs/STATUS.md).
+- **Evidence (22 Nov, real models, nvidia-free, one run each):** on the finals code (`0be9897`, the merged build; later commits
+  change docs, tests and tooling, plus the Resume-after-fallback fix `c47e092`, tested with the scripted model only): **Task B 6/6, first diff 100.3 s, 216.8 s, 48 requests**; A 6/6; C 3/3 (401 → OpenRouter);
+  no 429. On `harness/p14-trueforge-depth` at `5710431`, before the hybrid merge: B 6/6 (63.0 s / 184 s, 45 requests), B with
+  a sub-agent request 6/6 (59.9 s / 203 s, 44 requests, no delegation), A 6/6, C 3/3. Details:
+  [`docs/writeup/rehearsal.json`](docs/writeup/rehearsal.json), [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Demo
 
@@ -121,14 +125,14 @@ How one turn runs:
    has a daily cap (50 requests without credit), so it covers throttling and key problems, not an NVIDIA outage.
    **Resume (branch `harness/p14-trueforge-depth`):** when a turn stops on a rate limit (429), for example after
    edits were saved, the panel offers **Resume** after about a minute. Resume sends the same request as a new turn
-   in the same TrueForge conversation, tells the model which files are already changed, and carries over what the
+   in the same TrueForge conversation (if the turn had fallen back, the fallback's conversation, on the fallback model), tells the model which files are already changed, and carries over what the
    interrupted turn used of the command budgets. A turn can be resumed once. The same Resume is offered when the
    model stops responding after the turn changed files: while a model request is in flight the silence limit is
    120 s (`forge.watchdog.modelRequestSec`), 45 s for other waits.
 7. **Sub-agents (on by default).** Setup enables TrueForge's dynamic sub-agents for `forge-coder` (not inline)
    and tells the agent that `create_sub_agent` is available: at most one read-only exploration sub-agent per
-   task, with edits and commands left to the main agent. Whether to delegate is the model's choice (Nemotron did
-   not delegate in 4 real runs). `node scripts/setup-trueforge.mjs --no-subagents` turns them off. A sub-agent's edits and
+   task, with edits and commands left to the main agent. "Read-only" is an instruction, not enforced: TrueForge gives
+   the sub-agent the same tools. Whether to delegate is the model's choice (Nemotron did not delegate in 6 real runs). `node scripts/setup-trueforge.mjs --no-subagents` turns them off. A sub-agent's edits and
    commands still go through the same review and budgets. The panel lists each one as "Sub-agent: <name>" with
    its task and outcome, and the status line shows "Delegated to sub-agent …".
 8. **Review safeguards.** A hunk that deletes a whole Python class or function is flagged in the review (the hunk
@@ -250,6 +254,8 @@ Which models were used for what:
   Mistral Large 4 and MiniMax M3.1 Flash (`docs/STATUS.md`, "Models").
 - **Examples only, never run:** Gemini, Anthropic, OpenAI, `groq/gpt-oss-120b` and the paid profile's
   `qwen/qwen3-coder-next` (OpenRouter) in `config/models.example.json`.
+- **Scripted test model (mock mode and automated tests only):** `demo-primary/scripted` and `demo-fallback/scripted`
+  (`config/models.mock.example.json`; one local process on loopback, no network, no cost).
 - **Embeddings (opt-in, not used in the demo):** `onnx-community/all-MiniLM-L6-v2-ONNX`, local CPU, for semantic reranking.
 - **Service (opt-in spike, not used in the demo):** Daytona sandboxes through TrueForge's sandbox provider.
 
@@ -364,11 +370,10 @@ FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; p
 - The test run, then a summary.
 - At turn end, **Files changed in this turn: 3**, listing the three paths together with their review and
   accepted-hunk counts.
-- At most 5 commands per turn (`forge.commandBudget.agent`); with a budget of 4 or more, the last 2 are kept for
-  test runs (`pytest`, `python -m pytest`), so other commands get at most 3. After that, one rerun of a test command that already
-  ran is still allowed once a fix was accepted, so a failing test can always be fixed and checked; any other
-  command appears as "command budget reached". A `cd … && …` command is refused before any prompt, without
-  using the budget, and the model is told the corrected call.
+- Two separate budgets per agent turn: at most 3 test runs (`pytest`, `python -m pytest` without shell operators;
+  `forge.testCommandBudget.agent`) and at most 3 other commands (`forge.commandBudget.agent`). A refused call appears as
+  "test-command budget reached" or "command budget reached" and is not run, so a debug command can never use up a test
+  rerun. A `cd … && …` command is refused before any prompt, without using a budget, and the model is told the corrected call.
 
 **What to click:**
 
@@ -490,8 +495,9 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
     (without shell operators) is marked **⚠ Unrestricted** with a warning.
   - The working directory must resolve inside the workspace.
   - **Protected execution (bubblewrap):**
-    - Only the system runtime (`/usr`, `/etc`, `/lib*`), the workspace and its virtualenv (with the Python it
-      was made from) are mounted, all read-only, so a command cannot edit source files. Your home directory
+    - Only the system runtime (`/usr`, `/etc`, `/lib*`), the workspace and its virtualenv are mounted, all read-only;
+      when the virtualenv's base interpreter lives outside the system runtime (for example a pyenv or uv Python), that
+      interpreter's prefix is mounted read-only too, so a command cannot edit source files. Your home directory
       (`~/.ssh`, `~/.forge-keys.env`, other checkouts) does not exist inside, and this repo's `config/models.json`
       reads as empty. `/tmp` is private and disposable, and there is no network.
     - Only `PATH`, `VIRTUAL_ENV` and the locale are passed: no API keys.
@@ -522,7 +528,10 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
     lines and 60,000 characters, cuts lines longer than 2,000 characters, and marks every cut.
   - Ignored and default-excluded files are left out of automatic retrieval, listing and search, but an
     explicit `read_file` or `@file` can still read them.
-  - The rule is name-based: a secret stored in an ordinary source file is not detected.
+  - The rule is name-based only: a secret stored in an ordinary source file is not detected, and is sent like any other
+    file content.
+  - Ordinary source files that are sent to the model (context, `read_file` results) are also stored in TrueForge's local
+    traces (its SQLite database, `SQLITE_PATH`), like every other message of the session.
 - **Unsettled tools:** if a tool is still running when the model's turn ends, the session stays occupied until
   it finishes (Stop or the command timeout ends it). No retry, fallback or next turn starts in the meantime.
 - **Residual risk:** a command you approve can still read every file in the workspace (secrets kept there are
@@ -556,9 +565,13 @@ When the top five files cover less than 40% of task terms or the top two scores 
 
 ### Context-selection benchmark
 
-The benchmark has 13 labeled tasks across Forge and pinned Flask 3.1.3. These are retrieval/packing measurements, not end-to-end coding success. With the extension's default 4,000-token budget, the prior single-run baseline had recall@5 0.699, MRR 0.660, relevant-file density 0.461 files per 1,000 packed tokens, 4.55 ms median assembly, and 9 of 30 expected files packed. The current implementation, measured across three runs with semantic inference deliberately unavailable to isolate lexical/structural selection, had recall@5 0.801, MRR 0.733, density 0.492, 4.04 ms median assembly, and 25 of 30 expected files packed. That is +14.7% recall@5, +11.2% MRR, +6.7% density, 11.1% lower assembly latency, and 9→25 expected files in packed context. It does **not** show a 50% gain on every metric.
-
-At an 8,000-token benchmark budget, the previous run measured recall@5 0.699, MRR 0.660, density 0.244, and 203.16 ms median assembly (including the old semantic wait on a cold/missing runtime). The current three-run median was recall@5 0.801, MRR 0.733, density 0.315, and 4.06 ms assembly. The latency reduction is 98.0%, largely because a semantic cache miss no longer blocks context assembly and lexical ranking is not needlessly recomputed. The 4,000- and 8,000-token figures are different budget settings. Older baseline runs are single directional runs, and their indexed source trees differed slightly as implementation files changed; use these comparisons as directional evidence, not a controlled universal result. Semantic ranking quality itself was not measured in these runs.
+The benchmark has 13 labeled tasks across Forge and pinned Flask 3.1.3. These are retrieval/packing measurements, not
+end-to-end coding success. Reproduced on `c865952` (`--mode hybrid --budget-tokens 4000`, three runs, semantic runtime
+not installed, so ranking is lexical/structural): recall@5 0.776, MRR 0.721, relevant-file density 0.491 per 1,000 packed
+tokens, 25 of 30 expected files packed (identical in all three runs), median assembly 3.1–4.9 ms. The numbers previously
+quoted here (recall@5 0.801, MRR 0.733, density 0.492) were measured on `658243d`; the benchmark also indexes this
+repository, whose contents have changed since. The earlier single-run baseline (recall@5 0.699, MRR 0.660, 9 of 30
+files packed) is from before the hybrid retrieval work.
 
 Run the paired benchmark from the repository root to compare lexical and hybrid results on the same cases:
 
@@ -604,19 +617,26 @@ scripts/dev-mock.sh
 7. **Task C (mock override):** in a second terminal, `scripts/dev-mock.sh --break-primary`, then repeat Task A.
    The banner reads "Primary model failed: … 401 … → switched to demo-fallback/scripted"; click **✕** (*Reject all hunks*);
    `git -C ~/flask-demo status --short` prints nothing. Then `scripts/dev-mock.sh --restore`.
+8. **Automated checks on this checkout:** the scripts default to other Flask paths, so point them at `~/flask-demo`:
+
+   ```bash
+   FORGE_FLASK_DIR=~/flask-demo npm --prefix src/harness test      # the Flask ranking test is skipped without it
+   scripts/e2e-mock.sh --flask ~/flask-demo                         # with dev-mock.sh stopped; it starts its own
+   scripts/test-extension-e2e.sh --flask ~/flask-demo
+   ```
 
 ## Testing
 
 Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
 real model solves the tasks: the scripted model knows the fixed tasks and, in Task B, supplies the file paths
 and edits, so a mock run is no evidence of file discovery. Real-model results: `docs/writeup/rehearsal.json`
-(this build; the first round-1 build: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 163 unit and 20 integration tests.
+(this build; the first round-1 build: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 205 unit, 26 integration and 17 script tests (`node --test scripts/*.test.mjs`).
 
 | Command | What it proves | Needs |
 |---|---|---|
 | `npm --prefix src/harness test` | Harness unit tests, and turn races against an in-memory TrueForge stand-in (late writes against retry and fallback; a silent server against Stop) | Nothing. The Flask ranking test needs `FORGE_FLASK_DIR`, otherwise it is skipped |
 | `npm --prefix src/harness run test:integration` | Turns through a real TrueForge 0.185.1: approvals, partial accept, deny, cancel races, 401/429/watchdog → retry or fallback, two 429s per model call absorbed by TrueForge's own retries (no harness retry, no duplicate tool call), run_command, setup | TrueForge on :8790 (`scripts/dev-mock.sh --background`) |
-| `scripts/e2e-mock.sh` | Tasks A, B, C, G (guardrails) and R (Resume after a scripted 429) through the harness on a copy of Flask 3.1.3, with the verification commands: 24 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
+| `scripts/e2e-mock.sh` | Tasks A, B, C, G (guardrails) and R (Resume after a scripted 429) through the harness on a copy of Flask 3.1.3, with the verification commands: 26 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
 | `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
 | `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, Stop during an apply, panel (incl. the turn-end file summary), settings | A display (WSLg, or X/Wayland on Linux). Fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A (incl. undo and re-apply), B, Stop during a pending review and during a running command, and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |

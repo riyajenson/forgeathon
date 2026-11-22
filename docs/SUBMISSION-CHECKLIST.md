@@ -54,4 +54,4 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Submission form https://forms.gle/htyWGFJRBgsg3qmx6 | 🟡 | Human |
 | Public PDF link | 🟡 | After the timestamps are filled: `scripts/render-writeup.sh`, then commit the rendered PDF (`git add -f docs/writeup/WRITEUP.pdf`, it is gitignored) and push; submit https://github.com/riyajenson/forgeathon/blob/main/docs/writeup/WRITEUP.pdf as the PDF link. Check it opens signed out (DEMO-SCRIPT "After recording") |
 | Links public by the deadline (repo, video, PDF) | 🟡 | Check in a signed-out browser |
-| Evidence gate `node scripts/check-submission.mjs` | ✅ | Passes on the finals build: `docs/writeup/rehearsal.json` records real A/B/C on 0be9897, followed only by docs commits |
+| Evidence gate `node scripts/check-submission.mjs` | 🟡 | `docs/writeup/rehearsal.json` records real A/B/C on 0be9897. Docs, tests, the smoke runner, the benchmark, CI and setting descriptions since then keep it valid; the Resume-after-fallback fix (`c47e092`, `src/harness/turn/turn.ts`) is runtime code, mock-tested only (unit + integration), so the gate fails until A/B/C are rehearsed on a build that contains it |

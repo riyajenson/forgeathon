@@ -48,8 +48,17 @@ const SUBTASK = 'SUBTASK:explore';
 const TURN_LOG = path.join(os.tmpdir(), `forge-itest-turns-${process.pid}.jsonl`);
 process.env['FORGE_TURN_LOG'] = TURN_LOG;
 function script(req: MockRequest): MockReply {
-  if (req.model === 'mock-fallback') return lastToolMessage(req) !== undefined ? { text: 'fallback finished' } : { text: 'fallback model answered' };
   const scenario = scenarioOf(req);
+  // 'fallback-resume429' (agent it-auth: primary 401): the fallback edits, is rate limited until the test allows the
+  // resumed turn, and then answers saying which model and how many earlier tool results it sees.
+  if (req.model === 'mock-fallback' && scenario === 'fallback-resume429') {
+    const last = textOf(req.messages.filter((m) => m.role === 'user').at(-1)?.content);
+    if (last.startsWith('Resumed turn:')) return { text: `fallback resumed with ${req.messages.filter((m) => m.role === 'tool').length} earlier tool result(s) in view` };
+    if (lastToolMessage(req) !== undefined && !resumeAllowed) return { status: 429, message: 'Too Many Requests', headers: { 'retry-after-ms': '50' } };
+    if (lastToolMessage(req) !== undefined) return { text: 'unexpected' };
+    return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [{ old_text: '    return 1', new_text: '    return 10' }] } }] };
+  }
+  if (req.model === 'mock-fallback') return lastToolMessage(req) !== undefined ? { text: 'fallback finished' } : { text: 'fallback model answered' };
   const toolResult = lastToolMessage(req);
   // 'compact' (agent it-compact, trigger 2000 input tokens): TrueForge asks for a summary (its compaction prompt is the
   // last message); the summary then replaces the conversation, so later requests are recognised by it instead.
@@ -679,6 +688,31 @@ test('resume after a rate limit: the turn stops after its edit with resumable; R
     // A turn is resumed once.
     const again = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: sid, turnId: `turn-${++seq}`, mode: 'agent', instruction, resumeOf: firstTurnId } });
     assert.ok(!again.ok && again.error.code === 'conflict');
+  });
+});
+
+test('resume after a fallback: the fallback writes, then a 429; Resume continues the fallback conversation, not the primary', async () => {
+  await withHarness('it-auth', async (h, sid) => {
+    const instruction = 'SCENARIO:fallback-resume429 bump alpha';
+    const first = await runTurn(h, sid, instruction, async (e) => { if (e.t === 'review_request') await review(h, e, () => 'accept'); });
+    assert.equal(doneOf(first).status, 'error');
+    assert.equal(ofType(first, 'fallback').length, 1, 'the primary 401 fell back');
+    const sessions = ofType(first, 'session');
+    assert.deepEqual(sessions.map((e) => e.agentName), ['it-auth', 'it-auth-fallback']);
+    const fallbackSession = sessions[1]!.runtimeSessionId;
+    assert.equal(ofType(first, 'resumable').length, 1, JSON.stringify(first.slice(-4)));
+    assert.equal(await disk(), ORIGINAL.replace('return 1', 'return 10'));
+
+    resumeAllowed = true;
+    const before = mock.requests.length;
+    const second = await runTurn(h, sid, instruction, undefined, { resumeOf: first[0]!.turnId });
+    assert.equal(doneOf(second).status, 'done', JSON.stringify(ofType(second, 'error')));
+    assert.deepEqual(ofType(second, 'session').map((e) => [e.agentName, e.runtimeSessionId]), [['it-auth-fallback', fallbackSession]], 'same fallback conversation');
+    assert.equal(ofType(second, 'fallback').length, 0);
+    assert.ok(ofType(second, 'status').some((e) => /\(1 file already changed\) on the fallback model$/.test(e.detail ?? '')));
+    const sent = mock.requests.slice(before);
+    assert.ok(sent.length > 0 && sent.every((r) => r.model === 'mock-fallback'), `models asked on Resume: ${sent.map((r) => r.model).join(', ')}`);
+    assert.match(ofType(second, 'text').map((e) => e.delta).join(''), /fallback resumed with [1-9]\d* earlier tool result\(s\) in view/);
   });
 });
 

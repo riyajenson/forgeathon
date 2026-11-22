@@ -166,3 +166,6 @@ excludedFromIndex: ['benchmark runner and dataset', 'docs/superpowers/**', '.sup
 };
 
 process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+// Hybrid mode can leave a semantic warm-up (or its worker) running after the report: exit once it is written.
+process.exitCode = 0;
+process.stdout.end(() => process.exit());

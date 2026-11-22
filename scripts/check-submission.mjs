@@ -43,14 +43,29 @@ export function checkSubmission(writeup, evidence) {
   return errors;
 }
 
-/** The evidence must be for HEAD, or for an ancestor of HEAD followed only by documentation commits (docs/, *.md):
- * committing rehearsal.json itself, or the video URL, must not invalidate the evidence. */
+/** Files that cannot change what the demo runs: documentation, tests, the smoke runner (no runtime code imports it), the
+ * context benchmark, this checker and CI configuration. */
+export function isNonRuntime(f) {
+  return f.startsWith('docs/') || /^[^/]+\.md$/.test(f) || /\.(test|itest)\.(ts|mjs|cjs|js)$/.test(f) ||
+    f.startsWith('extension/test/') || f.startsWith('src/harness/smoke/') || f === 'scripts/bench-context.mjs' ||
+    f === 'scripts/check-submission.mjs' || f.startsWith('.github/');
+}
+
+/** True when two package.json texts differ only in "description" strings (settings help text shown in VS Code). */
+export function onlyDescriptionsDiffer(before, after) {
+  const strip = (v) => Array.isArray(v) ? v.map(strip) : v && typeof v === 'object'
+    ? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'description').map(([k, x]) => [k, strip(x)])) : v;
+  try { return JSON.stringify(strip(JSON.parse(before))) === JSON.stringify(strip(JSON.parse(after))); } catch { return false; }
+}
+
+/** The evidence must be for HEAD, or for an ancestor of HEAD followed only by non-runtime commits (isNonRuntime):
+ * committing rehearsal.json itself, the video URL, tests or CI must not invalidate the evidence. */
 export function commitError(recorded, head, isAncestor, changedSinceRecorded) {
   if (recorded.toLowerCase() === head.toLowerCase()) return undefined;
-  const code = isAncestor ? changedSinceRecorded.filter(f => !f.startsWith('docs/') && !/^[^/]+\.md$/.test(f)) : [];
+  const code = isAncestor ? changedSinceRecorded.filter(f => !isNonRuntime(f)) : [];
   if (isAncestor && !code.length) return undefined;
   return `Real-model evidence was recorded for ${recorded}; rehearse A/B/C on the current commit ${head}` +
-    (isAncestor ? ` (changed since then outside docs: ${code.slice(0, 5).join(', ')}${code.length > 5 ? ', …' : ''}).` : '.');
+    (isAncestor ? ` (changed since then outside docs and tests: ${code.slice(0, 5).join(', ')}${code.length > 5 ? ', …' : ''}).` : '.');
 }
 
 export function main(args = process.argv.slice(2)) {
@@ -71,6 +86,8 @@ export function main(args = process.argv.slice(2)) {
     const head = git('rev-parse', 'HEAD'), recorded = evidence.repositoryCommit;
     let ancestor = false, changed = [];
     try { git('merge-base', '--is-ancestor', recorded, head); ancestor = true; changed = git('diff', '--name-only', recorded, head).split('\n').filter(Boolean); } catch { /* not an ancestor */ }
+    // A settings description is help text: ignore extension/package.json when nothing else in it changed.
+    changed = changed.filter((f) => f !== 'extension/package.json' || !onlyDescriptionsDiffer(git('show', `${recorded}:${f}`), git('show', `HEAD:${f}`)));
     const error = commitError(recorded, head, ancestor, changed);
     if (error) errors.push(error);
   }

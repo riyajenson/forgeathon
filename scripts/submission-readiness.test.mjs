@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSubmission, commitError } from './check-submission.mjs';
+import { checkSubmission, commitError, isNonRuntime, onlyDescriptionsDiffer } from './check-submission.mjs';
 
 const writeup = ['Team', 'Starting point', 'Architecture on TrueForge', 'How context is selected', 'Model setup', 'Scorecard', 'Tools used', 'Known limitations and what you would do with another month'].map((h, i) => `## ${i + 1}. ${h}\nCompleted evidence`).join('\n\n');
 const fixture = () => ({
@@ -33,6 +33,27 @@ test('evidence commit: HEAD, or an ancestor followed only by docs commits', () =
   const rec = 'b'.repeat(40), head = 'c'.repeat(40);
   assert.equal(commitError(rec, rec.toUpperCase(), false, []), undefined);
   assert.equal(commitError(rec, head, true, ['docs/writeup/rehearsal.json', 'README.md']), undefined);
-  assert.match(commitError(rec, head, true, ['docs/STATUS.md', 'extension/src/review.ts']), /outside docs: extension\/src\/review\.ts/);
+  assert.match(commitError(rec, head, true, ['docs/STATUS.md', 'extension/src/review.ts']), /outside docs and tests: extension\/src\/review\.ts/);
   assert.match(commitError(rec, head, false, []), /rehearse A\/B\/C on the current commit c{40}\.$/);
+});
+
+test('evidence survives test, smoke, benchmark and CI commits, but not runtime code', () => {
+  const rec = 'a'.repeat(40), head = 'b'.repeat(40);
+  for (const f of ['src/harness/turn/turn.test.ts', 'src/harness/integration/turn.itest.ts', 'extension/test/panel.cjs',
+    'src/harness/smoke/smoke.ts', 'scripts/bench-context.mjs', 'scripts/check-submission.mjs', '.github/workflows/ci.yml', 'scripts/use-models.test.mjs']) {
+    assert.equal(isNonRuntime(f), true, f);
+    assert.equal(commitError(rec, head, true, [f]), undefined, f);
+  }
+  for (const f of ['src/harness/turn/turn.ts', 'extension/media/agent.js', 'agent/forge-coder.json', 'scripts/setup-trueforge.mjs', 'extension/package.json'])
+    assert.equal(isNonRuntime(f), false, f);
+  assert.match(commitError(rec, head, true, ['src/harness/smoke/smoke.ts', 'src/harness/turn/turn.ts']), /turn\/turn\.ts/);
+});
+
+test('a package.json change counts as help text only when nothing but description strings differ', () => {
+  const a = JSON.stringify({ contributes: { configuration: { properties: { x: { type: 'boolean', default: false, description: 'old' } } } } });
+  const b = JSON.stringify({ contributes: { configuration: { properties: { x: { type: 'boolean', default: false, description: 'new' } } } } });
+  const c = JSON.stringify({ contributes: { configuration: { properties: { x: { type: 'boolean', default: true, description: 'new' } } } } });
+  assert.equal(onlyDescriptionsDiffer(a, b), true);
+  assert.equal(onlyDescriptionsDiffer(a, c), false);
+  assert.equal(onlyDescriptionsDiffer(a, '{'), false);
 });

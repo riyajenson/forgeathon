@@ -58,6 +58,12 @@
       setText('budget', s.context.estimatedTokens + ' / ' + s.context.budgetTokens + ' estimated tokens');
       list('selected',s.context.selections.map(i => i.path + (i.symbol ? ' | ' + i.symbol : '') +
         ' | ' + i.source + ' | ' + i.rationale + ' | ' + i.estimatedTokens + ' tokens' + (i.truncated ? ' (truncated)' : '')));
+      const view = s.contextView || { pinned: [], files: [], skipped: [] };
+      setHidden('pinnedTitle', !view.pinned.length);
+      list('pinned', view.pinned);
+      list('files', view.files);
+      setHidden('skippedGroupsTitle', !view.skipped.length);
+      list('skippedGroups', view.skipped);
       setHidden('skippedTitle', !s.context.skipped.length);
       list('skipped',s.context.skipped.map(i => i.path + ' | ' + i.reason + ' | ' + i.estimatedTokens + ' tokens'));
     }

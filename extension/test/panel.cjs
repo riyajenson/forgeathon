@@ -161,6 +161,31 @@ exports.run = async () => {
   assert.equal(vError.verification, '', 'an error or cancelled turn already says so; no verdict');
   const vInline = changedTurn([{t:'done',status:'done'}]);
   assert.equal(vInline.verification, '', 'inline turns carry no test outcome: no verdict');
+  // Context report at a glance: pins first, one row per automatic file (rank order), skipped items grouped by reason.
+  const { contextView, skipCategory } = require('../out/contextView');
+  const grouped = contextView({budgetTokens:4000, estimatedTokens:3992,
+    selections:[
+      {path:'src/flask/cli.py',source:'automatic',rank:1,rationale:'BM25 match: command, cli',estimatedTokens:600,truncated:true,range:{startLine:1080,endLine:1130}},
+      {path:'src/flask/helpers.py',source:'explicit',rank:0,rationale:'@file reference',estimatedTokens:300,truncated:false},
+      {path:'src/flask/cli.py',source:'automatic',rank:3,rationale:'symbol: FlaskGroup',estimatedTokens:120,truncated:false,symbol:'FlaskGroup'},
+      {path:'tests/test_cli.py',source:'automatic',rank:2,rationale:'test for src/flask/cli.py',estimatedTokens:110,truncated:false}],
+    skipped:[
+      {path:'src/flask/app.py',reason:'ranked #9 (score 3.1 vs top 9.0), below the cut of 8 files',estimatedTokens:0},
+      {path:'docs/api.rst',reason:'lines 10-90 skipped: budget exhausted (needs 700, 40 left)',estimatedTokens:700},
+      {path:'docs/config.rst',reason:'outline does not fit the remaining budget (40 tokens left)',estimatedTokens:90},
+      {path:'.env',reason:'credentials file is not sent to the model',estimatedTokens:0}]});
+  assert.deepEqual(grouped.pinned, ['src/flask/helpers.py \u2014 pinned, outline, 300 tokens']);
+  assert.deepEqual(grouped.files, [
+    'src/flask/cli.py \u2014 lines 1080\u20131130, FlaskGroup \u2014 720 tokens \u2014 BM25 match: command, cli (+1 more) (truncated)',
+    'tests/test_cli.py \u2014 outline \u2014 110 tokens \u2014 test for src/flask/cli.py']);
+  assert.deepEqual(grouped.skipped, [
+    'Ranked below the file cut \u2014 1 item: src/flask/app.py',
+    'Did not fit the token budget \u2014 2 items: docs/api.rst, docs/config.rst (790 tokens)',
+    'Refused by the read policy (never sent) \u2014 1 item: .env']);
+  assert.equal(skipCategory('semantic reranking is warming in the background; lexical and structural ranking used for this turn'), 'Semantic reranking');
+  const reported = new AgentViewState();
+  reported.update({t:'context_report',report:{budgetTokens:4000,estimatedTokens:10,selections:[],skipped:[]}});
+  assert.deepEqual(reported.contextView, {pinned:[],files:[],skipped:[]});
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

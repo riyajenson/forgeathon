@@ -1128,3 +1128,18 @@ test('a repeated review decision is accepted whatever its property order; a diff
   assert.deepEqual(replies[1], { ok: true }, 'reordered duplicate accepted');
   assert.equal((replies[2] as { error?: { code: string } }).error?.code, 'conflict');
 });
+
+test('editHints (off by default): an old_text that matches nowhere is refused with the closest current text', async () => {
+  // Indentation differs from the file (2 spaces, not 4): no exact match, a whitespace-insensitive one at lines 1-2.
+  const shifted = { ...editArgs(), edits: [{ old_text: 'def alpha():\n  return 1\n', new_text: 'def alpha():\n  return 2\n' }] };
+  for (const editHints of [false, true]) {
+    const tf = stepwise([['propose_edit', shifted]]);
+    const run = makeRun(tf, { editHints });
+    void userAnswers(run, []);
+    await run.start();
+    const reason = tf.approvals[0]!.approval.reason ?? '';
+    assert.match(reason, /^OLD_TEXT_NOT_FOUND/);
+    if (editHints) assert.match(reason, /Closest match: lines \d+-\d+ match old_text if whitespace is ignored/);
+    else assert.ok(!reason.includes('Closest match'), 'default refusal text is unchanged');
+  }
+});

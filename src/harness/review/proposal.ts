@@ -210,3 +210,47 @@ export function applyAccepted(baseText: string, hunks: readonly ProposalHunk[], 
   out += baseText.slice(cursor);
   return { text: out, applied, rejected };
 }
+
+/** Lines of current text a no-match hint shows at most. */
+export const NO_MATCH_HINT_LINES = 12;
+
+/**
+ * For an old_text that matches nowhere: where the closest text is, and what it says now, so the model can retry
+ * without another read. Matching is whitespace-insensitive first, then on the first non-blank line. '' when no
+ * candidate is found (the model should read the file again).
+ */
+export function noMatchHint(currentText: string, oldText: string): string {
+  const lines = currentText.split(/\r?\n/);
+  const want = oldText.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+  if (!want.length) return '';
+  const norm = (l: string) => l.trim();
+  const show = (a: number, b: number) => {
+    const end = Math.min(b, a + NO_MATCH_HINT_LINES - 1);
+    const body = lines.slice(a - 1, end).map((l, i) => `${a + i}\t${l}`).join('\n');
+    return `${body}${end < b ? `\n[... ${b - end} more lines]` : ''}`;
+  };
+  // 1. The same non-blank lines exist with different indentation or spacing.
+  const spans: Array<[number, number]> = [];
+  for (let i = 0; i < lines.length && spans.length < 2; i++) {
+    if (norm(lines[i]!) !== want[0]) continue;
+    let j = i, k = 0;
+    while (j < lines.length && k < want.length) {
+      if (norm(lines[j]!) === '') { j++; continue; }
+      if (norm(lines[j]!) !== want[k]) break;
+      j++; k++;
+    }
+    if (k === want.length) spans.push([i + 1, j]);
+  }
+  if (spans.length === 1) {
+    const [a, b] = spans[0]!;
+    return `Closest match: lines ${a}-${b} match old_text if whitespace is ignored; copy old_text exactly from the current text:\n${show(a, b)}`;
+  }
+  // 2. The first line of old_text is in the file once: show what follows it now.
+  const firstAt = lines.flatMap((l, i) => (norm(l) === want[0] ? [i + 1] : []));
+  if (firstAt.length === 1) {
+    const a = firstAt[0]!;
+    return `Closest match: old_text's first line is line ${a}, but the lines after it differ now. Current text:\n${show(a, Math.min(lines.length, a + want.length + 1))}`;
+  }
+  if (firstAt.length > 1) return `old_text's first line occurs at lines ${firstAt.slice(0, 5).join(', ')}${firstAt.length > 5 ? ', …' : ''}, but no complete match; read those lines again.`;
+  return '';
+}

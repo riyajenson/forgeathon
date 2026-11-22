@@ -134,6 +134,11 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Let the agent read several line ranges of one file in one `read_file` call (fewer model round trips). Off by default: it changes the tool schema the model sees. Applies after reconnect."
+        },
+        "forge.tools.editHints": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When a proposed edit's `old_text` matches nowhere, tell the agent where the closest text is and what it says now (up to 12 lines, credentials masked), so it can retry without another read. Off by default: it changes model-facing text. Applies after reconnect."
         }
       }
     }

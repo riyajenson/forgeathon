@@ -42,6 +42,8 @@ export interface HarnessOptions {
   maskSourceSecrets?: boolean;
   /** Offer several line ranges per read_file call (fewer read round trips; changes the tool schema the model sees). Default false. */
   multiRangeRead?: boolean;
+  /** On a propose_edit whose old_text matches nowhere, include the closest current text in the refusal. Default false. */
+  editHints?: boolean;
   /** Name of the MCP connector registered in TrueForge. Default "vscode". */
   connectorName?: string;
   /** JSON-lines log of every turn (models, attempts, tokens, timing; no content). Default ~/.forge/turns.jsonl
@@ -208,6 +210,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       modelWatchdogMs: this.options.modelWatchdogMs ?? 120000,
       contextBudgetTokens: this.options.contextBudgetTokens ?? 4000,
       maskSourceSecrets: this.options.maskSourceSecrets !== false,
+      editHints: this.options.editHints === true,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: this.options.settleMs ?? 10000,
       turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,

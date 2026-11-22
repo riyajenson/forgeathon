@@ -6,7 +6,8 @@ import { isAutoApprovableCommand, isListedCommand, isTestCommand, UNRESTRICTED_W
 import type { EditorPort } from '../mcp/port';
 import { maskedNote, maskSourceSecrets } from '../mcp/redact';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
-import { canonicalArgsKey, deletedDefinitions } from '../review';
+import { canonicalArgsKey, deletedDefinitions, noMatchHint } from '../review';
+import { normalizeWorkspacePath } from '../mcp/paths';
 import { testOutcome, type TestOutcome } from './test-outcome';
 import { Attempt, type AttemptResult, type CallDecision, type PendingCall } from '../trueforge/attempt';
 import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, redactSecrets, retryAfterHintMs, retryDelayMs, safeMessage } from '../trueforge/errors';
@@ -36,6 +37,8 @@ export interface TurnDeps {
   contextBudgetTokens: number;
   /** Mask credential shapes in the turn input (selection, context pack). Default true. */
   maskSourceSecrets?: boolean;
+  /** On OLD_TEXT_NOT_FOUND, tell the model where the closest text is and what it says now (forge.tools.editHints). */
+  editHints?: boolean;
   retryDelayMs: number;
   settleMs: number;
   /** JSON-lines turn log (no content); undefined disables it. */
@@ -531,6 +534,7 @@ export class TurnRun {
         const built = await buildProposal(this.deps.port, args);
         if (!built.ok) {
           let reason = `${built.code}: ${built.message}`;
+          if (built.code === 'OLD_TEXT_NOT_FOUND' && this.deps.editHints === true) reason += await this.noMatchHintFor(args);
           if (ARGUMENT_ERROR_CODES.has(built.code)) {
             const file = typeof args?.path === 'string' ? args.path.trim() : '';
             if (this.argumentErrors.has(file)) reason += `. ${PROPOSE_EDIT_SHAPE_HINT}`;
@@ -637,6 +641,18 @@ export class TurnRun {
     const status = (e as { statusCode?: number }).statusCode;
     const hint = status === 404 ? ` (agent "${agent}" not found; run the setup script)` : '';
     return { code: 'unavailable', message: `Could not start a TrueForge session${hint}: ${safeMessage((e as Error).message)}`, retryable: false, workspaceEffect: 'unchanged' };
+  }
+
+  /** The no-match hint for the first edit whose old_text is missing, masked like other model-bound file text. */
+  private async noMatchHintFor(args: ProposeEditArgs): Promise<string> {
+    const path = normalizeWorkspacePath(args?.path);
+    const snap = path ? await this.deps.port.readText(path).catch(() => null) : null;
+    const missing = snap && Array.isArray(args.edits) ? args.edits.find((e) => typeof e?.old_text === 'string' && !snap.text.includes(e.old_text)) : undefined;
+    if (!snap || !missing) return '';
+    const hint = noMatchHint(snap.text, missing.old_text);
+    if (!hint) return '. No close match: read the file again before retrying.';
+    const masked = this.deps.maskSourceSecrets === false ? { text: hint, count: 0 } : maskSourceSecrets(hint);
+    return `. ${masked.text}${masked.count ? ' ' + maskedNote(masked.count) : ''}`;
   }
 
   private finishCancelled(result?: AttemptResult): void {

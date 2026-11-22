@@ -25,7 +25,28 @@ Exact steps and verification commands: [`docs/REFERENCE.md`](docs/REFERENCE.md#r
 
 ## How it works
 
-![Architecture: VS Code extension, forge-harness and MCP server, TrueForge, model providers](docs/writeup/architecture.svg)
+```mermaid
+flowchart LR
+    U([Developer]) -->|"Inline edit (Ctrl+Alt+I) or agent task"| EXT
+
+    subgraph VSC["VS Code · extension host"]
+        EXT["Forge extension<br/>panel · diff review · hunk picker · Undo · Stop"]
+        H["forge-harness<br/>turn controller · watchdog · fallback<br/>context engine · review core"]
+        MCP["MCP server 127.0.0.1:47615<br/>gather_context · read_file · search_workspace<br/>propose_edit · run_command<br/>deferred: find_symbol · list_files"]
+        EXT <-->|EditorPort| H
+        H --- MCP
+    end
+
+    H -->|"SDK over HTTP: sessions, turns,<br/>approvals, cancel"| TF
+    TF["TrueForge 0.185.1 (local :8790)<br/>agent loop: forge-inline · forge-coder (+ fallback)<br/>streamed events · approvals · compaction<br/>deferred tools · sessions UI"]
+    TF -->|"MCP tools/call + session id"| MCP
+    TF -->|HTTPS| M["Models<br/>primary: NVIDIA Nemotron-3 Ultra<br/>fallback: OpenRouter"]
+
+    MCP -->|"propose_edit → approval"| R{"Review diff"}
+    R -->|accept| W["Write via EditorPort<br/>(only approved hunks)"]
+    R -->|reject| X["Nothing written"]
+    MCP -->|"run_command → allowlist / approval"| S["bubblewrap sandbox<br/>output redacted"]
+```
 
 **VS Code extension → harness → local TrueForge agent loop → models, with TrueForge calling back into the editor through MCP tools.**
 

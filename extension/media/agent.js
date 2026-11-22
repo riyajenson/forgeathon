@@ -40,7 +40,7 @@
   // collapsed into one expandable row so edits, commands and failures stay in view on long turns.
   const READER = /(^|[_.:])(read_file|search_workspace|list_files|find_symbol|gather_context)$/;
   const toolRows = new Map(), toolGroups = new Map();
-  let lastTools;
+  let lastTools, lastWarnings = '';
   const toolRow = t => {
     let li = toolRows.get(t.id);
     if (!li) { li = document.createElement('li'); toolRows.set(t.id, li); }
@@ -113,7 +113,17 @@
     setHidden('tests', !s.tests);
     setText('tests', s.tests || '');
     setHidden('warnings', !s.warnings.length);
-    list('warningList', s.warnings);
+    // Each destructive-hunk warning is a link that opens the file at that hunk.
+    if (s.warnings.join('\n') !== lastWarnings) {
+      lastWarnings = s.warnings.join('\n');
+      el('warningList').replaceChildren(...s.warnings.map((w, index) => {
+        const li = document.createElement('li'), a = document.createElement('a');
+        a.textContent = w; a.href = '#'; a.title = 'Open the file at this hunk';
+        a.onclick = (event) => { event.preventDefault(); vscode.postMessage({action:'openWarning', index}); };
+        li.append(a);
+        return li;
+      }));
+    }
     setHidden('turnFiles', !s.summary.length);
     setText('turnFilesTitle', 'Files changed in this turn: ' + s.summary.filter(line => !line.endsWith('| not changed')).length);
     list('summary',s.summary);

@@ -33,6 +33,8 @@ export class AgentViewState {
   autoResume = false;
   /** Proposals in this turn with hunks that delete a whole class or function. */
   warnings: string[] = [];
+  /** Where each warning's hunk starts (file and 1-based line), for jumping to it. */
+  warningTargets: Array<{path: string; line: number}> = [];
   /** Set when an agent turn ends: the observed outcome of its last test command, shown next to the model's summary. */
   tests = '';
   /** Files with unsaved editor changes when each command was requested (commands run against the files on disk). */
@@ -71,7 +73,10 @@ export class AgentViewState {
         this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path;
         const f = this.files[e.proposal.path] ??= {reviews: 0, hunks: 0, accepted: 0, status: ''};
         f.reviews++; f.hunks += e.proposal.hunks.length;
-        for (const w of proposalWarnings(e.proposal)) this.warnings.push(e.proposal.path + ': ' + w);
+        for (const w of proposalWarnings(e.proposal)) {
+          this.warnings.push(e.proposal.path + ': ' + w);
+          this.warningTargets.push({path: e.proposal.path, line: Number(/\(line (\d+)\)/.exec(w)?.[1] ?? 1)});
+        }
         break;
       }
       case 'command_request':
@@ -163,7 +168,7 @@ export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): strin
   return 'Tests (observed): ' + result + cmd;
 }
 
-type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void>; attach?(): Promise<string>; undoTurn?(): Promise<void>; unsavedFiles?(): string[] };
+type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void>; attach?(): Promise<string>; undoTurn?(): Promise<void>; unsavedFiles?(): string[]; reveal?(path: string, line: number): Promise<void> };
 export class AgentPanel implements vscode.Disposable {
   state = new AgentViewState();
   private panel?: vscode.WebviewPanel;
@@ -249,6 +254,7 @@ export class AgentPanel implements vscode.Disposable {
               await this.actions.send(m.text);
             break;
           case 'stop': this.cancelAutoResume(); await this.actions.stop(); break;
+          case 'openWarning': { const t = Number.isInteger(m.index) ? this.state.warningTargets[m.index] : undefined; if (t) await this.actions.reveal?.(t.path, t.line); break; }
           case 'undoTurn': if (!this.state.busy) await this.actions.undoTurn?.(); break;
           case 'autoResume': this.setAutoResume(!this.state.autoResume); break;
           case 'attach': { const mentions = await this.actions.attach?.(); if (mentions && panel === this.panel) void panel.webview.postMessage({insertMentions: mentions}); break; }

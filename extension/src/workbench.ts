@@ -24,6 +24,11 @@ export class Workbench implements vscode.Disposable {
     stop: () => this.stop(), review: () => this.choose(),
     command: allow => this.commandAnswer?.(allow),
     resume: () => this.resume(), attach: () => pickAttachments(this.folder), undoTurn: () => this.undoTurn(),
+    reveal: async (path, line) => {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(this.folder.uri, path));
+      const pos = new vscode.Position(Math.max(0, Math.min(line - 1, doc.lineCount - 1)), 0);
+      await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos), preview: false });
+    },
     unsavedFiles: () => vscode.workspace.textDocuments.filter(d => d.isDirty && vscode.workspace.getWorkspaceFolder(d.uri)?.uri.toString() === this.folder.uri.toString())
       .map(d => vscode.workspace.asRelativePath(d.uri, false))
   });

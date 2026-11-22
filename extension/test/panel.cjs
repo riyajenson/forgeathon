@@ -275,6 +275,7 @@ exports.run = async () => {
     {hunkId:'a',startOffset:0,endOffset:0,oldText:'',newText:'# c\n'},
     {hunkId:'b',startOffset:10,endOffset:34,oldText:'class TestRoutes:\n    pass',newText:'class TestConfig:\n    pass',deletes:[{kind:'class',name:'TestRoutes',lines:25}]}]}});
   assert.deepEqual(destructive.warnings, ['tests/test_cli.py: Hunk 2 (line 3) deletes class TestRoutes (25 lines)']);
+  assert.deepEqual(destructive.warningTargets, [{path:'tests/test_cli.py', line:3}], 'the warning links to its hunk');
   const { proposalWarnings, hunkWarning } = require('../out/destructive');
   assert.equal(hunkWarning({deletes:[{kind:'function',name:'a',lines:3},{kind:'function',name:'b',lines:2}]}), 'deletes function a (3 lines), function b (2 lines)');
   assert.deepEqual(proposalWarnings({originalText:'x',hunks:[{hunkId:'a',startOffset:0}]}), []);

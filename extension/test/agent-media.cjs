@@ -95,4 +95,11 @@ exports.run = async () => {
     onMessage({ data: { ...state, renderSequence: 92, tools: [] } });
     assert.equal(element('tools').children.length, 0);
   }
+  // Destructive-hunk warnings are links that ask the host to open the file at the hunk.
+  onMessage({ data: { ...state, renderSequence: 93, warnings: ['tests/test_cli.py: Hunk 2 (line 3) deletes class TestRoutes (25 lines)'] } });
+  const link = element('warningList').children[0].children[0];
+  assert.equal(link.textContent, 'tests/test_cli.py: Hunk 2 (line 3) deletes class TestRoutes (25 lines)');
+  messages.length = 0;
+  link.onclick({ preventDefault() {} });
+  assert.equal(JSON.stringify(messages), JSON.stringify([{ action: 'openWarning', index: 0 }]));
 };

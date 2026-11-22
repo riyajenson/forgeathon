@@ -23,7 +23,9 @@ export class Workbench implements vscode.Disposable {
     send: text => this.run('agent', text, this.activeContext()),
     stop: () => this.stop(), review: () => this.choose(),
     command: allow => this.commandAnswer?.(allow),
-    resume: () => this.resume(), attach: () => pickAttachments(this.folder), undoTurn: () => this.undoTurn()
+    resume: () => this.resume(), attach: () => pickAttachments(this.folder), undoTurn: () => this.undoTurn(),
+    unsavedFiles: () => vscode.workspace.textDocuments.filter(d => d.isDirty && vscode.workspace.getWorkspaceFolder(d.uri)?.uri.toString() === this.folder.uri.toString())
+      .map(d => vscode.workspace.asRelativePath(d.uri, false))
   });
   private controller?: TurnController;
   private harness?: ForgeHarness;

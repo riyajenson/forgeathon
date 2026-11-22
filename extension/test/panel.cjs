@@ -254,6 +254,21 @@ exports.run = async () => {
     const above = new vscode.WorkspaceEdit(); above.insert(d.uri, new vscode.Position(0, 0), 'import os\n'); await vscode.workspace.applyEdit(above);
     assert.equal(selectionStale(d, range, text, v), true, 'lines shifted under the selection: refused');
   }
+  // Tests run on disk: unsaved editor changes at the time of the test command are named next to the observed result.
+  {
+    let dirty = ['src/flask/cli.py'];
+    const p = new AgentPanel({ send: async () => {}, stop: async () => {}, review() {}, command() {}, resume: async () => {}, unsavedFiles: () => dirty });
+    p.start();
+    p.event({t:'command_request',callId:'c1',command:'python -m pytest tests/test_cli.py -q',cwd:'.'});
+    dirty = [];
+    p.event({t:'done',status:'done',tests:{status:'passed',command:'python -m pytest tests/test_cli.py -q',exitCode:0,summary:'5 passed'}});
+    assert.equal(p.state.tests, 'Tests (observed): passed \u2014 5 passed \u2014 $ python -m pytest tests/test_cli.py -q \u2014 tested saved files only; unsaved editor changes were not included: src/flask/cli.py');
+    p.start();
+    p.event({t:'command_request',callId:'c2',command:'pytest -q',cwd:'.'});
+    p.event({t:'done',status:'done',tests:{status:'passed',command:'pytest -q',exitCode:0}});
+    assert.equal(p.state.tests, 'Tests (observed): passed \u2014 $ pytest -q', 'no note when everything was saved');
+    p.dispose();
+  }
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

@@ -35,6 +35,8 @@ export class AgentViewState {
   warnings: string[] = [];
   /** Set when an agent turn ends: the observed outcome of its last test command, shown next to the model's summary. */
   tests = '';
+  /** Files with unsaved editor changes when each command was requested (commands run against the files on disk). */
+  unsavedAt: Record<string, string[]> = {};
   /** Set when an agent turn that changed files ends: Verified, or Unverified with the reason (see verification.ts). */
   verification = '';
   /** Set when the turn fell back: one card with both models, the reason and the workspace effect (see recoveryCard). */
@@ -116,7 +118,7 @@ export class AgentViewState {
           this.status = 'Stopped \u00b7 settled: ' + (saved ? saved + (saved === 1 ? ' file' : ' files') + ' changed before the stop (listed below); nothing else will run'
             : 'no change was applied in this turn; nothing else will run');
         }
-        this.tests = testsLine(e.tests);
+        this.tests = testsLine(e.tests) + unsavedNote(e.tests?.command === undefined ? undefined : this.unsavedAt[e.tests.command]);
         this.verification = verificationLine(e.status, e.tests, this.summary.filter((l) => !l.endsWith('| not changed')).length, this.text);
         break;
     }
@@ -144,6 +146,12 @@ export function recoveryCard(e: Extract<HarnessEvent, {t: 'fallback'}>): string 
     'has taken effect.';
 }
 
+/** Tests run on the files on disk: name the editor buffers that had unsaved changes when the test command was requested. */
+export function unsavedNote(files: string[] | undefined): string {
+  if (!files?.length) return '';
+  return ' \u2014 tested saved files only; unsaved editor changes were not included: ' + files.slice(0, 5).join(', ') + (files.length > 5 ? ', \u2026' : '');
+}
+
 /** The observed test outcome as one line: what actually ran, not what the model says. */
 export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): string {
   if (!t) return '';
@@ -155,7 +163,7 @@ export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): strin
   return 'Tests (observed): ' + result + cmd;
 }
 
-type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void>; attach?(): Promise<string>; undoTurn?(): Promise<void> };
+type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void>; attach?(): Promise<string>; undoTurn?(): Promise<void>; unsavedFiles?(): string[] };
 export class AgentPanel implements vscode.Disposable {
   state = new AgentViewState();
   private panel?: vscode.WebviewPanel;
@@ -205,6 +213,7 @@ export class AgentPanel implements vscode.Disposable {
   event(e: HarnessEvent) {
     const eventAt = performance.now();
     const wallAt = Date.now();
+    if (e.t === 'command_request' && this.actions.unsavedFiles) this.state.unsavedAt[e.command] = this.actions.unsavedFiles();
     this.state.update(e);
     if (e.t === 'text') {
       // A closed panel has no text frame to measure or flush. The state still

@@ -35,7 +35,28 @@ jobs:
         run: npm test
         working-directory: src/harness
       - name: Script tests
-        run: node --test scripts/submission-readiness.test.mjs scripts/use-models.test.mjs scripts/preflight-model.test.mjs
+        run: node --test scripts/*.test.mjs
+
+  extension:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            src/harness/package-lock.json
+            extension/package-lock.json
+      - name: Build the harness (the extension links it as forge-harness)
+        run: npm ci && npm run build
+        working-directory: src/harness
+      - run: npm ci
+        working-directory: extension
+      - name: Compile the extension
+        run: npm run compile
+        working-directory: extension
 
   mock:
     runs-on: ubuntu-24.04

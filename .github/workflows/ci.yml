@@ -65,3 +65,6 @@ jobs:
         run: scripts/e2e-mock.sh
       - name: Mock end-to-end with safe commands auto-approved
         run: scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted
+      - name: Mock logs (on failure)
+        if: failure()
+        run: tail -n 60 "$HOME"/.forge-mock/*.log || true

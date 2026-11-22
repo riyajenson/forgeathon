@@ -243,6 +243,17 @@ exports.run = async () => {
       '@file:src/flask/cli.py @symbol:FlaskGroup ');
     assert.equal(mentionsFor([]), '');
   }
+  // Inline edit: a selection whose text changed while the instruction was typed is refused before sending.
+  {
+    const { selectionStale } = require('../out/workbench');
+    const d = await vscode.workspace.openTextDocument({ language: 'python', content: 'def a():\n    return 1\n\ndef b():\n    return 2\n' });
+    const range = new vscode.Range(3, 0, 5, 0), text = d.getText(range), v = d.version;
+    assert.equal(selectionStale(d, range, text, v), false, 'unchanged');
+    const below = new vscode.WorkspaceEdit(); below.insert(d.uri, new vscode.Position(5, 0), '# tail\n'); await vscode.workspace.applyEdit(below);
+    assert.equal(selectionStale(d, range, text, v), false, 'an edit outside the selection that keeps its lines is fine');
+    const above = new vscode.WorkspaceEdit(); above.insert(d.uri, new vscode.Position(0, 0), 'import os\n'); await vscode.workspace.applyEdit(above);
+    assert.equal(selectionStale(d, range, text, v), true, 'lines shifted under the selection: refused');
+  }
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

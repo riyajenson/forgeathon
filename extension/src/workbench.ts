@@ -8,6 +8,11 @@ import { EditReview } from './review';
 import { TurnController } from './turn';
 
 type Connection = { harness: ForgeHarness; version: Version };
+/** True when the document changed since the selection was captured and the selected range no longer holds that text. */
+export function selectionStale(doc: vscode.TextDocument, range: vscode.Range, text: string, version: number): boolean {
+  return doc.version !== version && (doc.isClosed || doc.getText(range) !== text);
+}
+
 export class Workbench implements vscode.Disposable {
   readonly edits: EditReview;
   private readonly review: InlineReview;
@@ -157,8 +162,11 @@ export class Workbench implements vscode.Disposable {
     const context = {activeFile, selection:{ path: activeFile, text: doc.getText(selection),
       startLine: selection.start.line + 1, endLine: selection.end.line + (selection.end.character === 0 ? 0 : 1) }};
     this.warm();
+    const version = doc.version;
     const instruction = await vscode.window.showInputBox({prompt:'How should the selection change?'});
     if (!instruction?.trim()) return;
+    // The document may have changed while the instruction was typed: never send a selection that no longer matches.
+    if (selectionStale(doc, selection, context.selection.text, version)) throw new Error('The selected code changed while you typed the instruction; select it again.');
     // Visible progress for inline turns (the panel may be closed); Cancel stops the turn.
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Forge inline edit', cancellable: true },
       (progress, token) => {

@@ -48,7 +48,8 @@ used only by the tool call of the same session, once, with the same arguments.
 hunks applied) goes to the editor's `applyText`, which checks the buffer hash, applies one `WorkspaceEdit`, saves,
 and returns one of six outcomes (stale, approval missing, failed before apply, applied but unsaved, save failed,
 saved). The reviewed text is verified by hash; save-time formatters may alter the saved file. Undo, guarded by
-the post-save hash, restores the reviewed original text (saved without save participants).
+the post-save hash, restores the reviewed original text (saved without save participants); **Undo this turn's changes**
+does so for all of a turn's files. The panel ends with a **verification verdict** from observed test runs (⚠ unverified if stale, failed or not run).
 
 **Cancellation.** Stop closes the approval gate, cancels the TrueForge turn, kills a running command's process group
 and closes the open review; an approved command never starts after Stop. An approved edit that already reached VS Code
@@ -65,14 +66,12 @@ and retry or fallback happen only when every tool call of the failed attempt has
    (≤ 120 tokens each), then relevant chunks; a large chunk becomes a focused excerpt (≤ 600 tokens, ≤ 30% of the budget) that
    marks omitted lines. Everything else is listed as **skipped** with a reason; ranks and reasons are in the context report.
 4. The agent can request more with `gather_context`.
-5. **Selective semantic ranking** (`forge.context.semanticSearch`, opt-in, off by default): only weak lexical/structural
-   shortlists are considered. Fully cached semantic scores can reorder that shortlist synchronously. On a cache
-   miss, Forge returns the lexical/structural result immediately and warms vectors in the background for later
-   requests. The optional CPU runtime is installed with `scripts/enable-semantic-search.sh` (~230 MB; embedding model in §5); when it
-   is absent or fails, the context report explains why the deterministic fallback was used.
+5. **Selective semantic ranking** (`forge.context.semanticSearch`, opt-in, off by default): cached semantic scores may reorder
+   only a weak lexical/structural shortlist; on a cache miss the lexical result is used at once and vectors warm in the background.
+   The CPU runtime is installed with `scripts/enable-semantic-search.sh` (~230 MB; model in §5); if it is absent or fails, the context report says so.
 6. **One read policy for every source** (retrieval, references, selection and every read tool): credentials-shaped files
    (`.env*`, keys, `.netrc`, …) are refused **by file name only**; binary files are refused; `read_file` output is capped (600
-   lines / 60,000 characters). Files that are sent to the model are also kept in TrueForge's local traces (SQLite).
+   lines / 60,000 characters); key-shaped strings in sent text are masked (`forge.context.maskSecrets`). Sent text is kept in TrueForge's local traces.
 
 The workspace index is built in the background at start-up and reused. On a 13-task Forge + Flask 3.1.3 retrieval
 benchmark at 4,000 tokens (lexical/structural; reproduced on `c865952`, 3 runs): recall@5 0.776, MRR 0.721, 25/30 expected
@@ -97,9 +96,10 @@ Models are configured only in TrueForge, from `config/models.json` via `node scr
 fastest with correct streamed tool calls among five NVIDIA models probed once each. **Real-model evidence** (one run each unless stated;
 `docs/writeup/rehearsal.json`): finals code `0be9897`: **Task B 6/6, first diff 100.3 s, 216.8 s, 48 requests**, A 6/6, C 3/3, no
 429; p14 `5710431`: B 6/6 twice (184 s, 203 s); 21 Nov hybrid build: B 6/6 in 3 of 3 runs on `f2f87bb`; tag `round1-submission`: A, B, C. TrueForge resends a 429'd request up to 4
-times; then, before any write, auth errors fall back at once and other errors retry once, then fall back to the `-fallback`
-agent in a fresh TrueForge session. **No retry or fallback after a write:** the turn ends, and a stop after writes (429, or no
-output for 45 s, 120 s while a model request is in flight) offers **Resume** in the same TrueForge conversation (the fallback's, after a fallback; mock-tested, `c47e092`). The free
+times; then, before any write, auth errors fall back at once and other errors retry once (an explicit 408/429/5xx status
+counts as transient whatever the wording), then fall back to the `-fallback` agent in a fresh TrueForge session. **No retry or fallback after a write:** the turn ends, and a stop after writes (429, or no
+output for 45 s, 120 s while a model request is in flight) offers **Resume** in the same TrueForge conversation (the fallback's, after a fallback), after the provider's wait hint, or
+**Resume when ready** once; a resumed turn never retries or falls back either (mock-tested). The free
 fallback shares NVIDIA's backend: it covers throttling and key problems, not an NVIDIA outage.
 
 ## 6. Scorecard
@@ -118,7 +118,7 @@ fallback shares NVIDIA's backend: it covers throttling and key problems, not an 
 
 Timestamps: current video (first round-1 build); this build's multi-select hunk picker is covered by the native UI tests.
 Automated checks use a **scripted model** that supplies Task B's paths and edits (plumbing, not discovery): `scripts/e2e-mock.sh`
-(26 checks), `scripts/test-extension-e2e.sh` (A, B, Stop, C in VS Code), 205 unit, 26 integration (TrueForge 0.185.1) and 17 script tests;
+(26 checks), `scripts/test-extension-e2e.sh` (A, B, Undo this turn, Stop, C in VS Code), 219 unit, 26 integration (TrueForge 0.185.1) and 19 script tests;
 responsiveness gates (host blocks ≤ 150 ms, webview renders ≤ 100 ms) pass 3/3 and fail an injected 200 ms stall.
 
 ## 7. Tools used
@@ -143,8 +143,7 @@ edits over several reviews, hence the harness budgets. Each step resends the who
 (local embeddings opt-in); the symbol index covers Python only; weights were tuned on Flask. **`run_command` is write-protected,
 not confidential:** bubblewrap hides the home directory and cuts the network, but workspace secrets are only caught by output
 redaction; it needs Linux/WSL with bubblewrap. Free tiers limit Task B (NVIDIA throttled at 9–15 requests/min on 19 Nov;
-OpenRouter's free fallback allows 50 requests/day; Groq's 7,000 tokens/min cannot take B). Compaction fires once in Task B,
-usually after the first edit (once before it, first diff 100 s). Sub-agents are on by default; in 6 real runs Nemotron never
+OpenRouter's free fallback allows 50 requests/day; Groq's 7,000 tokens/min cannot take B). Sub-agents are on by default; in 6 real runs Nemotron never
 delegated, even when asked. Opt-in Daytona Code Mode sends files it reads to Daytona's cloud; edits stay in review. One
 workspace folder; tested on WSL only.
 

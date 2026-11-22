@@ -260,6 +260,8 @@ test('hybrid context reranking is opt-in and the request contract is versioned',
   assert.ok(setting, 'the semantic-search setting is declared');
   assert.equal(setting.default, false, 'semantic reranking is opt-in (confidence-gated and time-bounded when on)');
   assert.match(setting.description ?? '', /weak|200 ms/i);
+  const mask = extension.contributes.configuration.properties['forge.context.maskSecrets'];
+  assert.equal(mask?.default, true, 'credential masking of source sent to the model is on by default');
   assert.equal(PROTOCOL_VERSION as string, '0.4.8');
 });
 
@@ -725,6 +727,20 @@ test('resume: the write barrier covers the resumed turn: an error before its own
     assert.equal(evs.some((e) => e.t === 'resumable'), resumable, `${message}: Resume offered again only for a rate limit`);
     if (resumable) assert.deepEqual(run.resumable?.changedFiles, [FILE]);
   }
+});
+
+test('the turn input is masked: a credential shape in the request or context never reaches TrueForge; off when disabled', async () => {
+  const key = 'gsk_' + 'M'.repeat(40);
+  const tf = new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-1' }), done('done')) });
+  const run = makeRun(tf, {}, { instruction: `use the key ${key} in alpha` });
+  await run.start();
+  assert.ok(!tf.inputs[0]!.includes(key));
+  assert.match(tf.inputs[0]!, /use the key \[REDACTED\] in alpha/);
+  assert.match(tf.inputs[0]!, /\[Forge masked 1 credential-shaped string in this text; the file itself is unchanged\]/);
+  assert.ok(events(run).some((e) => e.t === 'status' && e.detail === 'Masked 1 credential-shaped string in the context sent to the model'));
+  const tf2 = new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-2' }), done('done')) });
+  await makeRun(tf2, { maskSourceSecrets: false }, { instruction: `use the key ${key} in alpha` }).start();
+  assert.ok(tf2.inputs[0]!.includes(key), 'maskSourceSecrets: false sends the text unchanged');
 });
 
 test('resume: no resumable event for failures that are not rate limits', async () => {

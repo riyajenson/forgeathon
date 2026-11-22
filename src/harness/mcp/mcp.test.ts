@@ -160,6 +160,25 @@ test('read_file returns sha256 and numbered lines, honours ranges', async () => 
   assert.doesNotMatch(part.text, /get_load_dotenv/);
 });
 
+test('read tools mask credential-shaped strings before the model sees them; the file and its sha256 are unchanged', async () => {
+  const key = 'nvapi-' + 'K'.repeat(30);
+  const text = `import os\nNVIDIA = "${key}"\nSECRET_KEY = "dev-value-123456"\n`;
+  await fs.mkdir(path.join(root, 'conf'), { recursive: true });
+  await fs.writeFile(path.join(root, 'conf', 'local_settings.py'), text);
+  const read = await call('read_file', { path: 'conf/local_settings.py' });
+  assert.equal(read.isError, false);
+  assert.ok(!read.text.includes(key), 'the key never reaches the model');
+  assert.match(read.text, /2\tNVIDIA = "\[REDACTED\]"/);
+  assert.match(read.text, /3\tSECRET_KEY = "dev-value-123456"/, 'ordinary code is unchanged');
+  assert.match(read.text, new RegExp(`sha256: ${sha256Hex(text)}`), 'the hash is of the real file');
+  assert.match(read.text, /\[Forge masked 1 credential-shaped string in this text; the file itself is unchanged\]$/);
+  const found = await call('search_workspace', { query: 'NVIDIA', path_prefix: 'conf' });
+  assert.ok(!found.text.includes(key));
+  assert.match(found.text, /\[REDACTED\]/);
+  assert.equal(await fs.readFile(path.join(root, 'conf', 'local_settings.py'), 'utf8'), text);
+  await fs.rm(path.join(root, 'conf'), { recursive: true, force: true });
+});
+
 test('read_file errors: missing file, outside workspace', async () => {
   assert.equal(errorCode((await call('read_file', { path: 'nope.py' })).text), 'FILE_NOT_FOUND');
   for (const bad of ['../etc/passwd', '/etc/passwd', 'C:/x.py', '.git/config', 'node_modules/a.js']) {

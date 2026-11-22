@@ -4,6 +4,7 @@ import type { CancelStatus, EditProposal, EventBody, ProtocolError, ReviewDecisi
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
 import { isAutoApprovableCommand, isListedCommand, isTestCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
+import { maskedNote, maskSourceSecrets } from '../mcp/redact';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey, deletedDefinitions } from '../review';
 import { testOutcome, type TestOutcome } from './test-outcome';
@@ -33,6 +34,8 @@ export interface TurnDeps {
   /** Silence limit while a model request is in flight (default 120 s in the harness). */
   modelWatchdogMs?: number;
   contextBudgetTokens: number;
+  /** Mask credential shapes in the turn input (selection, context pack). Default true. */
+  maskSourceSecrets?: boolean;
   retryDelayMs: number;
   settleMs: number;
   /** JSON-lines turn log (no content); undefined disables it. */
@@ -291,7 +294,11 @@ export class TurnRun {
       },
     });
     const { context } = built;
-    const input = this.deps.resumeFrom ? `${resumeNote(this.deps.resumeFrom)}\n${built.input}` : built.input;
+    // The turn input carries workspace text (selection, context pack) to the model and TrueForge's traces: mask credentials.
+    const masked = this.deps.maskSourceSecrets === false ? { text: built.input, count: 0 } : maskSourceSecrets(built.input);
+    if (masked.count) emit({ t: 'status', state: 'starting', detail: `Masked ${masked.count} credential-shaped string${masked.count === 1 ? '' : 's'} in the context sent to the model` });
+    const turnInput = masked.count ? `${masked.text}\n\n${maskedNote(masked.count)}` : masked.text;
+    const input = this.deps.resumeFrom ? `${resumeNote(this.deps.resumeFrom)}\n${turnInput}` : turnInput;
     if (this.deps.resumeFrom) {
       const n = this.deps.resumeFrom.changedFiles.length;
       const why = this.deps.resumeFrom.reason === 'stalled' ? 'stopped responding' : 'stopped on a rate limit';

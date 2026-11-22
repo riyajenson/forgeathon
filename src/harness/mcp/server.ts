@@ -13,6 +13,7 @@ import { SESSION_HEADER, type ScopeRegistry } from './scope';
 import { runCommandTool } from './command';
 import { gatherContextTool } from './context-tool';
 import { findSymbolTool, listFilesTool } from './symbol-tools';
+import { maskedNote, maskSourceSecrets } from './redact';
 import { proposeEditTool, readFileTool, searchWorkspaceTool, type ToolContext, type ToolOutcome } from './tools';
 
 export const MCP_PATH = '/mcp';
@@ -21,6 +22,8 @@ const MAX_BODY_BYTES = 4 * 1024 * 1024;
 export interface McpServerOptions {
   port: EditorPort;
   scopes: ScopeRegistry;
+  /** Mask credential-shaped strings in tool output (default true). */
+  maskSecrets?: boolean;
   /** 0 picks a free port (tests). */
   listenPort: number;
   /** Generated when omitted. */
@@ -42,7 +45,14 @@ function toResult(outcome: ToolOutcome): CallToolResult {
 /** Runs a tool call, tracked as in-flight in the caller's session scope so cancellation can wait for it. */
 async function run(ctx: ToolContext, work: () => Promise<ToolOutcome>): Promise<CallToolResult> {
   const p = work();
-  return toResult(await (ctx.scope ? ctx.scope.track(p) : p));
+  return toResult(masked(ctx, await (ctx.scope ? ctx.scope.track(p) : p)));
+}
+
+/** Tool text goes to the model and into TrueForge's traces: mask credential shapes found in workspace content first. */
+function masked(ctx: ToolContext, outcome: ToolOutcome): ToolOutcome {
+  if (!outcome.ok || ctx.maskSecrets === false) return outcome;
+  const m = maskSourceSecrets(outcome.text);
+  return m.count ? { ...outcome, text: `${m.text}\n${maskedNote(m.count)}` } : outcome;
 }
 
 export function buildMcpServer(ctx: ToolContext): McpServer {
@@ -175,7 +185,7 @@ export async function startMcpServer(options: McpServerOptions): Promise<Running
       const body = await readBody(req);
       const header = req.headers[SESSION_HEADER];
       const runtimeSessionId = Array.isArray(header) ? header[0] : header;
-      const server = buildMcpServer({ port: editor, scope: scopes.get(runtimeSessionId) });
+      const server = buildMcpServer({ port: editor, scope: scopes.get(runtimeSessionId), maskSecrets: options.maskSecrets !== false });
       const transport = new StreamableHTTPServerTransport({}) // no sessionIdGenerator: stateless mode;
       res.on('close', () => { void transport.close(); void server.close(); });
       await server.connect(transport);

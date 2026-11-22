@@ -58,6 +58,36 @@ export function redact(text: string, values: readonly string[] = secretValues())
   return { text: out, count };
 }
 
+/**
+ * Masks credentials in workspace source before it goes to the model (and so into TrueForge's traces): only the
+ * high-confidence shapes (KEY_PATTERNS) and long known key values, never the `NAME=value` heuristic, so ordinary code such
+ * as `SECRET_KEY="dev-value"` in a test is sent unchanged and stays editable. A masked line cannot be matched by an edit,
+ * so a proposal against it is refused instead of writing a placeholder.
+ */
+export function maskSourceSecrets(text: string, values: readonly string[] = sourceSecretValues()): { text: string; count: number } {
+  let count = 0;
+  let out = text;
+  for (const v of values) {
+    if (!out.includes(v)) continue;
+    const parts = out.split(v);
+    count += parts.length - 1;
+    out = parts.join(REDACTED);
+  }
+  for (const re of KEY_PATTERNS) out = out.replace(re, () => { count++; return REDACTED; });
+  return { text: out, count };
+}
+
+let cachedSourceValues: string[] | undefined;
+/** Known key values long and specific enough to mask in source (16+ characters, no whitespace or path separators). */
+export function sourceSecretValues(): string[] {
+  return cachedSourceValues ??= secretValues().filter((v) => v.length >= 16 && !/[\s/\\]/.test(v));
+}
+
+/** The note appended to model-bound text when credentials were masked. */
+export function maskedNote(count: number): string {
+  return `[Forge masked ${count} credential-shaped string${count === 1 ? '' : 's'} in this text; the file itself is unchanged]`;
+}
+
 /** The Forge repo's model configs (config/models*.json), found by walking up from this module; empty when installed elsewhere. */
 export function forgeModelConfigs(from: string = __dirname): string[] {
   const root = forgeRepoRoot(from);

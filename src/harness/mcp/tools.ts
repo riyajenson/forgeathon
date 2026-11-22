@@ -32,6 +32,8 @@ export interface ToolContext {
   port: EditorPort;
   /** Scope of the TrueForge session that made the call; undefined when the call carries no known session. */
   scope: SessionScope | undefined;
+  /** Mask credential-shaped strings in tool output before it reaches the model (default true; see maskSourceSecrets). */
+  maskSecrets?: boolean | undefined;
 }
 
 export interface ProposeEditArgs {

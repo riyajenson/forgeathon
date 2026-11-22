@@ -103,9 +103,10 @@ How one turn runs:
    interrupted turn used of the command budgets. A turn can be resumed once. The same Resume is offered when the
    model stops responding after the turn changed files: while a model request is in flight the silence limit is
    120 s (`forge.watchdog.modelRequestSec`), 45 s for other waits.
-7. **Sub-agents (optional, off by default).** `node scripts/setup-trueforge.mjs --subagents` enables TrueForge's
-   dynamic sub-agents for `forge-coder` (not inline) and adds delegation guidance: at most one read-only
-   exploration sub-agent per task, with edits and commands left to the main agent. A sub-agent's edits and
+7. **Sub-agents (on by default).** Setup enables TrueForge's dynamic sub-agents for `forge-coder` (not inline)
+   and tells the agent that `create_sub_agent` is available: at most one read-only exploration sub-agent per
+   task, with edits and commands left to the main agent. Whether to delegate is the model's choice (Nemotron did
+   not delegate in 4 real runs). `node scripts/setup-trueforge.mjs --no-subagents` turns them off. A sub-agent's edits and
    commands still go through the same review and budgets. The panel lists each one as "Sub-agent: <name>" with
    its task and outcome, and the status line shows "Delegated to sub-agent …".
 8. **Review safeguards.** A hunk that deletes a whole Python class or function is flagged in the review (the hunk

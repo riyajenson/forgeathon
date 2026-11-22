@@ -40,7 +40,7 @@ test('evidence commit: HEAD, or an ancestor followed only by docs commits', () =
 test('evidence survives test, smoke, benchmark and CI commits, but not runtime code', () => {
   const rec = 'a'.repeat(40), head = 'b'.repeat(40);
   for (const f of ['src/harness/turn/turn.test.ts', 'src/harness/integration/turn.itest.ts', 'extension/test/panel.cjs',
-    'src/harness/smoke/smoke.ts', 'scripts/bench-context.mjs', 'scripts/check-submission.mjs', '.github/workflows/ci.yml', 'scripts/use-models.test.mjs']) {
+    'src/harness/smoke/smoke.ts', 'scripts/bench-context.mjs', 'scripts/check-submission.mjs', '.github/workflows/ci.yml', 'scripts/use-models.test.mjs', '.gitignore', 'config/.gitignore']) {
     assert.equal(isNonRuntime(f), true, f);
     assert.equal(commitError(rec, head, true, [f]), undefined, f);
   }

@@ -44,9 +44,9 @@ export function checkSubmission(writeup, evidence) {
 }
 
 /** Files that cannot change what the demo runs: documentation, tests, the smoke runner (no runtime code imports it), the
- * context benchmark, this checker and CI configuration. */
+ * context benchmark, this checker, CI configuration and .gitignore files. */
 export function isNonRuntime(f) {
-  return f.startsWith('docs/') || /^[^/]+\.md$/.test(f) || /\.(test|itest)\.(ts|mjs|cjs|js)$/.test(f) ||
+  return f.startsWith('docs/') || /^[^/]+\.md$/.test(f) || /(^|\/)\.gitignore$/.test(f) || /\.(test|itest)\.(ts|mjs|cjs|js)$/.test(f) ||
     f.startsWith('extension/test/') || f.startsWith('src/harness/smoke/') || f === 'scripts/bench-context.mjs' ||
     f === 'scripts/check-submission.mjs' || f.startsWith('.github/');
 }

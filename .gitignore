@@ -2,17 +2,30 @@
 node_modules/
 dist/
 out/
+build/
 .vscode-test/
+*.vsix
+*.tsbuildinfo
 
-# Local state, logs and secrets
+# Secrets and local model configuration (keys come only from environment variables)
+.env*
+*keys.env
+*.pem
+*.key
+*.p12
+*.pfx
+config/models.json
+config/models.json.bak
+
+# Local state and logs
 .data/
 logs/
+*.log
+!docs/internal/rehearsal-p14/*.log
 *.sqlite
 *.sqlite-*
-.env
-.env.*
-config/models.json
 
-# Generated documents (render with scripts/render-writeup.sh)
-docs/writeup/WRITEUP.pdf
-.env.daytona
+# Editor and OS clutter
+.DS_Store
+*.swp
+*~

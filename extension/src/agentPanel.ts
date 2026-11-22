@@ -118,7 +118,10 @@ export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): strin
   if (!t) return '';
   if (t.status === 'not_run') return 'Tests (observed): not run in this turn';
   const counts = t.status === 'passed' ? 'passed' : (t.failed ? t.failed + ' failed' : 'failed (exit ' + t.exitCode + ')');
-  return 'Tests (observed): ' + counts + (t.summary ? ' \u2014 ' + t.summary : '') + (t.command ? ' \u2014 $ ' + t.command : '');
+  const result = counts + (t.summary ? ' \u2014 ' + t.summary : '');
+  const cmd = t.command ? ' \u2014 $ ' + t.command : '';
+  if (t.editedAfter?.length) return 'Tests (observed): edited after last test run (last result: ' + result + ')' + cmd + ' \u2014 changed since: ' + t.editedAfter.join(', ');
+  return 'Tests (observed): ' + result + cmd;
 }
 
 type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void> };

@@ -54,6 +54,9 @@ exports.run = async () => {
   const passedState = new AgentViewState();
   passedState.update({t:'done',status:'done',tests:{status:'passed',command:'pytest -q',exitCode:0,passed:3,failed:0,summary:'3 passed in 0.1s'}});
   assert.equal(passedState.tests, 'Tests (observed): passed \u2014 3 passed in 0.1s \u2014 $ pytest -q');
+  const staleState = new AgentViewState();
+  staleState.update({t:'done',status:'done',summary:'All tests pass.',tests:{status:'failed',command:'pytest tests/test_cli.py -q',exitCode:1,failed:2,summary:'2 failed in 0.07s',editedAfter:['tests/test_cli.py']}});
+  assert.equal(staleState.tests, 'Tests (observed): edited after last test run (last result: 2 failed \u2014 2 failed in 0.07s) \u2014 $ pytest tests/test_cli.py -q \u2014 changed since: tests/test_cli.py');
   const notRun = new AgentViewState();
   notRun.update({t:'done',status:'done',tests:{status:'not_run'}});
   assert.equal(notRun.tests, 'Tests (observed): not run in this turn');
@@ -233,5 +236,5 @@ exports.run = async () => {
   const slowRun=ctrl.run('agent','stop',{});
   await ready;await ctrl.stop();await slowRun;
   assert.ok(cancelled);assert.deepEqual(displayed,['turn_started','done']);gate.dispose();
-  console.log('PASS simulated panel stream, tool summaries, selection/skips, fallback/error, command denial, Stop and late-event filtering, test budget, sub-agents, Resume (rate limit and stall), observed test status, destructive-hunk warnings');
+  console.log('PASS simulated panel stream, tool summaries, selection/skips, fallback/error, command denial, Stop and late-event filtering, test budget, sub-agents, Resume (rate limit and stall), observed test status (incl. stale), destructive-hunk warnings');
 };

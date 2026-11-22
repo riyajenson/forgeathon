@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync, realpathSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 
 export async function confinedCwd(root: string, relative: string): Promise<string> {
@@ -13,17 +13,49 @@ export async function confinedCwd(root: string, relative: string): Promise<strin
 
 export const PROTECTION_HELP = 'Verification requires Linux/WSL with bubblewrap and user namespaces enabled. Install bubblewrap in that environment and retry; unrestricted shell execution is disabled.';
 
+/** The system runtime a command may see (read-only); nothing else of the host is mounted: no /home, /root, /opt or /var. */
+export const SYSTEM_RUNTIME = ['/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/etc'] as const;
+
+/** Mounts for the system runtime: merged-/usr symlinks (/bin -> usr/bin) are recreated as symlinks, directories bound read-only. */
+export function systemMounts(): string[] {
+  return SYSTEM_RUNTIME.flatMap((p) => {
+    try {
+      if (lstatSync(p).isSymbolicLink()) return ['--symlink', readlinkSync(p), p];
+      return ['--ro-bind', p, p];
+    } catch { return []; }
+  });
+}
+
 /**
- * The host filesystem (including the live checkout) is read-only. Test scratch files are disposable.
- * `visible` lists further read-only paths, e.g. a virtualenv outside the workspace, that must stay visible
- * when they live under /tmp or /run (replaced by private tmpfs mounts).
+ * Only the system runtime, the workspace and `visible` paths (a virtualenv and its base interpreter) are mounted,
+ * all read-only: the home directory, SSH keys, provider configs and other checkouts do not exist inside.
+ * `hidden` paths inside the workspace (e.g. this repo's config/models.json) are covered by an empty file.
+ * Test scratch files go to a private /tmp. No network, no capabilities, a new session.
  */
-export function protectedArgs(cwd: string, command: string, workspaceRoot = cwd, visible: readonly string[] = []): string[] {
-  const extra = visible.filter((p) => path.isAbsolute(p) && p !== workspaceRoot);
+export function protectedArgs(cwd: string, command: string, workspaceRoot = cwd, visible: readonly string[] = [], hidden: readonly string[] = [], system: readonly string[] = systemMounts()): string[] {
+  const extra = [...new Set(visible.filter((p) => path.isAbsolute(p) && p !== workspaceRoot))];
+  const inside = (p: string) => p === workspaceRoot || p.startsWith(workspaceRoot + path.sep);
   return ['--die-with-parent', '--unshare-all', '--new-session', '--cap-drop', 'ALL',
-    '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--tmpfs', '/run',
-    // A checkout (or virtualenv) under /tmp or /run must remain visible and read-only after those mounts.
-    '--ro-bind', workspaceRoot, workspaceRoot, ...extra.flatMap((p) => ['--ro-bind-try', p, p]), '--chdir', cwd, '--', '/bin/bash', '--noprofile', '--norc', '-c', command];
+    ...system, '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+    // A checkout (or virtualenv) under /tmp must remain visible and read-only after that mount.
+    '--ro-bind', workspaceRoot, workspaceRoot, ...extra.flatMap((p) => ['--ro-bind-try', p, p]),
+    ...hidden.filter((p) => path.isAbsolute(p) && inside(p)).flatMap((p) => ['--ro-bind-try', '/dev/null', p]),
+    '--chdir', cwd, '--', '/bin/bash', '--noprofile', '--norc', '-c', command];
+}
+
+/**
+ * The installation a virtualenv's interpreter comes from (pyvenv.cfg `home`, e.g. ~/.local/share/uv/python/
+ * cpython-3.12/bin): its prefix must be visible for the venv to run. Nothing when it is part of the system runtime.
+ */
+export function venvBase(venv: string): string | undefined {
+  try {
+    const home = /^home\s*=\s*(.+)$/m.exec(readFileSync(path.join(venv, 'pyvenv.cfg'), 'utf8'))?.[1]?.trim();
+    if (!home) return undefined;
+    const real = realpathSync(home);
+    const prefix = path.basename(real) === 'bin' ? path.dirname(real) : real;
+    const system = SYSTEM_RUNTIME.some((s) => prefix === s || prefix.startsWith(s + '/')) || prefix === '/';
+    return system ? undefined : prefix;
+  } catch { return undefined; }
 }
 
 export async function checkProtection(cwd: string, signal: AbortSignal): Promise<void> {

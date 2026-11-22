@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { approvalKey, commandTestHooks, FakePort, isAutoApprovableCommand, isListedCommand, isTestCommand, runCommandTool, ScopeRegistry, type CommandRun, type SessionScope, type ToolContext } from './index';
-import { checkProtection, confinedCwd, protectedArgs } from './command-protection';
+import { checkProtection, confinedCwd, protectedArgs, systemMounts, venvBase } from './command-protection';
+import { REDACTED } from './redact';
 import type { CommandRuntime } from './command';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -350,10 +351,82 @@ test('command protection keeps the checkout read-only and shell input a single a
   const args = protectedArgs('/tmp/repo', command);
   assert.ok(args.includes('--unshare-all'));
   assert.ok(args.includes('--ro-bind')); assert.ok(!args.includes('--bind'));
+  assert.ok(!args.join(' ').includes('--ro-bind / /'), 'the host root is not mounted');
+  assert.ok(!args.includes(os.homedir()), 'the home directory is not mounted');
   assert.equal(args.at(-1), command);
   assert.deepEqual(args.slice(args.indexOf('--chdir'), args.indexOf('--chdir') + 2), ['--chdir', '/tmp/repo']);
   const withVenv = protectedArgs('/tmp/repo', command, '/tmp/repo', ['/tmp/venv', 'relative/ignored', '/tmp/repo']);
   assert.equal(withVenv.join(' ').match(/--ro-bind-try \/tmp\/venv \/tmp\/venv/)?.length, 1, 'extra paths are read-only, optional binds');
   assert.ok(!withVenv.includes('relative/ignored'));
   assert.ok(!withVenv.includes('--bind'));
+});
+
+test('only the system runtime is mounted besides the workspace: merged-/usr links stay links, no /home or /opt', () => {
+  const m = systemMounts().join(' ');
+  assert.match(m, /--ro-bind \/usr \/usr/);
+  assert.match(m, /--ro-bind \/etc \/etc/);
+  assert.ok(!/\/home|\/root|\/opt|\/var/.test(m), m);
+  const hidden = protectedArgs('/w', 'true', '/w', [], ['/w/config/models.json', '/elsewhere/models.json'], []);
+  assert.equal(hidden.join(' ').match(/--ro-bind-try \/dev\/null \/w\/config\/models\.json/)?.length, 1, 'hidden files inside the workspace are covered');
+  assert.ok(!hidden.includes('/elsewhere/models.json'), 'paths outside the workspace are not mounted at all');
+});
+
+test('a virtualenv\'s base interpreter outside the system runtime is made visible; a system one is not', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-venv-'));
+  try {
+    const base = path.join(dir, 'cpython-3.12'); await fs.mkdir(path.join(base, 'bin'), { recursive: true });
+    const venv = path.join(dir, 'venv'); await fs.mkdir(venv);
+    await fs.writeFile(path.join(venv, 'pyvenv.cfg'), `home = ${path.join(base, 'bin')}\nversion = 3.12.0\n`);
+    assert.equal(venvBase(venv), await fs.realpath(base));
+    await fs.writeFile(path.join(venv, 'pyvenv.cfg'), 'home = /usr/bin\n');
+    assert.equal(venvBase(venv), undefined);
+    assert.equal(venvBase(path.join(dir, 'missing')), undefined);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+protectedTest('confidentiality: a key file in the home directory cannot be read, and ~/.ssh does not exist inside', async () => {
+  const fake = 'nvapi-SANDBOXTESTFAKEKEY0123456789';
+  const secretFile = path.join(os.homedir(), `.forge-sandbox-test-${process.pid}.env`);
+  await fs.writeFile(secretFile, `NVIDIA_API_KEY=${fake}\nPLAIN_MARKER_7f3a\n`, { mode: 0o600 });
+  try {
+    const command = `cat ${secretFile}; ls -A ${os.homedir()}; test -e ${path.join(os.homedir(), '.ssh')} && echo HAS_SSH || echo NO_SSH`;
+    approve({ command });
+    const r = await runCommandTool(ctx, { command });
+    assert.ok(r.ok);
+    const text = r.ok ? r.text.slice(r.text.indexOf('--- stdout ---')) : '';
+    assert.ok(!text.includes('PLAIN_MARKER_7f3a'), 'the key file was not readable');
+    assert.ok(!text.includes(fake));
+    const stdout = text.slice(0, text.indexOf('--- stderr ---'));
+    assert.ok(!stdout.includes(path.basename(secretFile)), 'the home directory listing (stdout) does not show it');
+    assert.match(text, /No such file or directory/);
+    assert.match(text, /NO_SSH/);
+  } finally { await fs.rm(secretFile, { force: true }); }
+});
+
+protectedTest('confidentiality: an echoed key and a configured provider key are redacted before the model, the turn or the panel see them', async () => {
+  const provider = 'zq-provider-value-0123456789';
+  process.env['FORGE_TEST_PROVIDER_API_KEY'] = provider;
+  try {
+    const fake = 'sk-or-v1-0123456789abcdef0123456789abcdef';
+    const command = `echo token ${fake}; echo provider ${provider} >&2`;
+    approve({ command });
+    const r = await runCommandTool(ctx, { command });
+    assert.ok(r.ok);
+    const text = r.ok ? r.text : '';
+    assert.ok(!text.includes(fake) && !text.includes(provider), 'neither in the output nor in the echoed command');
+    assert.match(text, new RegExp(`token \\${REDACTED.slice(0, -1)}\\]`));
+    assert.match(text, /provider \[REDACTED\]/);
+    assert.match(text, /output: 2 secret-like value\(s\) redacted/);
+    assert.ok(!runs[0]!.output!.includes(fake) && !runs[0]!.output!.includes(provider), 'the turn (test outcome, logs) gets redacted output');
+  } finally { delete process.env['FORGE_TEST_PROVIDER_API_KEY']; }
+});
+
+protectedTest('a hidden file inside the workspace reads as empty in the sandbox', async () => {
+  await fs.mkdir(path.join(root, 'config'), { recursive: true });
+  const cfg = path.join(root, 'config', 'models.json');
+  await fs.writeFile(cfg, '{"apiKeyEnv": "X", "marker": "HIDDEN_MARKER"}');
+  try {
+    const out = execFileSync('bwrap', protectedArgs(root, 'cat config/models.json; echo END', root, [], [cfg]), { encoding: 'utf8' });
+    assert.equal(out.trim(), 'END');
+  } finally { await fs.rm(path.join(root, 'config'), { recursive: true, force: true }); }
 });

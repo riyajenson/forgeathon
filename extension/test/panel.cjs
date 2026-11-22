@@ -186,6 +186,14 @@ exports.run = async () => {
   const reported = new AgentViewState();
   reported.update({t:'context_report',report:{budgetTokens:4000,estimatedTokens:10,selections:[],skipped:[]}});
   assert.deepEqual(reported.contextView, {pinned:[],files:[],skipped:[]});
+  // Stop: requested → settling (harness status detail) → stopped and settled, naming what changed before the stop.
+  const stopping = new AgentViewState();
+  stopping.update({t:'status',state:'cancelling',detail:'Stop requested: approvals closed; settling 1 tool call (an approved edit is saved and reported, a running command is killed)'});
+  assert.match(stopping.status, /^Stop requested: approvals closed; settling 1 tool call/);
+  stopping.update({t:'done',status:'cancelled'});
+  assert.equal(stopping.status, 'Stopped \u00b7 settled: no change was applied in this turn; nothing else will run');
+  const stoppedAfterEdit = changedTurn([{t:'done',status:'cancelled'}]);
+  assert.equal(stoppedAfterEdit.status, 'Stopped \u00b7 settled: 1 file changed before the stop (listed below); nothing else will run');
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

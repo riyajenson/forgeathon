@@ -243,7 +243,11 @@ export class TurnRun {
     this.cancelPromise ??= (async () => {
       this.cancelRequested = true;
       this.contextAbort.abort();
-      this.buffer.emit({ t: 'status', state: 'cancelling' });
+      // Three visible states: stop requested (approvals closed now), settling (what is still finishing), then done.
+      const inFlight = this.scope?.inFlightCount ?? 0;
+      this.buffer.emit({ t: 'status', state: 'cancelling', detail: inFlight
+        ? `Stop requested: approvals closed; settling ${inFlight} tool call${inFlight === 1 ? '' : 's'} (an approved edit is saved and reported, a running command is killed)`
+        : 'Stop requested: approvals closed; stopping the TrueForge turn' });
       this.scope?.cancel();
       for (const w of this.waiters.values()) w.resolve('cancelled');
       this.waiters.clear();

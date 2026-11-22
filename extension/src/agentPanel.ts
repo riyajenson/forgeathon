@@ -109,6 +109,11 @@ export class AgentViewState {
         this.status = e.summary || e.status; this.outcome = e.status; this.busy = this.reviewing = false; this.command = undefined;
         if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
         this.summary = this.fileSummary();
+        if (e.status === 'cancelled') {
+          const saved = this.summary.filter((l) => !l.endsWith('| not changed')).length;
+          this.status = 'Stopped \u00b7 settled: ' + (saved ? saved + (saved === 1 ? ' file' : ' files') + ' changed before the stop (listed below); nothing else will run'
+            : 'no change was applied in this turn; nothing else will run');
+        }
         this.tests = testsLine(e.tests);
         this.verification = verificationLine(e.status, e.tests, this.summary.filter((l) => !l.endsWith('| not changed')).length, this.text);
         break;

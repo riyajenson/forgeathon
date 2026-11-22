@@ -394,6 +394,8 @@ test('Stop against a silent TrueForge (stream and cancel never answer) ends the 
   assert.equal(terminal(run).length, 1);
   assert.equal(terminal(run)[0]!.t === 'done' && terminal(run)[0]!.status, 'cancelled');
   assert.ok(events(run).some((e) => e.t === 'status' && /did not confirm/.test(e.detail ?? '')));
+  const first = events(run).find((e) => e.t === 'status' && e.state === 'cancelling') as Extract<HarnessEvent, { t: 'status' }>;
+  assert.equal(first.detail, 'Stop requested: approvals closed; stopping the TrueForge turn', 'Stop is acknowledged with what happens next');
 });
 
 test('watchdog against a silent TrueForge: retry and fallback run in new sessions and the turn ends with one error', async () => {

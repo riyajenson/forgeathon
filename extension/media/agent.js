@@ -36,6 +36,42 @@
       return li;
     }));
   };
+  // Tool timeline: rows keyed by call id (patched in place), and runs of three or more finished reads/searches
+  // collapsed into one expandable row so edits, commands and failures stay in view on long turns.
+  const READER = /(^|[_.:])(read_file|search_workspace|list_files|find_symbol|gather_context)$/;
+  const toolRows = new Map(), toolGroups = new Map();
+  let lastTools;
+  const toolRow = t => {
+    let li = toolRows.get(t.id);
+    if (!li) { li = document.createElement('li'); toolRows.set(t.id, li); }
+    const text = t.label + ' | ' + t.detail;
+    if (li.textContent !== text) li.textContent = text;
+    return li;
+  };
+  const toolGroup = run => {
+    let g = toolGroups.get(run[0].id);
+    if (!g) {
+      g = { li: document.createElement('li'), details: document.createElement('details'), summary: document.createElement('summary'), ul: document.createElement('ul') };
+      g.details.append(g.summary, g.ul); g.li.append(g.details); toolGroups.set(run[0].id, g);
+    }
+    g.summary.textContent = run.length + ' finished reads and searches';
+    g.ul.replaceChildren(...run.map(toolRow));
+    return g.li;
+  };
+  const renderTools = tools => {
+    const key = JSON.stringify(tools);
+    if (key === lastTools) return;
+    lastTools = key;
+    if (!tools.length) { toolRows.clear(); toolGroups.clear(); }
+    const finished = t => READER.test(t.label) && t.detail.startsWith('Done: ');
+    const rows = [];
+    for (let i = 0; i < tools.length;) {
+      let j = i;
+      while (j < tools.length && finished(tools[j])) j++;
+      if (j - i >= 3) { rows.push(toolGroup(tools.slice(i, j))); i = j; } else { rows.push(toolRow(tools[i])); i++; }
+    }
+    el('tools').replaceChildren(...rows);
+  };
   window.addEventListener('message', ({data:s}) => {
     // Mentions chosen in the Attach picker go into the request box; they are not a render.
     if (s && typeof s.insertMentions === 'string') { const t = el('task'); t.value = (t.value && !/\s$/.test(t.value) ? t.value + ' ' : t.value) + s.insertMentions; t.focus?.(); return; }
@@ -56,7 +92,7 @@
       ? (s.command.warning ? '⚠ ' + s.command.warning + '\n' : '') + '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' + (s.command.facts ? '\n' + s.command.facts : '') : '');
     setText('text', s.text);
     setHidden('activity', !s.tools.length);
-    list('tools',s.tools.map(t => t.label + ' | ' + t.detail));
+    renderTools(s.tools);
     setHidden('context', !s.context);
     if (s.context) {
       setText('budget', s.context.estimatedTokens + ' / ' + s.context.budgetTokens + ' estimated tokens');

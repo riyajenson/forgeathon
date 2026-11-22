@@ -32,7 +32,7 @@ exports.run = async () => {
   const document = {
     visibilityState: 'visible',
     getElementById: element,
-    createElement: tag => ({ tag, textContent: '' })
+    createElement: tag => ({ tag, textContent: '', children: [], append(...c) { this.children.push(...c); }, replaceChildren(...c) { this.children = c; } })
   };
   const window = { addEventListener: (name, fn) => { assert.equal(name, 'message'); onMessage = fn; } };
   const vscode = { postMessage: message => messages.push(message) };
@@ -78,4 +78,21 @@ exports.run = async () => {
   assert.equal(messages[0].visibility, 1, 'the acknowledgement reports that the webview was visible');
   assert.equal(messages[0].eventToFrameMs, 32, 'control latency includes host-to-webview delivery and the frame');
   assert.equal(messages[0].textEventToFrameMs, 22, 'text latency starts at the first coalesced delta');
+  // Tool timeline: a run of three finished reads collapses into one row; edits and running reads stay visible.
+  {
+    const reads = [1, 2, 3].map(i => ({ id: 'r' + i, label: 'read_file', detail: 'Done: src/flask/cli.py' }));
+    const tools = [...reads, { id: 'e1', label: 'propose_edit', detail: 'Done: saved' }, { id: 'r4', label: 'read_file', detail: 'src/a.py' }];
+    onMessage({ data: { ...state, renderSequence: 90, tools } });
+    const rows = element('tools').children;
+    assert.equal(rows.length, 3, 'three finished reads grouped, then the edit and the running read');
+    const details = rows[0].children[0];
+    assert.equal(details.tag, 'details');
+    assert.equal(details.children[0].textContent, '3 finished reads and searches');
+    assert.equal(rows[1].textContent, 'propose_edit | Done: saved');
+    const edit = rows[1];
+    onMessage({ data: { ...state, renderSequence: 91, tools: tools.map(t => t.id === 'r4' ? { ...t, detail: 'Done: src/a.py' } : t) } });
+    assert.equal(element('tools').children[1], edit, 'rows are keyed by call id and patched in place');
+    onMessage({ data: { ...state, renderSequence: 92, tools: [] } });
+    assert.equal(element('tools').children.length, 0);
+  }
 };

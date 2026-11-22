@@ -130,6 +130,8 @@ export class TurnRun {
   private testsUsed = 0;
   /** The observed outcome of the last test command that ran in this turn. */
   private lastTest: TestOutcome | undefined;
+  /** Files saved or applied after the last test command: its result may no longer hold. */
+  private readonly editedAfterTest = new Set<string>();
   /** Files this turn changed: applied edits and files reported changed by commands. */
   private readonly changedFiles = new Set<string>();
   /** Set when the turn stopped on a rate limit and emitted `resumable`. */
@@ -298,14 +300,18 @@ export class TurnRun {
       const scope = this.deps.scopes.open(runtimeSessionId);
       scope.resetForTurn();
       scope.onApplied = (result) => {
-        if (result.status === 'saved' || result.status === 'buffer_applied' || result.status === 'save_failed') this.changedFiles.add(result.path);
+        if (result.status === 'saved' || result.status === 'buffer_applied' || result.status === 'save_failed') {
+          this.changedFiles.add(result.path);
+          if (this.lastTest) this.editedAfterTest.add(result.path);
+        }
         emit({ t: 'edit_applied', result });
       };
       scope.workspaceRoot = this.deps.workspaceRoot;
       scope.onContext = (report) => emit({ t: 'context_report', report });
       scope.onCommand = (r) => {
         for (const f of r.changedFiles) this.changedFiles.add(f);
-        if (isTestCommand(r.command)) this.lastTest = testOutcome(r.command, r.exitCode, r.output ?? '');
+        if (isTestCommand(r.command)) { this.lastTest = testOutcome(r.command, r.exitCode, r.output ?? ''); this.editedAfterTest.clear(); }
+        else if (this.lastTest) for (const f of r.changedFiles) this.editedAfterTest.add(f);
         emit({
           t: 'status', state: 'running',
           detail: (r.changedFiles.length
@@ -589,6 +595,7 @@ export class TurnRun {
     const t = this.lastTest;
     if (!t) return { tests: { status: 'not_run' } };
     return { tests: { status: t.status, command: t.command.slice(0, 200), exitCode: t.exitCode,
-      ...(t.passed !== undefined ? { passed: t.passed } : {}), ...(t.failed !== undefined ? { failed: t.failed } : {}), ...(t.summary ? { summary: t.summary } : {}) } };
+      ...(t.passed !== undefined ? { passed: t.passed } : {}), ...(t.failed !== undefined ? { failed: t.failed } : {}), ...(t.summary ? { summary: t.summary } : {}),
+      ...(this.editedAfterTest.size ? { editedAfter: [...this.editedAfterTest].sort() } : {}) } };
   }
 }

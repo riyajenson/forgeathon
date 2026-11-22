@@ -684,6 +684,47 @@ test('done.tests reports the observed outcome of the last test command, whatever
   assert.equal((terminal(inline)[0] as Extract<HarnessEvent, { t: 'done' }>).tests, undefined, 'inline turns carry no test outcome');
 });
 
+test('done.tests marks the result stale when a file was saved after the last test command, and a later test run clears it', { skip: process.platform === 'win32' && 'needs a shell' }, async () => {
+  const bin = path.join(root, 'bin');
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(bin, 'pytest'), '#!/bin/sh\necho "2 failed in 0.07s"\nexit 1\n', { mode: 0o755 });
+  const oldPath = process.env['PATH'];
+  process.env['PATH'] = `${bin}:${oldPath}`;
+  // steps: test, edit (stale), [test again (fresh)]
+  const scripted = (steps: Array<'test' | 'edit'>) => {
+    let next = 0;
+    const pause = (ch: Channel) => {
+      const kind = steps[next]!; const id = `c${++next}`;
+      const call = kind === 'test' ? toolCallNeedingApproval(id, 'run_command', { command: 'pytest tests' }) : toolCallNeedingApproval(id, 'propose_edit', editArgs());
+      ch.push(...(next === 1 ? call : call.slice(1)));
+    };
+    return new FakeTrueForge({
+      onTurn: (ch) => pause(ch),
+      onApproval: (sub, sessionId) => {
+        const kind = steps[next - 1]!;
+        const scope = scopeOf(sessionId);
+        const ran = kind === 'test' ? runCommandTool({ port, scope }, { command: 'pytest tests' }) : proposeEditTool({ port, scope }, editArgs());
+        void ran.then(() => (next < steps.length ? pause(sub) : sub.push(ev('model.message', { content: 'All tests pass.' }), done('done'))));
+      },
+    });
+  };
+  try {
+    const stale = makeRun(scripted(['test', 'edit']));
+    void clickThrough(stale);
+    await stale.start();
+    const d = terminal(stale)[0] as Extract<HarnessEvent, { t: 'done' }>;
+    assert.deepEqual([d.tests?.status, d.tests?.summary, d.tests?.editedAfter], ['failed', '2 failed in 0.07s', [FILE]]);
+
+    await fs.writeFile(path.join(root, FILE), ORIGINAL);
+    const fresh = makeRun(scripted(['edit', 'test']));
+    void clickThrough(fresh);
+    await fresh.start();
+    const d2 = terminal(fresh)[0] as Extract<HarnessEvent, { t: 'done' }>;
+    assert.equal(d2.tests?.status, 'failed');
+    assert.equal(d2.tests?.editedAfter, undefined, 'edits before the test run do not make it stale');
+  } finally { process.env['PATH'] = oldPath; }
+});
+
 test('review requests flag hunks that delete a whole function', async () => {
   const args = { path: FILE, base_sha256: sha256Hex(ORIGINAL), edits: [{ old_text: 'def alpha():\n    return 1\n', new_text: '' }] };
   const tf = new FakeTrueForge({ onTurn: (ch) => ch.push(...toolCallNeedingApproval('c1', 'propose_edit', args)), onApproval: (sub, sessionId) => {

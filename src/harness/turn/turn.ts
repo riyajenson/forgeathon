@@ -9,7 +9,7 @@ import type { ScopeRegistry, SessionScope } from '../mcp/scope';
 import { canonicalArgsKey, deletedDefinitions } from '../review';
 import { testOutcome, type TestOutcome } from './test-outcome';
 import { Attempt, type AttemptResult, type CallDecision, type PendingCall } from '../trueforge/attempt';
-import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, redactSecrets, retryDelayMs, safeMessage } from '../trueforge/errors';
+import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, redactSecrets, retryAfterHintMs, retryDelayMs, safeMessage } from '../trueforge/errors';
 import { appendTurnLog, type AttemptRecord } from './turn-log';
 import { traceUrl, type TrueForgeClient, type TrueForgeSdk } from '../trueforge/sdk';
 import { TurnEventBuffer } from './event-buffer';
@@ -443,7 +443,7 @@ export class TurnRun {
         // The editor may offer Resume: a new turn on the same conversation, told what this one already changed.
         const reason = rateLimited ? 'rate_limited' as const : 'stalled' as const;
         this.resumableState = { turnId: this.req.turnId, reason, changedFiles: [...this.changedFiles].sort(), commandsUsed: this.commandsUsed, testsUsed: this.testsUsed, agentName: agent, runtimeSessionId };
-        emit({ t: 'resumable', reason, retryAfterMs: rateLimited ? Math.max(RESUME_WAIT_MS, retryDelayMs(result.message, 0)) : RESUME_AFTER_STALL_MS, changedFiles: this.resumableState.changedFiles });
+        emit({ t: 'resumable', reason, retryAfterMs: rateLimited ? Math.max(RESUME_WAIT_MS, retryAfterHintMs(result.message) ?? 0) : RESUME_AFTER_STALL_MS, changedFiles: this.resumableState.changedFiles });
       }
       const code: ProtocolError['code'] = cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';
       const prefix = cls === 'MODEL_AUTH' ? 'Model authentication failed' : cls === 'MODEL_UNAVAILABLE' ? 'Model unavailable' : cls === 'MODEL_OTHER' ? 'Model error' : 'Turn failed';

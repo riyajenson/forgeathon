@@ -743,6 +743,15 @@ test('the turn input is masked: a credential shape in the request or context nev
   assert.ok(tf2.inputs[0]!.includes(key), 'maskSourceSecrets: false sends the text unchanged');
 });
 
+test('resume: a provider wait hint longer than the 60 s floor sets when Resume is offered', async () => {
+  const run = makeRun(editThenError('[Model Error] Request failed (429): Rate limit reached. Please try again in 600s.'));
+  void clickThrough(run);
+  await run.start();
+  const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
+  assert.equal(r.retryAfterMs, 600_000);
+  assert.equal(events(run).filter((e) => e.t === 'status' && e.state === 'retrying').length, 0, 'still no automatic retry after a write');
+});
+
 test('resume: no resumable event for failures that are not rate limits', async () => {
   for (const message of ['[Model Error] Request failed (401): Unauthorized', '[Model Error] Request failed (503): overloaded', 'iteration limit reached']) {
     const run = makeRun(editThenError(message));

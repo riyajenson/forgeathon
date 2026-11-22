@@ -31,6 +31,23 @@ export function isRateLimited(message: string | undefined): boolean {
  * Delay before the single retry. Rate-limit errors (429) honour a retry hint in the provider message
  * ("Retry-After: 12", "try again in 1.5s", "retry after 800ms"), else wait 5 s; capped at 30 s.
  */
+/** Longest provider wait honoured for a Resume suggestion. */
+export const MAX_RESUME_HINT_MS = 60 * 60 * 1000;
+
+/**
+ * The provider's own wait hint in a rate-limit message (Retry-After seconds, "try again in 12s", "1.5 minutes", "4500ms"),
+ * uncapped up to an hour; undefined when there is none. Used for the Resume suggestion, which must not be offered
+ * earlier than the provider allows; the automatic retry below keeps its 30 s cap.
+ */
+export function retryAfterHintMs(message: string | undefined): number | undefined {
+  if (!isRateLimited(message)) return undefined;
+  const m = /(?:retry[- ]after|try again in|retry in|wait)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|min(?:ute)?s?|m\b|s|sec(?:ond)?s?)?/i.exec(message ?? '');
+  if (!m) return undefined;
+  const unit = (m[2] ?? 's').toLowerCase();
+  const factor = /^m(s|illi)/.test(unit) ? 1 : /^m/.test(unit) ? 60_000 : 1000;
+  return Math.min(MAX_RESUME_HINT_MS, Math.ceil(Number(m[1]) * factor));
+}
+
 export function retryDelayMs(message: string | undefined, baseMs: number): number {
   if (!isRateLimited(message)) return baseMs;
   const m = /(?:retry[- ]after|try again in|retry in|wait)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|sec|seconds?)?/i.exec(message ?? '');

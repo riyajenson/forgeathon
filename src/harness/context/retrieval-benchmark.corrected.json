@@ -1,0 +1,12 @@
+{
+  "version": "corrected-1",
+  "base": "retrieval-benchmark.json",
+  "note": "Label corrections applied on top of the original set with bench-context --labels=corrected. The original file is unchanged so earlier figures stay comparable; report both.",
+  "changes": [
+    {
+      "id": "forge-cancellation-settlement",
+      "expectedPaths": ["src/harness/turn/turn.ts", "src/harness/mcp/scope.ts", "src/harness/integration/turn.itest.ts"],
+      "why": "src/harness/turn/settlement.ts never existed; settlement (in-flight tool tracking and waiting before done) lives in mcp/scope.ts (SessionScope.inFlight) and turn.ts."
+    }
+  ]
+}

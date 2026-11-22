@@ -1,12 +1,18 @@
 import * as vscode from 'vscode';
 import type { EditorPort, ForgeHarness, HarnessEvent, PromptContext, Version } from 'forge-harness';
 import { createFileLister, createStatusLogger } from './editorPort';
-import { AgentPanel } from './agentPanel';
+import { AgentPanel, commandFacts } from './agentPanel';
+import { pickAttachments } from './attachPicker';
 import { InlineReview } from './inlineReview';
 import { EditReview } from './review';
 import { TurnController } from './turn';
 
 type Connection = { harness: ForgeHarness; version: Version };
+/** True when the document changed since the selection was captured and the selected range no longer holds that text. */
+export function selectionStale(doc: vscode.TextDocument, range: vscode.Range, text: string, version: number): boolean {
+  return doc.version !== version && (doc.isClosed || doc.getText(range) !== text);
+}
+
 export class Workbench implements vscode.Disposable {
   readonly edits: EditReview;
   private readonly review: InlineReview;
@@ -17,7 +23,14 @@ export class Workbench implements vscode.Disposable {
     send: text => this.run('agent', text, this.activeContext()),
     stop: () => this.stop(), review: () => this.choose(),
     command: allow => this.commandAnswer?.(allow),
-    resume: () => this.resume()
+    resume: () => this.resume(), attach: () => pickAttachments(this.folder), undoTurn: () => this.undoTurn(),
+    reveal: async (path, line) => {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(this.folder.uri, path));
+      const pos = new vscode.Position(Math.max(0, Math.min(line - 1, doc.lineCount - 1)), 0);
+      await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos), preview: false });
+    },
+    unsavedFiles: () => vscode.workspace.textDocuments.filter(d => d.isDirty && vscode.workspace.getWorkspaceFolder(d.uri)?.uri.toString() === this.folder.uri.toString())
+      .map(d => vscode.workspace.asRelativePath(d.uri, false))
   });
   private controller?: TurnController;
   private harness?: ForgeHarness;
@@ -41,8 +54,8 @@ export class Workbench implements vscode.Disposable {
   }
   events(event: HarnessEvent) {
     this.panel.event(event);
-    // Also notify outside the panel, which may be closed during an inline edit.
-    if (event.t === 'fallback') {
+    // Also notify outside the panel when it is not visible (an inline edit); a visible panel shows the recovery card.
+    if (event.t === 'fallback' && !this.panel.visible) {
       void vscode.window.showWarningMessage('Primary model failed: ' + event.reason + ' → switched to ' + event.toModel);
     } else if (event.t === 'error') {
       void vscode.window.showErrorMessage('Forge: ' + event.error.message);
@@ -66,6 +79,15 @@ export class Workbench implements vscode.Disposable {
     const id = this.edits.latestUndoId();
     if (id) await this.edits.undo(id); else this.notice('No reviewed edit to undo.');
   }
+  /** Undo every reviewed change of the latest turn (all files, newest first), or none if one was edited since. */
+  async undoTurn() {
+    if (this.panel.state.busy) { this.notice('Stop the running turn before undoing its changes.'); return; }
+    const r = await this.edits.undoTurn();
+    if (!r.undone.length && !r.error) { this.notice('No reviewed changes to undo.'); return; }
+    const files = (l: string[]) => l.length + (l.length === 1 ? ' file' : ' files') + ' (' + l.join(', ') + ')';
+    this.notice(r.error ? 'Undo stopped: ' + r.error + '.' + (r.undone.length ? ' Undone: ' + files(r.undone) + '.' : '') + ' Still changed: ' + files(r.remaining) + '.'
+      : 'Undid the turn\'s reviewed changes: ' + files(r.undone) + '.');
+  }
   async stop() {
     this.pendingRun?.abort();
     this.panel.notice('Stopping...');
@@ -75,7 +97,7 @@ export class Workbench implements vscode.Disposable {
     const picker = vscode.window.createQuickPick();
     this.commandPicker = picker;
     picker.title = (warning ? '⚠ Unrestricted command. ' : '') + 'Allow this command in ' + cwd + '?';
-    picker.placeholder = warning || command;
+    picker.placeholder = commandFacts(warning !== undefined);
     picker.items = [{label:'Deny'}, {label:'Allow once', detail:command, ...(warning ? {description: warning} : {})}];
     return new Promise<boolean>(resolve => {
       let allow = false;
@@ -147,8 +169,11 @@ export class Workbench implements vscode.Disposable {
     const context = {activeFile, selection:{ path: activeFile, text: doc.getText(selection),
       startLine: selection.start.line + 1, endLine: selection.end.line + (selection.end.character === 0 ? 0 : 1) }};
     this.warm();
+    const version = doc.version;
     const instruction = await vscode.window.showInputBox({prompt:'How should the selection change?'});
     if (!instruction?.trim()) return;
+    // The document may have changed while the instruction was typed: never send a selection that no longer matches.
+    if (selectionStale(doc, selection, context.selection.text, version)) throw new Error('The selected code changed while you typed the instruction; select it again.');
     // Visible progress for inline turns (the panel may be closed); Cancel stops the turn.
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Forge inline edit', cancellable: true },
       (progress, token) => {

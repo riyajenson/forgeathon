@@ -473,3 +473,20 @@ protectedTest('a hidden file inside the workspace reads as empty in the sandbox'
     assert.equal(out.trim(), 'END');
   } finally { await fs.rm(path.join(root, 'config'), { recursive: true, force: true }); }
 });
+
+test('the sandboxed child gets an explicit environment allowlist: no editor variable or key passes through', async () => {
+  let seen: NodeJS.ProcessEnv | undefined;
+  const runtime = noSpawnRuntime();
+  runtime.environment = async () => ({ env: { PATH: '/usr/bin', LANG: 'en_US.UTF-8', NVIDIA_API_KEY: 'nvapi-test', AWS_PROFILE: 'x', SSH_AUTH_SOCK: '/tmp/s', PYTHONPATH: 'evil' }, removed: 0 });
+  runtime.spawn = ((_cmd: string, _args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+    seen = opts.env;
+    const child = Object.assign(new EventEmitter(), { pid: 4243, stdout: new PassThrough(), stderr: new PassThrough() });
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  }) as unknown as CommandRuntime['spawn'];
+  const args = { command: 'true' }; approve(args);
+  await runCommandTool(ctx, args, runtime);
+  assert.ok(seen, 'spawned');
+  assert.deepEqual(Object.keys(seen!).filter((k) => seen![k] !== undefined).sort(), ['HOME', 'LANG', 'PATH', 'PYTEST_ADDOPTS', 'PYTHONDONTWRITEBYTECODE', 'TMPDIR']);
+  assert.equal(seen!['HOME'], '/tmp');
+});

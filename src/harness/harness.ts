@@ -38,6 +38,12 @@ export interface HarnessOptions {
   /** Token budget for automatically assembled context in agent mode (setting forge.context.budgetTokens). Default 4000:
    * every agent request resends it, and on Task B 4000 still holds the outlines of cli.py, cli.rst and test_cli.py. */
   contextBudgetTokens?: number;
+  /** Mask credential-shaped strings (provider key shapes, PEM keys, known key values) in workspace text sent to the model. Default true. */
+  maskSourceSecrets?: boolean;
+  /** Offer several line ranges per read_file call (fewer read round trips; changes the tool schema the model sees). Default false. */
+  multiRangeRead?: boolean;
+  /** On a propose_edit whose old_text matches nowhere, include the closest current text in the refusal. Default false. */
+  editHints?: boolean;
   /** Name of the MCP connector registered in TrueForge. Default "vscode". */
   connectorName?: string;
   /** JSON-lines log of every turn (models, attempts, tokens, timing; no content). Default ~/.forge/turns.jsonl
@@ -102,7 +108,7 @@ class ForgeHarnessImpl implements ForgeHarness {
     }
     const listenPort = this.options.mcpPort ?? 47615;
     try {
-      this.mcp = await startMcpServer({ port: bridge, scopes: this.scopes, listenPort });
+      this.mcp = await startMcpServer({ port: bridge, scopes: this.scopes, listenPort, maskSecrets: this.options.maskSourceSecrets !== false, multiRangeRead: this.options.multiRangeRead === true });
     } catch (e) {
       if ((e as { code?: string }).code !== 'EADDRINUSE') throw e;
       throw new Error(`The editor-tools port 127.0.0.1:${listenPort} is in use (another VS Code window with Forge, or another program). Close it, or set "forge.mcpPort" to a free port.`);
@@ -203,6 +209,8 @@ class ForgeHarnessImpl implements ForgeHarness {
       watchdogMs: this.options.watchdogMs ?? 45000,
       modelWatchdogMs: this.options.modelWatchdogMs ?? 120000,
       contextBudgetTokens: this.options.contextBudgetTokens ?? 4000,
+      maskSourceSecrets: this.options.maskSourceSecrets !== false,
+      editHints: this.options.editHints === true,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: this.options.settleMs ?? 10000,
       turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,

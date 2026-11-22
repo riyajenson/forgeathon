@@ -4,11 +4,13 @@ import type { CancelStatus, EditProposal, EventBody, ProtocolError, ReviewDecisi
 import { approvalKey, buildProposal, hunkId, type ProposeEditArgs } from '../mcp/tools';
 import { isAutoApprovableCommand, isListedCommand, isTestCommand, UNRESTRICTED_WARNING } from '../mcp/command';
 import type { EditorPort } from '../mcp/port';
+import { maskedNote, maskSourceSecrets } from '../mcp/redact';
 import type { ScopeRegistry, SessionScope } from '../mcp/scope';
-import { canonicalArgsKey, deletedDefinitions } from '../review';
+import { canonicalArgsKey, deletedDefinitions, noMatchHint } from '../review';
+import { normalizeWorkspacePath } from '../mcp/paths';
 import { testOutcome, type TestOutcome } from './test-outcome';
 import { Attempt, type AttemptResult, type CallDecision, type PendingCall } from '../trueforge/attempt';
-import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, redactSecrets, retryDelayMs, safeMessage } from '../trueforge/errors';
+import { classifyTurnError, connectionCause, isRateLimited, isTrueForgeUnreachable, redactSecrets, retryAfterHintMs, retryDelayMs, safeMessage } from '../trueforge/errors';
 import { appendTurnLog, type AttemptRecord } from './turn-log';
 import { traceUrl, type TrueForgeClient, type TrueForgeSdk } from '../trueforge/sdk';
 import { TurnEventBuffer } from './event-buffer';
@@ -33,6 +35,10 @@ export interface TurnDeps {
   /** Silence limit while a model request is in flight (default 120 s in the harness). */
   modelWatchdogMs?: number;
   contextBudgetTokens: number;
+  /** Mask credential shapes in the turn input (selection, context pack). Default true. */
+  maskSourceSecrets?: boolean;
+  /** On OLD_TEXT_NOT_FOUND, tell the model where the closest text is and what it says now (forge.tools.editHints). */
+  editHints?: boolean;
   retryDelayMs: number;
   settleMs: number;
   /** JSON-lines turn log (no content); undefined disables it. */
@@ -240,7 +246,11 @@ export class TurnRun {
     this.cancelPromise ??= (async () => {
       this.cancelRequested = true;
       this.contextAbort.abort();
-      this.buffer.emit({ t: 'status', state: 'cancelling' });
+      // Three visible states: stop requested (approvals closed now), settling (what is still finishing), then done.
+      const inFlight = this.scope?.inFlightCount ?? 0;
+      this.buffer.emit({ t: 'status', state: 'cancelling', detail: inFlight
+        ? `Stop requested: approvals closed; settling ${inFlight} tool call${inFlight === 1 ? '' : 's'} (an approved edit is saved and reported, a running command is killed)`
+        : 'Stop requested: approvals closed; stopping the TrueForge turn' });
       this.scope?.cancel();
       for (const w of this.waiters.values()) w.resolve('cancelled');
       this.waiters.clear();
@@ -291,7 +301,11 @@ export class TurnRun {
       },
     });
     const { context } = built;
-    const input = this.deps.resumeFrom ? `${resumeNote(this.deps.resumeFrom)}\n${built.input}` : built.input;
+    // The turn input carries workspace text (selection, context pack) to the model and TrueForge's traces: mask credentials.
+    const masked = this.deps.maskSourceSecrets === false ? { text: built.input, count: 0 } : maskSourceSecrets(built.input);
+    if (masked.count) emit({ t: 'status', state: 'starting', detail: `Masked ${masked.count} credential-shaped string${masked.count === 1 ? '' : 's'} in the context sent to the model` });
+    const turnInput = masked.count ? `${masked.text}\n\n${maskedNote(masked.count)}` : masked.text;
+    const input = this.deps.resumeFrom ? `${resumeNote(this.deps.resumeFrom)}\n${turnInput}` : turnInput;
     if (this.deps.resumeFrom) {
       const n = this.deps.resumeFrom.changedFiles.length;
       const why = this.deps.resumeFrom.reason === 'stalled' ? 'stopped responding' : 'stopped on a rate limit';
@@ -380,9 +394,12 @@ export class TurnRun {
         return void emit({ t: 'done', status: 'error', ...this.testsField() });
       }
       const wrote = scope.writes > 0;
+      // The write barrier covers the whole task: a resumed turn whose interrupted turn changed files counts as written,
+      // so it is never retried or handed to the fallback automatically (Resume stays the only way on).
+      const lineageWrote = (this.deps.resumeFrom?.changedFiles.length ?? 0) > 0;
       // An approved write or command that had not finished counts as a write: no retry, no fallback.
-      const mayHaveWritten = wrote || unexecuted > 0 || !settled;
-      const effect: ProtocolError['workspaceEffect'] = !settled ? 'unknown' : wrote ? 'changed' : 'unchanged';
+      const mayHaveWritten = wrote || lineageWrote || unexecuted > 0 || !settled;
+      const effect: ProtocolError['workspaceEffect'] = !settled ? 'unknown' : wrote || lineageWrote ? 'changed' : 'unchanged';
 
       if (result.status === 'done' || (result.status === 'cancelled' && this.cancelRequested)) {
         this.record(agent, model, runtimeSessionId, result, attemptStart);
@@ -433,11 +450,12 @@ export class TurnRun {
         // The editor may offer Resume: a new turn on the same conversation, told what this one already changed.
         const reason = rateLimited ? 'rate_limited' as const : 'stalled' as const;
         this.resumableState = { turnId: this.req.turnId, reason, changedFiles: [...this.changedFiles].sort(), commandsUsed: this.commandsUsed, testsUsed: this.testsUsed, agentName: agent, runtimeSessionId };
-        emit({ t: 'resumable', reason, retryAfterMs: rateLimited ? Math.max(RESUME_WAIT_MS, retryDelayMs(result.message, 0)) : RESUME_AFTER_STALL_MS, changedFiles: this.resumableState.changedFiles });
+        emit({ t: 'resumable', reason, retryAfterMs: rateLimited ? Math.max(RESUME_WAIT_MS, retryAfterHintMs(result.message) ?? 0) : RESUME_AFTER_STALL_MS, changedFiles: this.resumableState.changedFiles });
       }
       const code: ProtocolError['code'] = cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';
       const prefix = cls === 'MODEL_AUTH' ? 'Model authentication failed' : cls === 'MODEL_UNAVAILABLE' ? 'Model unavailable' : cls === 'MODEL_OTHER' ? 'Model error' : 'Turn failed';
       const note = wrote ? ' (no retry or fallback: this turn already changed the workspace)'
+        : lineageWrote ? ' (no retry or fallback: the interrupted turn this one resumes already changed the workspace)'
         : mayHaveWritten ? ' (no retry or fallback: an approved change from this attempt had not finished)'
           : onFallback ? ' (fallback model also failed)' : '';
       return this.fail({ code, message: `${prefix}: ${message}${note}`, retryable: cls === 'MODEL_UNAVAILABLE' && !mayHaveWritten, workspaceEffect: effect });
@@ -516,6 +534,7 @@ export class TurnRun {
         const built = await buildProposal(this.deps.port, args);
         if (!built.ok) {
           let reason = `${built.code}: ${built.message}`;
+          if (built.code === 'OLD_TEXT_NOT_FOUND' && this.deps.editHints === true) reason += await this.noMatchHintFor(args);
           if (ARGUMENT_ERROR_CODES.has(built.code)) {
             const file = typeof args?.path === 'string' ? args.path.trim() : '';
             if (this.argumentErrors.has(file)) reason += `. ${PROPOSE_EDIT_SHAPE_HINT}`;
@@ -622,6 +641,18 @@ export class TurnRun {
     const status = (e as { statusCode?: number }).statusCode;
     const hint = status === 404 ? ` (agent "${agent}" not found; run the setup script)` : '';
     return { code: 'unavailable', message: `Could not start a TrueForge session${hint}: ${safeMessage((e as Error).message)}`, retryable: false, workspaceEffect: 'unchanged' };
+  }
+
+  /** The no-match hint for the first edit whose old_text is missing, masked like other model-bound file text. */
+  private async noMatchHintFor(args: ProposeEditArgs): Promise<string> {
+    const path = normalizeWorkspacePath(args?.path);
+    const snap = path ? await this.deps.port.readText(path).catch(() => null) : null;
+    const missing = snap && Array.isArray(args.edits) ? args.edits.find((e) => typeof e?.old_text === 'string' && !snap.text.includes(e.old_text)) : undefined;
+    if (!snap || !missing) return '';
+    const hint = noMatchHint(snap.text, missing.old_text);
+    if (!hint) return '. No close match: read the file again before retrying.';
+    const masked = this.deps.maskSourceSecrets === false ? { text: hint, count: 0 } : maskSourceSecrets(hint);
+    return `. ${masked.text}${masked.count ? ' ' + maskedNote(masked.count) : ''}`;
   }
 
   private finishCancelled(result?: AttemptResult): void {

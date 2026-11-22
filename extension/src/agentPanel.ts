@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { ContextReport, HarnessEvent } from 'forge-harness';
 import { proposalWarnings } from './destructive';
+import { verificationLine } from './verification';
+import { contextView, type ContextView } from './contextView';
 
 export class AgentViewState {
   text = '';
@@ -17,18 +19,30 @@ export class AgentViewState {
   outcome = '';
   tools: {id: string; label: string; detail: string}[] = [];
   context?: ContextReport;
+  /** The report grouped for reading (pins, files, skipped by reason); the full lists stay under "All entries". */
+  contextView?: ContextView;
   edits: string[] = [];
   /** Per file in this turn: proposals reviewed, hunks proposed and accepted, last apply status. */
   files: Record<string, {reviews: number; hunks: number; accepted: number; status: string}> = {};
   /** Set when the turn ends: every file the turn changed (then reviewed files left unchanged), on one screen. */
   summary: string[] = [];
-  command?: {command: string; cwd: string; warning?: string};
+  command?: {command: string; cwd: string; warning?: string; facts?: string};
   /** Set when the turn stopped on a rate limit or a stall: Resume is offered from `at` (ms since epoch). */
   resume?: {at: number; files: string[]; reason: 'rate_limited' | 'stalled'};
+  /** The user asked to resume automatically once, when the wait ends (cancelled by Stop, a new turn or closing the panel). */
+  autoResume = false;
   /** Proposals in this turn with hunks that delete a whole class or function. */
   warnings: string[] = [];
+  /** Where each warning's hunk starts (file and 1-based line), for jumping to it. */
+  warningTargets: Array<{path: string; line: number}> = [];
   /** Set when an agent turn ends: the observed outcome of its last test command, shown next to the model's summary. */
   tests = '';
+  /** Files with unsaved editor changes when each command was requested (commands run against the files on disk). */
+  unsavedAt: Record<string, string[]> = {};
+  /** Set when an agent turn that changed files ends: Verified, or Unverified with the reason (see verification.ts). */
+  verification = '';
+  /** Set when the turn fell back: one card with both models, the reason and the workspace effect (see recoveryCard). */
+  recovery = '';
   private compaction?: {id: string; label: string; detail: string};
 
   update(e: HarnessEvent) {
@@ -54,12 +68,15 @@ export class AgentViewState {
         if (item) item.detail = (e.ok ? 'Done: ' : 'Failed: ') + e.summary;
         break;
       }
-      case 'context_report': this.context = e.report; break;
+      case 'context_report': this.context = e.report; this.contextView = contextView(e.report); break;
       case 'review_request': {
         this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path;
         const f = this.files[e.proposal.path] ??= {reviews: 0, hunks: 0, accepted: 0, status: ''};
         f.reviews++; f.hunks += e.proposal.hunks.length;
-        for (const w of proposalWarnings(e.proposal)) this.warnings.push(e.proposal.path + ': ' + w);
+        for (const w of proposalWarnings(e.proposal)) {
+          this.warnings.push(e.proposal.path + ': ' + w);
+          this.warningTargets.push({path: e.proposal.path, line: Number(/\(line (\d+)\)/.exec(w)?.[1] ?? 1)});
+        }
         break;
       }
       case 'command_request':
@@ -68,7 +85,7 @@ export class AgentViewState {
           this.tools.push({id:'auto:' + e.callId, label:'auto-approved: ' + e.command, detail:'cwd: ' + e.cwd});
           break;
         }
-        this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
+        this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, facts: commandFacts(e.unrestricted === true), ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
       case 'command_budget_reached': {
         // Refused by the harness without a prompt: the model was told to stop running commands (or tests).
         const which = e.kind === 'test' ? 'test-command budget' : 'command budget';
@@ -95,13 +112,19 @@ export class AgentViewState {
         }
         if (e.result.status === 'save_failed') this.banner = 'Applied to the buffer. Save failed. Inspect the document before retrying Save.';
         break;
-      case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; break;
+      case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; this.recovery = recoveryCard(e); break;
       case 'error': this.banner = e.error.message + '; workspace effect: ' + e.error.workspaceEffect; break;
       case 'done':
         this.status = e.summary || e.status; this.outcome = e.status; this.busy = this.reviewing = false; this.command = undefined;
         if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
         this.summary = this.fileSummary();
-        this.tests = testsLine(e.tests);
+        if (e.status === 'cancelled') {
+          const saved = this.summary.filter((l) => !l.endsWith('| not changed')).length;
+          this.status = 'Stopped \u00b7 settled: ' + (saved ? saved + (saved === 1 ? ' file' : ' files') + ' changed before the stop (listed below); nothing else will run'
+            : 'no change was applied in this turn; nothing else will run');
+        }
+        this.tests = testsLine(e.tests) + unsavedNote(e.tests?.command === undefined ? undefined : this.unsavedAt[e.tests.command]);
+        this.verification = verificationLine(e.status, e.tests, this.summary.filter((l) => !l.endsWith('| not changed')).length, this.text);
         break;
     }
   }
@@ -112,6 +135,26 @@ export class AgentViewState {
     return [...all.filter(([, f]) => f.accepted > 0).map(([path, f]) => path + ' | ' + counts(f) + ' | ' + f.status),
       ...all.filter(([, f]) => f.accepted === 0).map(([path, f]) => path + ' | ' + counts(f) + ' | not changed')];
   }
+}
+
+/** Two independent facts for a command approval: the allowlist classification, and the isolation it will run under. */
+export function commandFacts(unrestricted: boolean): string {
+  return (unrestricted ? '\u26a0 Outside the verification allowlist (pytest, python -m pytest, python -c, flask, git status, git diff)'
+    : '\u2713 On the verification allowlist') +
+    ' \u00b7 Sandbox: active (bubblewrap: read-only workspace, no network, no home directory, no API keys; refused if unavailable)';
+}
+
+/** The fallback as one card: which model failed and why, which model took over, and what that means for the workspace. */
+export function recoveryCard(e: Extract<HarnessEvent, {t: 'fallback'}>): string {
+  return e.fromModel + ' \u2192 ' + e.toModel + ' \u2014 reason: ' + e.reason + '. The turn restarted on the fallback model in a fresh ' +
+    'TrueForge session (its own trace). The failed attempt changed no files: Forge falls back only before any edit or command ' +
+    'has taken effect.';
+}
+
+/** Tests run on the files on disk: name the editor buffers that had unsaved changes when the test command was requested. */
+export function unsavedNote(files: string[] | undefined): string {
+  if (!files?.length) return '';
+  return ' \u2014 tested saved files only; unsaved editor changes were not included: ' + files.slice(0, 5).join(', ') + (files.length > 5 ? ', \u2026' : '');
 }
 
 /** The observed test outcome as one line: what actually ran, not what the model says. */
@@ -125,7 +168,7 @@ export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): strin
   return 'Tests (observed): ' + result + cmd;
 }
 
-type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void> };
+type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void>; attach?(): Promise<string>; undoTurn?(): Promise<void>; unsavedFiles?(): string[]; reveal?(path: string, line: number): Promise<void> };
 export class AgentPanel implements vscode.Disposable {
   state = new AgentViewState();
   private panel?: vscode.WebviewPanel;
@@ -144,9 +187,27 @@ export class AgentPanel implements vscode.Disposable {
   private readonly controlWebviewDom: number[] = [];
   private readonly textWebviewDom: number[] = [];
   constructor(private readonly actions: Actions) {}
+  private autoResumeTimer?: NodeJS.Timeout;
+  /** Schedules (or cancels) one Resume when the suggested wait ends; it fires only if that same turn is still resumable. */
+  setAutoResume(on: boolean) {
+    this.cancelAutoResume();
+    const target = this.state.resume;
+    this.state.autoResume = on && target !== undefined && !this.state.busy;
+    if (this.state.autoResume && target) {
+      this.autoResumeTimer = setTimeout(() => {
+        this.autoResumeTimer = undefined;
+        if (this.state.resume !== target || !this.state.autoResume || this.state.busy) return;
+        this.state.autoResume = false;
+        void this.actions.resume();
+      }, Math.max(0, target.at - Date.now()));
+    }
+    this.refreshControl();
+  }
+  private cancelAutoResume() { if (this.autoResumeTimer) clearTimeout(this.autoResumeTimer); this.autoResumeTimer = undefined; this.state.autoResume = false; }
   start() {
     const eventAt = performance.now();
     const wallAt = Date.now();
+    this.cancelAutoResume();
     this.state = new AgentViewState(); this.state.busy = true; this.state.status = 'Starting'; this.refreshControl(eventAt, wallAt);
   }
   finish() {
@@ -157,6 +218,7 @@ export class AgentPanel implements vscode.Disposable {
   event(e: HarnessEvent) {
     const eventAt = performance.now();
     const wallAt = Date.now();
+    if (e.t === 'command_request' && this.actions.unsavedFiles) this.state.unsavedAt[e.command] = this.actions.unsavedFiles();
     this.state.update(e);
     if (e.t === 'text') {
       // A closed panel has no text frame to measure or flush. The state still
@@ -172,6 +234,8 @@ export class AgentPanel implements vscode.Disposable {
   /** The command decision was given elsewhere (quick pick): retire the panel's Allow/Deny buttons. */
   commandAnswered() { if (this.state.command) { const eventAt = performance.now(), wallAt = Date.now(); this.state.command = undefined; this.refreshControl(eventAt, wallAt); } }
   error(message: string) { const eventAt = performance.now(), wallAt = Date.now(); this.state.banner = message; this.refreshControl(eventAt, wallAt); }
+  /** True while the Forge Agent panel is shown, so notices need not be repeated outside it. */
+  get visible(): boolean { return this.panel?.visible === true; }
   open() {
     if (this.panel) { this.panel.reveal(vscode.ViewColumn.Beside); return; }
     const media = vscode.Uri.joinPath(vscode.Uri.file(__dirname), '..', 'media');
@@ -189,7 +253,11 @@ export class AgentPanel implements vscode.Disposable {
             if (!this.state.busy && typeof m.text === 'string' && m.text.trim() && m.text.length <= 32000)
               await this.actions.send(m.text);
             break;
-          case 'stop': await this.actions.stop(); break;
+          case 'stop': this.cancelAutoResume(); await this.actions.stop(); break;
+          case 'openWarning': { const t = Number.isInteger(m.index) ? this.state.warningTargets[m.index] : undefined; if (t) await this.actions.reveal?.(t.path, t.line); break; }
+          case 'undoTurn': if (!this.state.busy) await this.actions.undoTurn?.(); break;
+          case 'autoResume': this.setAutoResume(!this.state.autoResume); break;
+          case 'attach': { const mentions = await this.actions.attach?.(); if (mentions && panel === this.panel) void panel.webview.postMessage({insertMentions: mentions}); break; }
           case 'resume':
             // Offered only after a rate limit, once the suggested wait has passed.
             if (!this.state.busy && this.state.resume && Date.now() >= this.state.resume.at) await this.actions.resume();
@@ -215,12 +283,12 @@ export class AgentPanel implements vscode.Disposable {
 <style nonce="${nonce}">body{font:var(--vscode-font-size) var(--vscode-font-family);color:var(--vscode-foreground);padding:12px}
 textarea{display:block;box-sizing:border-box;width:100%;margin:6px 0;padding:8px;color:var(--vscode-input-foreground);background:var(--vscode-input-background)}
 button{color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:0;padding:5px 10px;cursor:pointer}
-button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere} #banner{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:8px}
+button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere} #banner,#verification.unverified{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:8px} #verification.verified{border-left:3px solid var(--vscode-testing-iconPassed,var(--vscode-charts-green));padding-left:8px}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
-<button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
-<section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></section>
+<button id="attach" title="Attach files or symbols as @file:/@symbol: mentions">Attach\u2026</button> <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
+<p id="status" role="status"></p><p id="verification" role="alert" hidden></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button> <button id="autoResume">Resume when ready</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul><button id="undoTurn" hidden title="Restore every file this turn changed (checked first; nothing is undone if one was edited since)">Undo this turn\u2019s changes</button></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><section id="recovery" hidden><h2>Recovered by fallback</h2><p id="recoveryText"></p></section><button id="trace" hidden>Open TrueForge session</button>
+<section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><h3 id="pinnedTitle">Pinned by you</h3><ul id="pinned"></ul><h3>Files (in rank order)</h3><ul id="files"></ul><h3 id="skippedGroupsTitle">Not included, by reason</h3><ul id="skippedGroups"></ul><details><summary>All entries</summary><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></details></section>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
 <section id="changes" hidden><h2>Reviewed edits</h2><ul id="edits"></ul></section>
@@ -337,6 +405,7 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
   }
 
   dispose() {
+    this.cancelAutoResume();
     this.clearTextTimer();
     this.pendingTextEvents.length = 0;
     this.pendingRenders.clear();

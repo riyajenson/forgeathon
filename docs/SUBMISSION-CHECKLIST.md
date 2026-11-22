@@ -1,4 +1,4 @@
-# Submission checklist (Round 1 — extended deadline 22 Nov 2026, 23:59 IST; finals build, tag `round1-extended`)
+# Submission checklist (Round 1 — extended deadline 22 Nov 2026, 23:59 IST; finals build, tag `round1-extended-3`)
 
 Source: the official 13-page competition PDF (held by the team; not in this repository). The requirements below are
 copied from it so this checklist stands alone. Status: ✅ done and
@@ -24,7 +24,7 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Feature | Status | Evidence |
 |---|---|---|
 | Inline edit with in-editor diff, accept/reject, no copy-paste | ✅ | UI e2e (`scripts/test-extension-e2e.sh`), manual test A |
-| Agent mode: one request, ≥ 3 files discovered and edited | ✅ | Real models, 22 Nov: Task B 6/6 on the merged build (0be9897) and 2 of 2 on p14 before the merge (`docs/writeup/rehearsal.json`). The mock runs (UI e2e, `scripts/e2e-mock.sh`) are scripted: the demo model supplies the paths and edits. At turn end the panel lists the changed files together |
+| Agent mode: one request, ≥ 3 files discovered and edited | ✅ | Real models, 22 Nov: Task B 8/8 checks on the sprint build (255107f), 6/6 on the merged build (0be9897) and 2 of 2 on p14 before the merge (`docs/writeup/rehearsal.json`). The mock runs (UI e2e, `scripts/e2e-mock.sh`) are scripted: the demo model supplies the paths and edits. At turn end the panel lists the changed files together |
 | Context: `@file`, `@symbol`, automatic retrieval, budget, rationale visible | ✅ | Context engine tests (incl. Flask ranking), panel context block |
 | Diff safety: preview, per-hunk accept/reject, no silent writes, undo | ✅ | Extension suites in VS Code (all six apply outcomes asserted, partial approval, undo incl. a formatting save participant), harness tests. Applied text and undo are verified by hash; save-time formatters may alter the saved file. Approved commands run in bubblewrap (read-only checkout, no network; refused if unavailable), flagged, reported and capped by the command budget (README "Safety model"). Limitation: commands can still read any file |
 | Streaming and cancellation, workspace consistent | ✅ | Integration cancel tests (paused, streaming, in-flight apply); unit races (Stop before a command spawns, silent TrueForge, late writes vs retry/fallback); UI e2e Stop; extension suite: Stop after an approved edit reached VS Code saves it and reports it as saved. Edits saved earlier in a turn stay. All with the scripted model |
@@ -34,7 +34,7 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Task | Status | Evidence |
 |---|---|---|
 | A — inline edit + `FLASK_DEBUG=off` → `False` | ✅ demo model · ✅ real model | `scripts/e2e-mock.sh`; real runs in STATUS.md |
-| B — `flask config`, ≥ 3 files, `pytest tests/test_cli.py -q`, `flask --help`, masked JSON | ✅ demo model (scripted) · ✅ real model | `scripts/e2e-mock.sh` (scripted: no evidence of discovery). Real, 22 Nov: 6/6 on the merged build (0be9897; 48 requests, 217 s) and 6/6 twice on p14 (5710431); no 429. `docs/writeup/rehearsal.json` |
+| B — `flask config`, ≥ 3 files, `pytest tests/test_cli.py -q`, `flask --help`, masked JSON | ✅ demo model (scripted) · ✅ real model | `scripts/e2e-mock.sh` (scripted: no evidence of discovery). Real, 22 Nov: 8/8 checks on the sprint build (255107f; 60 requests, 422 s, first diff 46.5 s), 6/6 on the merged build (0be9897; 48 requests, 217 s) and 6/6 twice on p14 (5710431); no 429. `docs/writeup/rehearsal.json` |
 | C — invalid key → fallback, editor responsive, `git status` clean | ✅ demo model · ✅ real model | `scripts/e2e-mock.sh`, UI e2e. Real runs: NVIDIA 401 → Groq (rehearsal), NVIDIA 401 → OpenRouter (new fallback, first diff 8.0 s; STATUS.md). Fallback on auth errors is matched by status and wording (Google's 400 format untested live) |
 
 ## Deliverables
@@ -54,4 +54,4 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Submission form https://forms.gle/htyWGFJRBgsg3qmx6 | 🟡 | Human |
 | Public PDF link | 🟡 | After the timestamps are filled: `scripts/render-writeup.sh`, then commit the rendered PDF (`git add -f docs/writeup/WRITEUP.pdf`, it is gitignored) and push; submit https://github.com/riyajenson/forgeathon/blob/main/docs/writeup/WRITEUP.pdf as the PDF link. Check it opens signed out (DEMO-SCRIPT "After recording") |
 | Links public by the deadline (repo, video, PDF) | 🟡 | Check in a signed-out browser |
-| Evidence gate `node scripts/check-submission.mjs` | 🟡 | `docs/writeup/rehearsal.json` records real A/B/C on 0be9897. Docs, tests, the smoke runner, the benchmark, CI and setting descriptions since then keep it valid; the Resume-after-fallback fix (`c47e092`, `src/harness/turn/turn.ts`) is runtime code, mock-tested only (unit + integration), so the gate fails until A/B/C are rehearsed on a build that contains it |
+| Evidence gate `node scripts/check-submission.mjs` | ✅ | Passes: `docs/writeup/rehearsal.json` records real A/B/C on the sprint build 255107f (22 Nov 19:05–19:13 IST, one run each, paced, no 429): A 6/6 (first diff 13.9 s), B 8/8 (46.5 s / 421.8 s, 60 requests), C 3/3 (401 → OpenRouter). Includes the Resume-after-fallback fix `c47e092` and the research sprint. Later commits are docs/evidence only |

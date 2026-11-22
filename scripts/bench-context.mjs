@@ -33,7 +33,23 @@ if (budgetOverride !== undefined && (!Number.isInteger(budgetOverride) || budget
 
 const forgeRoot = path.resolve(option('root', process.env.FORGE_BENCH_ROOT ?? scriptRoot));
 const datasetPath = path.join(forgeRoot, 'src/harness/context/retrieval-benchmark.json');
-const dataset = JSON.parse(readFileSync(datasetPath, 'utf8'));
+const labels = option('labels', 'original');
+if (!['original', 'corrected'].includes(labels)) {
+  console.error(`Unsupported labels "${labels}". Use --labels=original or --labels=corrected.`);
+  process.exit(2);
+}
+const correctionsPath = path.join(forgeRoot, 'src/harness/context/retrieval-benchmark.corrected.json');
+const dataset = applyCorrections(JSON.parse(readFileSync(datasetPath, 'utf8')),
+  labels === 'corrected' ? JSON.parse(readFileSync(correctionsPath, 'utf8')) : undefined);
+
+/** The original cases with the corrected-label overlay applied (by case id); unknown ids are an error. */
+export function applyCorrections(original, corrections) {
+  if (!corrections) return { ...original, labels: 'original' };
+  const byId = new Map(corrections.changes.map((c) => [c.id, c]));
+  for (const id of byId.keys()) if (!original.cases.some((c) => c.id === id)) throw new Error(`correction for unknown case ${id}`);
+  return { ...original, labels: corrections.version,
+    cases: original.cases.map((c) => (byId.has(c.id) ? { ...c, expectedPaths: byId.get(c.id).expectedPaths } : c)) };
+}
 const requireFromScript = createRequire(import.meta.url);
 const harnessDist = path.join(forgeRoot, 'src/harness/dist/src/harness');
 const { FakePort } = requireFromScript(path.join(harnessDist, 'mcp/fake-port.js'));
@@ -44,6 +60,7 @@ const { SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION } = requireFromScript(path.jo
 
 const benchmarkArtifacts = new Set([
   'src/harness/context/retrieval-benchmark.json',
+  'src/harness/context/retrieval-benchmark.corrected.json',
   'src/harness/context/retrieval-benchmark.ts',
   'scripts/bench-context.mjs',
 ]);
@@ -150,6 +167,7 @@ const output = {
   generatedAt: new Date().toISOString(),
   node: process.version,
   dataset: path.relative(forgeRoot, datasetPath),
+  labels: dataset.labels,
   caseCount: dataset.cases.length,
   scoredCaseCount: results.length,
   unavailableCases,

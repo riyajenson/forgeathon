@@ -47,6 +47,14 @@
       {
         "command": "forgeathon.newConversation",
         "title": "Forge-a-thon: New Agent Conversation"
+      },
+      {
+        "command": "forgeathon.showSettings",
+        "title": "Forge-a-thon: Show Effective Settings"
+      },
+      {
+        "command": "forgeathon.undoTurn",
+        "title": "Forge-a-thon: Undo All Reviewed Changes of Last Turn"
       }
     ],
     "keybindings": [
@@ -85,6 +93,12 @@
           "default": false,
           "description": "Opt-in local semantic reranking (CPU), used only when keyword/structure evidence is weak. Fully cached scores rerank at once; on a cache miss the turn uses the lexical/structural shortlist immediately and vectors warm in the background for later turns. Needs scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the embedding model onnx-community/all-MiniLM-L6-v2-ONNX (about 54 MB) downloads from Hugging Face on first use. Off by default."
         },
+        "forge.context.maskSecrets": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Mask high-confidence credential shapes (provider API keys such as nvapi-/sk-/gsk_/ghp_, cloud tokens, PEM private keys, and the provider keys this process knows) in workspace text before it is sent to the model or stored in TrueForge traces: read_file, search results, gather_context, the selection and the context pack. Ordinary code such as SECRET_KEY = \"dev\" is sent unchanged. Applies after reconnect."
+        },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",
           "default": false,
@@ -119,6 +133,16 @@
           "default": 120,
           "minimum": 30,
           "description": "Seconds the model may stay silent while a request is in flight (a long edit can stream nothing for a while) before the turn is stopped as unresponsive. Other waits keep the 45 s limit. A stop after the turn changed files offers Resume."
+        },
+        "forge.tools.multiRangeRead": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Let the agent read several line ranges of one file in one `read_file` call (fewer model round trips). Off by default: it changes the tool schema the model sees. Applies after reconnect."
+        },
+        "forge.tools.editHints": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When a proposed edit's `old_text` matches nowhere, tell the agent where the closest text is and what it says now (up to 12 lines, credentials masked), so it can retry without another read. Off by default: it changes model-facing text. Applies after reconnect."
         }
       }
     }

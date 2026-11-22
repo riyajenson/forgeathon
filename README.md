@@ -1,7 +1,7 @@
 # Forge: a VS Code coding agent on TrueForge
 
 > **Builds:** the round-1 submission is tag [`round1-submission`](../../tree/round1-submission) (then `round1-final`).
-> This finals build on `main` is tag `round1-extended`: see [What's new](#whats-new-in-the-finals-build).
+> This finals build on `main` is tag `round1-extended-3` (research sprint merged; earlier builds: `round1-extended-2`, `round1-extended`): see [What's new](#whats-new-in-the-finals-build).
 
 Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
 Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing ·
@@ -17,6 +17,35 @@ command budget. **No keys?** [Run with the mock](#run-with-the-mock-no-keys-from
 Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 
 ## What's new in the finals build
+
+**Research sprint (22 Nov, branch `sprint/round1-research`)**: items from six research reports
+([triage](docs/ROUND1-SPRINT.md)), each with offline tests (unit, integration on TrueForge with the scripted model, mock
+end-to-end, VS Code suites); protocol unchanged (0.4.8):
+
+- **Panel:** a verification verdict at turn end ("⚠ Unverified" when files changed and the last test run failed, is stale
+  or never ran; "✓ Verified" only when the last run passed after the last edit); one fallback recovery card (from → to,
+  reason, fresh TrueForge session, no files changed); the context report grouped into pinned items, files and skip reasons
+  (full list on demand); Stop in three states (requested and what is settling → stopped and settled, naming files changed
+  before the stop); the command prompt states two separate facts (allowlist classification; sandbox active, read-only,
+  offline, no keys); **Resume when ready** (one scheduled Resume, cancelled by Stop, a new turn or closing the panel);
+  an **Attach…** picker for `@file:`/`@symbol:` mentions; **Undo this turn's changes** (every reviewed file of the
+  latest turn, newest first, after checking none changed since); a collapsible tool timeline; destructive-hunk warnings
+  link to the hunk; the observed test result says "tested saved files only" when buffers were unsaved; command
+  *Forge-a-thon: Show Effective Settings*.
+- **Safety:** credential-shaped strings (provider key prefixes, private keys, the configured keys' values) are masked in
+  file text sent to the model and so to TrueForge traces (`forge.context.maskSecrets`, on; 0 hits in Flask 3.1.3); a
+  resumed turn inherits "already wrote", so it never retries or falls back automatically; an inline selection that
+  changed while the instruction was typed is refused.
+- **Resilience:** an explicit HTTP status decides the error class first (429/5xx with "key" or "credit" wording is
+  transient; 401/403 fall back at once); a provider's longer wait hint (up to an hour, minutes understood) sets when Resume
+  is offered.
+- **Opt-in, off by default** (they change what the model sees; their request savings are unmeasured):
+  `forge.tools.multiRangeRead` (several line ranges per `read_file`), `forge.tools.editHints` (a no-match `propose_edit`
+  refusal names the closest current text).
+- **Benchmark:** corrected labels (`--labels=corrected`; a gold path that never existed); original labels kept.
+- **Evidence (real models, nvidia-free, one paced run each, 22 Nov 19:05–19:13 IST, `255107f`):** A 6/6 (first diff
+  13.9 s, 3 requests), **B 8/8 checks (first diff 46.5 s, 421.8 s, 60 requests, two compactions)**, C 3/3 (401 → OpenRouter,
+  4 requests); no 429. One run cannot show a speed-up or slow-down against the earlier B (216.8 s, 48 requests).
 
 Merged from `harness/p14-trueforge-depth`, `feature/hybrid-efficiency-native` and `harness/p15-daytona` (protocol 0.4.8):
 

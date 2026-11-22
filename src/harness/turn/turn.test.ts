@@ -260,6 +260,8 @@ test('hybrid context reranking is opt-in and the request contract is versioned',
   assert.ok(setting, 'the semantic-search setting is declared');
   assert.equal(setting.default, false, 'semantic reranking is opt-in (confidence-gated and time-bounded when on)');
   assert.match(setting.description ?? '', /weak|200 ms/i);
+  const mask = extension.contributes.configuration.properties['forge.context.maskSecrets'];
+  assert.equal(mask?.default, true, 'credential masking of source sent to the model is on by default');
   assert.equal(PROTOCOL_VERSION as string, '0.4.8');
 });
 
@@ -392,6 +394,8 @@ test('Stop against a silent TrueForge (stream and cancel never answer) ends the 
   assert.equal(terminal(run).length, 1);
   assert.equal(terminal(run)[0]!.t === 'done' && terminal(run)[0]!.status, 'cancelled');
   assert.ok(events(run).some((e) => e.t === 'status' && /did not confirm/.test(e.detail ?? '')));
+  const first = events(run).find((e) => e.t === 'status' && e.state === 'cancelling') as Extract<HarnessEvent, { t: 'status' }>;
+  assert.equal(first.detail, 'Stop requested: approvals closed; stopping the TrueForge turn', 'Stop is acknowledged with what happens next');
 });
 
 test('watchdog against a silent TrueForge: retry and fallback run in new sessions and the turn ends with one error', async () => {
@@ -708,6 +712,46 @@ test('resume after a fallback: a write on the fallback then a 429 is resumable i
   assert.equal(events(resumed).filter((e) => e.t === 'fallback').length, 0);
   assert.equal(events(resumed).at(-1)?.t, 'done');
   assert.ok(tf2.inputs[0]!.startsWith('Resumed turn:'));
+});
+
+test('resume: the write barrier covers the resumed turn: an error before its own first write is not retried and does not fall back', async () => {
+  for (const [message, resumable] of [['[Model Error] Request failed (500): upstream exploded', false], ['[Model Error] Request failed (429): Too Many Requests', true]] as const) {
+    const tf = new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-1' }), done('error', message)) });
+    const run = makeRun(tf, { resumeFrom: { turnId: 't-before', reason: 'rate_limited', changedFiles: [FILE], commandsUsed: 0, testsUsed: 0 } });
+    await run.start();
+    const evs = events(run);
+    assert.equal(tf.inputs.length, 1, `${message}: one attempt only (no retry)`);
+    assert.equal(evs.filter((e) => e.t === 'fallback').length, 0, `${message}: no fallback`);
+    const err = evs.find((e) => e.t === 'error') as Extract<HarnessEvent, { t: 'error' }>;
+    assert.match(err.error.message, /the interrupted turn this one resumes already changed the workspace/);
+    assert.equal(err.error.workspaceEffect, 'changed');
+    assert.equal(err.error.retryable, false);
+    assert.equal(evs.some((e) => e.t === 'resumable'), resumable, `${message}: Resume offered again only for a rate limit`);
+    if (resumable) assert.deepEqual(run.resumable?.changedFiles, [FILE]);
+  }
+});
+
+test('the turn input is masked: a credential shape in the request or context never reaches TrueForge; off when disabled', async () => {
+  const key = 'gsk_' + 'M'.repeat(40);
+  const tf = new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-1' }), done('done')) });
+  const run = makeRun(tf, {}, { instruction: `use the key ${key} in alpha` });
+  await run.start();
+  assert.ok(!tf.inputs[0]!.includes(key));
+  assert.match(tf.inputs[0]!, /use the key \[REDACTED\] in alpha/);
+  assert.match(tf.inputs[0]!, /\[Forge masked 1 credential-shaped string in this text; the file itself is unchanged\]/);
+  assert.ok(events(run).some((e) => e.t === 'status' && e.detail === 'Masked 1 credential-shaped string in the context sent to the model'));
+  const tf2 = new FakeTrueForge({ onTurn: (ch) => ch.push(ev('turn.created', { turnId: 'rt-2' }), done('done')) });
+  await makeRun(tf2, { maskSourceSecrets: false }, { instruction: `use the key ${key} in alpha` }).start();
+  assert.ok(tf2.inputs[0]!.includes(key), 'maskSourceSecrets: false sends the text unchanged');
+});
+
+test('resume: a provider wait hint longer than the 60 s floor sets when Resume is offered', async () => {
+  const run = makeRun(editThenError('[Model Error] Request failed (429): Rate limit reached. Please try again in 600s.'));
+  void clickThrough(run);
+  await run.start();
+  const r = events(run).find((e) => e.t === 'resumable') as Extract<HarnessEvent, { t: 'resumable' }>;
+  assert.equal(r.retryAfterMs, 600_000);
+  assert.equal(events(run).filter((e) => e.t === 'status' && e.state === 'retrying').length, 0, 'still no automatic retry after a write');
 });
 
 test('resume: no resumable event for failures that are not rate limits', async () => {
@@ -1083,4 +1127,19 @@ test('a repeated review decision is accepted whatever its property order; a diff
   assert.deepEqual(replies[0], { ok: true });
   assert.deepEqual(replies[1], { ok: true }, 'reordered duplicate accepted');
   assert.equal((replies[2] as { error?: { code: string } }).error?.code, 'conflict');
+});
+
+test('editHints (off by default): an old_text that matches nowhere is refused with the closest current text', async () => {
+  // Indentation differs from the file (2 spaces, not 4): no exact match, a whitespace-insensitive one at lines 1-2.
+  const shifted = { ...editArgs(), edits: [{ old_text: 'def alpha():\n  return 1\n', new_text: 'def alpha():\n  return 2\n' }] };
+  for (const editHints of [false, true]) {
+    const tf = stepwise([['propose_edit', shifted]]);
+    const run = makeRun(tf, { editHints });
+    void userAnswers(run, []);
+    await run.start();
+    const reason = tf.approvals[0]!.approval.reason ?? '';
+    assert.match(reason, /^OLD_TEXT_NOT_FOUND/);
+    if (editHints) assert.match(reason, /Closest match: lines \d+-\d+ match old_text if whitespace is ignored/);
+    else assert.ok(!reason.includes('Closest match'), 'default refusal text is unchanged');
+  }
 });

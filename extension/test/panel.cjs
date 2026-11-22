@@ -89,6 +89,9 @@ exports.run = async () => {
   assert.match(flagged.command.warning, /without hunk review/, 'the panel carries the unrestricted warning');
   flagged.update({t:'command_request',callId:'y',command:'pytest -q',cwd:'.'});
   assert.equal(flagged.command.warning, undefined, 'listed commands carry no warning');
+  assert.equal(flagged.command.facts, '\u2713 On the verification allowlist \u00b7 Sandbox: active (bubblewrap: read-only workspace, no network, no home directory, no API keys; refused if unavailable)');
+  flagged.update({t:'command_request',callId:'z',command:'ls src',cwd:'.',unrestricted:true,warning:'Unrestricted command'});
+  assert.match(flagged.command.facts, /^\u26a0 Outside the verification allowlist .* \u00b7 Sandbox: active/, 'the two facts are stated separately');
   const auto = new AgentViewState();
   auto.update({t:'command_request',callId:'z',command:'python -m pytest tests/test_x.py -q',cwd:'.',autoApproved:true});
   assert.equal(auto.command, undefined, 'no Allow/Deny prompt for an auto-approved command');
@@ -136,12 +139,143 @@ exports.run = async () => {
   const inlineDone = new AgentViewState();
   inlineDone.update({t:'done',status:'done'});
   assert.equal(inlineDone.tests, '', 'no test line without done.tests (inline turns)');
+  // Verification verdict at turn end: a turn that changed code is "Verified" only when the last observed test run passed
+  // after the last edit; failing, stale or missing tests end as "Unverified" with the reason, and a contradicting reply is named.
+  const changedTurn = (events) => {
+    const v = new AgentViewState();
+    v.update({t:'review_request',proposal:{path:'src/flask/cli.py',hunks:[{hunkId:'0'}]}});
+    v.update({t:'edit_applied',result:{path:'src/flask/cli.py',status:'saved',appliedHunkIds:['0']}});
+    for (const e of events) v.update(e);
+    return v;
+  };
+  const failedRun = {status:'failed',command:'python -m pytest tests/test_cli.py -q',exitCode:1,failed:2,summary:'2 failed, 55 passed, 3 skipped in 0.14s'};
+  const vFailed = changedTurn([{t:'text',delta:'Done. All tests pass.'},{t:'done',status:'done',summary:'Done. All tests pass.',tests:failedRun}]);
+  assert.equal(vFailed.verification, '\u26a0 Unverified: the last test run failed (2 failed, 55 passed, 3 skipped in 0.14s). The reply says the tests pass; the observed result does not back that. Review the changes and run the tests before relying on them.');
+  const vStale = changedTurn([{t:'done',status:'done',tests:{...failedRun,editedAfter:['tests/test_cli.py']}}]);
+  assert.match(vStale.verification, /^\u26a0 Unverified: tests\/test_cli\.py changed after the last test run\./);
+  const vNone = changedTurn([{t:'done',status:'done',tests:{status:'not_run'}}]);
+  assert.match(vNone.verification, /^\u26a0 Unverified: code changed, but no test ran in this turn\./);
+  const vOk = changedTurn([{t:'text',delta:'57 passed'},{t:'done',status:'done',tests:{status:'passed',command:'pytest -q',exitCode:0,passed:57,summary:'57 passed in 0.2s'}}]);
+  assert.equal(vOk.verification, '\u2713 Verified: the last test run passed after the last edit');
+  const vNoChange = new AgentViewState();
+  vNoChange.update({t:'done',status:'done',tests:{status:'not_run'}});
+  assert.equal(vNoChange.verification, '', 'nothing changed: no verdict');
+  const vError = changedTurn([{t:'done',status:'error',tests:failedRun}]);
+  assert.equal(vError.verification, '', 'an error or cancelled turn already says so; no verdict');
+  const vInline = changedTurn([{t:'done',status:'done'}]);
+  assert.equal(vInline.verification, '', 'inline turns carry no test outcome: no verdict');
+  // Context report at a glance: pins first, one row per automatic file (rank order), skipped items grouped by reason.
+  const { contextView, skipCategory } = require('../out/contextView');
+  const grouped = contextView({budgetTokens:4000, estimatedTokens:3992,
+    selections:[
+      {path:'src/flask/cli.py',source:'automatic',rank:1,rationale:'BM25 match: command, cli',estimatedTokens:600,truncated:true,range:{startLine:1080,endLine:1130}},
+      {path:'src/flask/helpers.py',source:'explicit',rank:0,rationale:'@file reference',estimatedTokens:300,truncated:false},
+      {path:'src/flask/cli.py',source:'automatic',rank:3,rationale:'symbol: FlaskGroup',estimatedTokens:120,truncated:false,symbol:'FlaskGroup'},
+      {path:'tests/test_cli.py',source:'automatic',rank:2,rationale:'test for src/flask/cli.py',estimatedTokens:110,truncated:false}],
+    skipped:[
+      {path:'src/flask/app.py',reason:'ranked #9 (score 3.1 vs top 9.0), below the cut of 8 files',estimatedTokens:0},
+      {path:'docs/api.rst',reason:'lines 10-90 skipped: budget exhausted (needs 700, 40 left)',estimatedTokens:700},
+      {path:'docs/config.rst',reason:'outline does not fit the remaining budget (40 tokens left)',estimatedTokens:90},
+      {path:'.env',reason:'credentials file is not sent to the model',estimatedTokens:0}]});
+  assert.deepEqual(grouped.pinned, ['src/flask/helpers.py \u2014 pinned, outline, 300 tokens']);
+  assert.deepEqual(grouped.files, [
+    'src/flask/cli.py \u2014 lines 1080\u20131130, FlaskGroup \u2014 720 tokens \u2014 BM25 match: command, cli (+1 more) (truncated)',
+    'tests/test_cli.py \u2014 outline \u2014 110 tokens \u2014 test for src/flask/cli.py']);
+  assert.deepEqual(grouped.skipped, [
+    'Ranked below the file cut \u2014 1 item: src/flask/app.py',
+    'Did not fit the token budget \u2014 2 items: docs/api.rst, docs/config.rst (790 tokens)',
+    'Refused by the read policy (never sent) \u2014 1 item: .env']);
+  assert.equal(skipCategory('semantic reranking is warming in the background; lexical and structural ranking used for this turn'), 'Semantic reranking');
+  const reported = new AgentViewState();
+  reported.update({t:'context_report',report:{budgetTokens:4000,estimatedTokens:10,selections:[],skipped:[]}});
+  assert.deepEqual(reported.contextView, {pinned:[],files:[],skipped:[]});
+  // Stop: requested → settling (harness status detail) → stopped and settled, naming what changed before the stop.
+  const stopping = new AgentViewState();
+  stopping.update({t:'status',state:'cancelling',detail:'Stop requested: approvals closed; settling 1 tool call (an approved edit is saved and reported, a running command is killed)'});
+  assert.match(stopping.status, /^Stop requested: approvals closed; settling 1 tool call/);
+  stopping.update({t:'done',status:'cancelled'});
+  assert.equal(stopping.status, 'Stopped \u00b7 settled: no change was applied in this turn; nothing else will run');
+  const stoppedAfterEdit = changedTurn([{t:'done',status:'cancelled'}]);
+  assert.equal(stoppedAfterEdit.status, 'Stopped \u00b7 settled: 1 file changed before the stop (listed below); nothing else will run');
+  // Resume when ready: one scheduled Resume, only for the same resumable turn; Stop, a new turn or a second click cancel it.
+  {
+    let resumed = 0;
+    const p = new AgentPanel({ send: async () => {}, stop: async () => {}, review() {}, command() {}, resume: async () => { resumed++; } });
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    p.event({t:'resumable',reason:'rate_limited',retryAfterMs:60,changedFiles:['src/flask/cli.py']});
+    p.setAutoResume(true);
+    assert.equal(p.state.autoResume, true);
+    await wait(150);
+    assert.equal(resumed, 1, 'resumed once when the wait ended');
+    assert.equal(p.state.autoResume, false);
+    await wait(100);
+    assert.equal(resumed, 1, 'never twice');
+    p.event({t:'resumable',reason:'rate_limited',retryAfterMs:60,changedFiles:[]});
+    p.setAutoResume(true); p.setAutoResume(false);
+    await wait(150);
+    assert.equal(resumed, 1, 'a second click cancels it');
+    p.event({t:'resumable',reason:'rate_limited',retryAfterMs:60,changedFiles:[]});
+    p.setAutoResume(true); p.start();
+    await wait(150);
+    assert.equal(resumed, 1, 'a new turn cancels it');
+    p.finish(); p.event({t:'resumable',reason:'stalled',retryAfterMs:60,changedFiles:[]});
+    p.setAutoResume(true); p.state.resume = {at: Date.now() + 60, files: [], reason: 'stalled'};
+    await wait(150);
+    assert.equal(resumed, 1, 'a different resumable turn is not resumed by an older schedule');
+    p.dispose();
+  }
+  // Effective settings: every contributed forge.* key, its value and source, and when a change applies.
+  {
+    const { effectiveSettings, forgeSettingKeys } = require('../out/settingsView');
+    const keys = forgeSettingKeys();
+    assert.ok(keys.includes('context.maskSecrets') && keys.includes('commandBudget.agent') && keys.length >= 11, keys.join(','));
+    const rows = effectiveSettings(vscode.workspace.getConfiguration('forge'), keys);
+    const row = (k) => rows.find((r) => r.key === 'forge.' + k);
+    assert.deepEqual(row('context.maskSecrets'), {key:'forge.context.maskSecrets',value:'true',source:'default',applies:'after reconnect (reload the window)'});
+    assert.equal(row('commandBudget.agent').applies, 'next turn');
+    const ext = vscode.extensions.all.find((e) => e.packageJSON?.name === 'forgeathon-editor');
+    assert.ok(ext.packageJSON.contributes.commands.some((c) => c.command === 'forgeathon.showSettings'), 'the command is contributed');
+  }
+  // Attach picker: selections become @file:/@symbol: mentions the harness already understands; duplicates and paths with spaces are dropped.
+  {
+    const { mentionsFor } = require('../out/attachPicker');
+    assert.equal(mentionsFor([{kind:'file',value:'src/flask/cli.py'},{kind:'symbol',value:'FlaskGroup'},{kind:'file',value:'src/flask/cli.py'},{kind:'file',value:'docs/my notes.md'}]),
+      '@file:src/flask/cli.py @symbol:FlaskGroup ');
+    assert.equal(mentionsFor([]), '');
+  }
+  // Inline edit: a selection whose text changed while the instruction was typed is refused before sending.
+  {
+    const { selectionStale } = require('../out/workbench');
+    const d = await vscode.workspace.openTextDocument({ language: 'python', content: 'def a():\n    return 1\n\ndef b():\n    return 2\n' });
+    const range = new vscode.Range(3, 0, 5, 0), text = d.getText(range), v = d.version;
+    assert.equal(selectionStale(d, range, text, v), false, 'unchanged');
+    const below = new vscode.WorkspaceEdit(); below.insert(d.uri, new vscode.Position(5, 0), '# tail\n'); await vscode.workspace.applyEdit(below);
+    assert.equal(selectionStale(d, range, text, v), false, 'an edit outside the selection that keeps its lines is fine');
+    const above = new vscode.WorkspaceEdit(); above.insert(d.uri, new vscode.Position(0, 0), 'import os\n'); await vscode.workspace.applyEdit(above);
+    assert.equal(selectionStale(d, range, text, v), true, 'lines shifted under the selection: refused');
+  }
+  // Tests run on disk: unsaved editor changes at the time of the test command are named next to the observed result.
+  {
+    let dirty = ['src/flask/cli.py'];
+    const p = new AgentPanel({ send: async () => {}, stop: async () => {}, review() {}, command() {}, resume: async () => {}, unsavedFiles: () => dirty });
+    p.start();
+    p.event({t:'command_request',callId:'c1',command:'python -m pytest tests/test_cli.py -q',cwd:'.'});
+    dirty = [];
+    p.event({t:'done',status:'done',tests:{status:'passed',command:'python -m pytest tests/test_cli.py -q',exitCode:0,summary:'5 passed'}});
+    assert.equal(p.state.tests, 'Tests (observed): passed \u2014 5 passed \u2014 $ python -m pytest tests/test_cli.py -q \u2014 tested saved files only; unsaved editor changes were not included: src/flask/cli.py');
+    p.start();
+    p.event({t:'command_request',callId:'c2',command:'pytest -q',cwd:'.'});
+    p.event({t:'done',status:'done',tests:{status:'passed',command:'pytest -q',exitCode:0}});
+    assert.equal(p.state.tests, 'Tests (observed): passed \u2014 $ pytest -q', 'no note when everything was saved');
+    p.dispose();
+  }
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[
     {hunkId:'a',startOffset:0,endOffset:0,oldText:'',newText:'# c\n'},
     {hunkId:'b',startOffset:10,endOffset:34,oldText:'class TestRoutes:\n    pass',newText:'class TestConfig:\n    pass',deletes:[{kind:'class',name:'TestRoutes',lines:25}]}]}});
   assert.deepEqual(destructive.warnings, ['tests/test_cli.py: Hunk 2 (line 3) deletes class TestRoutes (25 lines)']);
+  assert.deepEqual(destructive.warningTargets, [{path:'tests/test_cli.py', line:3}], 'the warning links to its hunk');
   const { proposalWarnings, hunkWarning } = require('../out/destructive');
   assert.equal(hunkWarning({deletes:[{kind:'function',name:'a',lines:3},{kind:'function',name:'b',lines:2}]}), 'deletes function a (3 lines), function b (2 lines)');
   assert.deepEqual(proposalWarnings({originalText:'x',hunks:[{hunkId:'a',startOffset:0}]}), []);
@@ -206,6 +340,7 @@ exports.run = async () => {
     assert.deepEqual(state.tools,[{id:'ctx',label:'gather_context',detail:'Done: one selected'}]);
     assert.deepEqual(state.context,report);
     assert.match(state.banner,/unreachable.*backup/);
+    assert.equal(state.recovery,'primary \u2192 backup \u2014 reason: unreachable. The turn restarted on the fallback model in a fresh TrueForge session (its own trace). The failed attempt changed no files: Forge falls back only before any edit or command has taken effect.');
     assert.equal(wb.reviewControlsOpen(),false,'a command approval does not open edit-review controls');
     wb.choose(); wb.decideAll('accept');
     await delay(50);

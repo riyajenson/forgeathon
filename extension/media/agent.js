@@ -5,7 +5,7 @@
   const setText = (id, value) => { const node = el(id); if (node.textContent !== value) node.textContent = value; };
   const setHidden = (id, value) => { const node = el(id); if (node.hidden !== value) node.hidden = value; };
   const setDisabled = (id, value) => { const node = el(id); if (node.disabled !== value) node.disabled = value; };
-  for (const id of ['stop','review','trace','allow','deny','resume']) el(id).onclick = () => vscode.postMessage({action:id});
+  for (const id of ['stop','review','trace','allow','deny','resume','autoResume','attach','undoTurn']) el(id).onclick = () => vscode.postMessage({action:id});
   let resumeTimer;
   // Resume is enabled once the suggested wait after a rate limit has passed; the label counts down until then.
   const showResume = s => {
@@ -14,10 +14,12 @@
     if (!s.resume || s.busy) return;
     const files = s.resume.files.length ? ' Already changed: ' + s.resume.files.join(', ') + '.' : ' No file was changed.';
     const why = s.resume.reason === 'stalled' ? 'Stopped: the model did not respond in time.' : 'Stopped by a model rate limit (HTTP 429).';
-    setText('resumeText', why + files + ' Resume continues the task in this conversation.');
+    setText('resumeText', why + files + ' Resume continues the task in this conversation.' + (s.autoResume ? ' Forge will resume once, automatically, when the wait ends.' : ''));
     const wait = s.resume.at - Date.now();
     setDisabled('resume', wait > 0);
     setText('resume', wait > 0 ? 'Resume (in ' + Math.ceil(wait / 1000) + ' s)' : 'Resume');
+    setHidden('autoResume', wait <= 0);
+    setText('autoResume', s.autoResume ? 'Cancel automatic Resume' : 'Resume when ready');
     if (wait > 0) resumeTimer = setTimeout(() => showResume(s), Math.min(wait, 1000));
   };
   el('send').onclick = () => {
@@ -34,7 +36,45 @@
       return li;
     }));
   };
+  // Tool timeline: rows keyed by call id (patched in place), and runs of three or more finished reads/searches
+  // collapsed into one expandable row so edits, commands and failures stay in view on long turns.
+  const READER = /(^|[_.:])(read_file|search_workspace|list_files|find_symbol|gather_context)$/;
+  const toolRows = new Map(), toolGroups = new Map();
+  let lastTools, lastWarnings = '';
+  const toolRow = t => {
+    let li = toolRows.get(t.id);
+    if (!li) { li = document.createElement('li'); toolRows.set(t.id, li); }
+    const text = t.label + ' | ' + t.detail;
+    if (li.textContent !== text) li.textContent = text;
+    return li;
+  };
+  const toolGroup = run => {
+    let g = toolGroups.get(run[0].id);
+    if (!g) {
+      g = { li: document.createElement('li'), details: document.createElement('details'), summary: document.createElement('summary'), ul: document.createElement('ul') };
+      g.details.append(g.summary, g.ul); g.li.append(g.details); toolGroups.set(run[0].id, g);
+    }
+    g.summary.textContent = run.length + ' finished reads and searches';
+    g.ul.replaceChildren(...run.map(toolRow));
+    return g.li;
+  };
+  const renderTools = tools => {
+    const key = JSON.stringify(tools);
+    if (key === lastTools) return;
+    lastTools = key;
+    if (!tools.length) { toolRows.clear(); toolGroups.clear(); }
+    const finished = t => READER.test(t.label) && t.detail.startsWith('Done: ');
+    const rows = [];
+    for (let i = 0; i < tools.length;) {
+      let j = i;
+      while (j < tools.length && finished(tools[j])) j++;
+      if (j - i >= 3) { rows.push(toolGroup(tools.slice(i, j))); i = j; } else { rows.push(toolRow(tools[i])); i++; }
+    }
+    el('tools').replaceChildren(...rows);
+  };
   window.addEventListener('message', ({data:s}) => {
+    // Mentions chosen in the Attach picker go into the request box; they are not a render.
+    if (s && typeof s.insertMentions === 'string') { const t = el('task'); t.value = (t.value && !/\s$/.test(t.value) ? t.value + ' ' : t.value) + s.insertMentions; t.focus?.(); return; }
     const receivedAt = performance.now();
     setDisabled('send', s.busy);
     setDisabled('stop', !s.busy);
@@ -44,28 +84,50 @@
     setText('model', s.model ? 'Model: ' + s.model + (s.usage ? ' | ' + s.usage : '') : '');
     setText('banner', s.banner);
     setHidden('banner', !s.banner);
+    setHidden('recovery', !s.recovery);
+    setText('recoveryText', s.recovery || '');
     setHidden('trace', !s.trace);
     setHidden('cmd', !s.command);
     setText('cmdText', s.command
-      ? (s.command.warning ? '⚠ ' + s.command.warning + '\n' : '') + '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' : '');
+      ? (s.command.warning ? '⚠ ' + s.command.warning + '\n' : '') + '$ ' + s.command.command + '\n(cwd: ' + s.command.cwd + ')' + (s.command.facts ? '\n' + s.command.facts : '') : '');
     setText('text', s.text);
     setHidden('activity', !s.tools.length);
-    list('tools',s.tools.map(t => t.label + ' | ' + t.detail));
+    renderTools(s.tools);
     setHidden('context', !s.context);
     if (s.context) {
       setText('budget', s.context.estimatedTokens + ' / ' + s.context.budgetTokens + ' estimated tokens');
       list('selected',s.context.selections.map(i => i.path + (i.symbol ? ' | ' + i.symbol : '') +
         ' | ' + i.source + ' | ' + i.rationale + ' | ' + i.estimatedTokens + ' tokens' + (i.truncated ? ' (truncated)' : '')));
+      const view = s.contextView || { pinned: [], files: [], skipped: [] };
+      setHidden('pinnedTitle', !view.pinned.length);
+      list('pinned', view.pinned);
+      list('files', view.files);
+      setHidden('skippedGroupsTitle', !view.skipped.length);
+      list('skippedGroups', view.skipped);
       setHidden('skippedTitle', !s.context.skipped.length);
       list('skipped',s.context.skipped.map(i => i.path + ' | ' + i.reason + ' | ' + i.estimatedTokens + ' tokens'));
     }
+    setHidden('verification', !s.verification);
+    setText('verification', s.verification || '');
+    { const node = el('verification'), cls = (s.verification || '').startsWith('\u26a0') ? 'unverified' : 'verified'; if (node.className !== cls) node.className = cls; }
     setHidden('tests', !s.tests);
     setText('tests', s.tests || '');
     setHidden('warnings', !s.warnings.length);
-    list('warningList', s.warnings);
+    // Each destructive-hunk warning is a link that opens the file at that hunk.
+    if (s.warnings.join('\n') !== lastWarnings) {
+      lastWarnings = s.warnings.join('\n');
+      el('warningList').replaceChildren(...s.warnings.map((w, index) => {
+        const li = document.createElement('li'), a = document.createElement('a');
+        a.textContent = w; a.href = '#'; a.title = 'Open the file at this hunk';
+        a.onclick = (event) => { event.preventDefault(); vscode.postMessage({action:'openWarning', index}); };
+        li.append(a);
+        return li;
+      }));
+    }
     setHidden('turnFiles', !s.summary.length);
     setText('turnFilesTitle', 'Files changed in this turn: ' + s.summary.filter(line => !line.endsWith('| not changed')).length);
     list('summary',s.summary);
+    setHidden('undoTurn', s.busy || !s.outcome || !s.summary.some(line => line.endsWith('| saved')));
     setHidden('changes', !s.edits.length);
     list('edits',s.edits);
     const domUpdatedAt = performance.now();

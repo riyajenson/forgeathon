@@ -9,7 +9,7 @@ const key = (r: TurnRef & { callId: string; proposalId: string }) =>
   JSON.stringify([r.sessionId, r.turnId, r.callId, r.proposalId]);
 type Choice = 'accept' | 'reject';
 type UndoHunk = { startOffset: number; endOffset: number; oldText: string };
-type Receipt = { doc: vscode.TextDocument; before: string; after: string; saveOnUndo: boolean; undoHunks?: readonly UndoHunk[]; created?: boolean };
+type Receipt = { doc: vscode.TextDocument; before: string; after: string; saveOnUndo: boolean; undoHunks?: readonly UndoHunk[]; created?: boolean; turn?: string };
 type ApprovedHunk = Pick<EditProposal['hunks'][number], 'startOffset' | 'endOffset' | 'oldText' | 'newText'>;
 type Approval = { path: string; base: string | null; digest: string; ids: readonly string[]; hunks: readonly ApprovedHunk[] };
 
@@ -107,7 +107,7 @@ export class EditReview implements vscode.Disposable {
       submitted = true;
       if (!await vscode.workspace.applyEdit(edit)) return { ...base, status: 'failed_before_apply', message: 'VS Code declined the text edit' };
       const undoId = randomUUID();
-      const receipt: Receipt = { doc, before, after: digest, saveOnUndo: false,
+      const receipt: Receipt = { doc, before, after: digest, saveOnUndo: false, turn: base.sessionId + '/' + base.turnId,
         ...(hash(doc.getText()) === digest ? { undoHunks } : {}) };
       this.receipts.set(undoId, receipt);
       const details = () => ({ ...base, appliedHunkIds: [...a.ids], undo: { undoId, path: r.path, expectedPostSha256: receipt.after } });
@@ -155,7 +155,7 @@ export class EditReview implements vscode.Disposable {
     const doc = await vscode.workspace.openTextDocument(uri);
     const undoId = randomUUID();
     const after = hash(doc.getText());
-    const receipt: Receipt = { doc, before: '', after, saveOnUndo: false, created: true };
+    const receipt: Receipt = { doc, before: '', after, saveOnUndo: false, created: true, turn: base.sessionId + '/' + base.turnId };
     this.receipts.set(undoId, receipt);
     // Built after any save, so expectedPostSha256 is the post-save hash (save participants included).
     const details = () => ({ ...base, appliedHunkIds: [...a.ids], undo: { undoId, path: r.path, expectedPostSha256: receipt.after } });
@@ -180,6 +180,33 @@ export class EditReview implements vscode.Disposable {
   }
 
   latestUndoId() { return Array.from(this.receipts.keys()).pop(); }
+  /** Undo receipts of the turn that made the most recent reviewed edit, newest first. */
+  latestTurnUndoIds(): string[] {
+    const entries = Array.from(this.receipts.entries());
+    const turn = entries[entries.length - 1]?.[1].turn;
+    return turn === undefined ? [] : entries.filter(([, r]) => r.turn === turn).map(([id]) => id).reverse();
+  }
+  /**
+   * Undoes every reviewed edit of the latest turn, newest first. Checks all files first and changes nothing if any
+   * was edited since; if an undo fails part way, the rest keep their receipts and the result says which files remain.
+   */
+  async undoTurn(): Promise<{ undone: string[]; remaining: string[]; error?: string }> {
+    const ids = this.latestTurnUndoIds();
+    const rel = (id: string) => vscode.workspace.asRelativePath(this.receipts.get(id)!.doc.uri, false);
+    for (const id of ids) {
+      const r = this.receipts.get(id)!;
+      const doc = await vscode.workspace.openTextDocument(r.doc.uri);
+      if (hash(doc.getText()) !== r.after) return { undone: [], remaining: ids.map(rel), error: rel(id) + ' changed after the review; nothing was undone' };
+    }
+    const undone: string[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      const name = rel(ids[i]!);
+      try { await this.undo(ids[i]!); undone.push(name); } catch (e) {
+        return { undone, remaining: ids.slice(i).map(rel), error: name + ': ' + (e instanceof Error ? e.message : 'undo failed') };
+      }
+    }
+    return { undone, remaining: [] };
+  }
   async undo(id: string) {
     const r = this.receipts.get(id);
     if (!r || !vscode.workspace.isTrusted) throw new Error('Undo unavailable');

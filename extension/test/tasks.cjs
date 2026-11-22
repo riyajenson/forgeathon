@@ -142,6 +142,11 @@ exports.run = async () => {
     assert.deepEqual(st.summary.map((l) => l.split(' | ')[0]).sort(), ['docs/cli.rst', 'src/flask/cli.py', 'tests/test_cli.py'], `turn-end summary lists the three changed files together (got ${JSON.stringify(st.summary)})`);
     assert.ok(st.summary.every((l) => /\| \d+ reviews?, (\d+)\/\d+ hunks accepted \| saved$/.test(l) && !/\| 0\//.test(l)), 'each with review and accepted-hunk counts, saved');
     console.log('PASS Task B: panel streaming, context block, 3 files reviewed and saved, listed together at turn end, command approval');
+    // Turn-level Undo: every reviewed change of Task B, newest first, restored and saved as the originals.
+    await ui.undoTurn();
+    assert.equal(await git(root, 'status', '--porcelain'), '', 'Undo this turn restored all three files');
+    assert.match(ui.panel.state.status, /^Undid the turn's reviewed changes: 3 files \(/, ui.panel.state.status);
+    console.log('PASS Undo this turn: three files restored exactly, git status clean');
     await git(root, 'checkout', '--', '.');
 
     // ---------------- Stop (1): a review is certainly pending, then Stop → cancelled, nothing applied, no prompt left
@@ -188,6 +193,7 @@ exports.run = async () => {
       const doc2 = await vscode.workspace.openTextDocument(helpers);
       const sel = { path: 'src/flask/helpers.py', text: doc2.getText(new vscode.Range(start, 0, start + 6, 0)), startLine: start + 1, endLine: start + 6 };
       await withAnswers(ui, 'reject', () => ui.run('inline', TASK_A, { activeFile: 'src/flask/helpers.py', selection: sel }));
+      assert.match(ui.panel.state.recovery, /^demo-primary\/scripted → demo-fallback\/scripted — reason: .*401.*fresh TrueForge session.*changed no files/, `recovery card (got: ${ui.panel.state.recovery})`);
       assert.match(ui.panel.state.banner, /^Primary model failed: .*401.* → switched to demo-fallback\/scripted$/, `fallback banner (got: ${ui.panel.state.banner})`);
       assert.equal(await git(root, 'status', '--porcelain'), '', 'Task C leaves the workspace unchanged');
     } finally {

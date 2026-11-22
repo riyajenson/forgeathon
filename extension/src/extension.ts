@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { configuredHarness } from './connect';
 import { Workbench } from './workbench';
+import { showEffectiveSettings } from './settingsView';
 
 let workbench: Workbench | undefined;
 export function activate(context: vscode.ExtensionContext) {
@@ -21,7 +22,8 @@ export function activate(context: vscode.ExtensionContext) {
     register('inlineEdit', ui => ui.inline()), register('openAgentPanel', ui => ui.showPanel()),
     register('reviewHunks', ui => ui.choose()), register('undo', ui => ui.undo()),
     register('acceptAllHunks', ui => ui.decideAll('accept')), register('rejectAllHunks', ui => ui.decideAll('reject')),
-    register('stop', ui => ui.stop()), register('newConversation', ui => ui.newConversation())
+    register('stop', ui => ui.stop()), register('newConversation', ui => ui.newConversation()), register('undoTurn', ui => ui.undoTurn()),
+    vscode.commands.registerCommand('forgeathon.showSettings', () => showEffectiveSettings())
   );
 }
 export async function deactivate() { await workbench?.shutdown(); workbench = undefined; }

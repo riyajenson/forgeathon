@@ -15,8 +15,12 @@ const AUTH_WORDING = /api[ _-]?key|unauthori[sz]ed|authenticat|permission[ _]den
 export function classifyTurnError(message: string | undefined): TurnErrorClass {
   const m = message ?? '';
   if (!m.includes('[Model Error]')) return 'OTHER';
-  if (/\((401|403)\)/.test(m) || AUTH_WORDING.test(m)) return 'MODEL_AUTH';
-  if (m.includes('Cannot connect to API') || /timeout|timed out|overloaded|unavailable/i.test(m) || /\((408|429|5\d\d)\)/.test(m)) return 'MODEL_UNAVAILABLE';
+  // An explicit status decides first: 401/403 are auth (immediate fallback), 408/429/5xx are transient (retry, then
+  // fallback) even when the provider's text mentions keys or credits. Wording decides only without a status.
+  if (/\((401|403)\)/.test(m)) return 'MODEL_AUTH';
+  if (/\((408|429|5\d\d)\)/.test(m)) return 'MODEL_UNAVAILABLE';
+  if (AUTH_WORDING.test(m)) return 'MODEL_AUTH';
+  if (m.includes('Cannot connect to API') || /timeout|timed out|overloaded|unavailable/i.test(m)) return 'MODEL_UNAVAILABLE';
   return 'MODEL_OTHER';
 }
 
@@ -25,6 +29,23 @@ export const RATE_LIMIT_DEFAULT_DELAY_MS = 5_000;
 
 export function isRateLimited(message: string | undefined): boolean {
   return /\(429\)|rate.?limit|too many requests/i.test(message ?? '');
+}
+
+/** Longest provider wait honoured for a Resume suggestion. */
+export const MAX_RESUME_HINT_MS = 60 * 60 * 1000;
+
+/**
+ * The provider's own wait hint in a rate-limit message (Retry-After seconds, "try again in 12s", "1.5 minutes", "4500ms"),
+ * uncapped up to an hour; undefined when there is none. Used for the Resume suggestion, which must not be offered
+ * earlier than the provider allows; the automatic retry below keeps its 30 s cap.
+ */
+export function retryAfterHintMs(message: string | undefined): number | undefined {
+  if (!isRateLimited(message)) return undefined;
+  const m = /(?:retry[- ]after|try again in|retry in|wait)\D{0,3}(\d+(?:\.\d+)?)\s*(ms|milliseconds?|min(?:ute)?s?|m\b|s|sec(?:ond)?s?)?/i.exec(message ?? '');
+  if (!m) return undefined;
+  const unit = (m[2] ?? 's').toLowerCase();
+  const factor = /^m(s|illi)/.test(unit) ? 1 : /^m/.test(unit) ? 60_000 : 1000;
+  return Math.min(MAX_RESUME_HINT_MS, Math.ceil(Number(m[1]) * factor));
 }
 
 /**

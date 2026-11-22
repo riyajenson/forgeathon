@@ -5,7 +5,7 @@
   const setText = (id, value) => { const node = el(id); if (node.textContent !== value) node.textContent = value; };
   const setHidden = (id, value) => { const node = el(id); if (node.hidden !== value) node.hidden = value; };
   const setDisabled = (id, value) => { const node = el(id); if (node.disabled !== value) node.disabled = value; };
-  for (const id of ['stop','review','trace','allow','deny','resume','autoResume']) el(id).onclick = () => vscode.postMessage({action:id});
+  for (const id of ['stop','review','trace','allow','deny','resume','autoResume','attach']) el(id).onclick = () => vscode.postMessage({action:id});
   let resumeTimer;
   // Resume is enabled once the suggested wait after a rate limit has passed; the label counts down until then.
   const showResume = s => {
@@ -37,6 +37,8 @@
     }));
   };
   window.addEventListener('message', ({data:s}) => {
+    // Mentions chosen in the Attach picker go into the request box; they are not a render.
+    if (s && typeof s.insertMentions === 'string') { const t = el('task'); t.value = (t.value && !/\s$/.test(t.value) ? t.value + ' ' : t.value) + s.insertMentions; t.focus?.(); return; }
     const receivedAt = performance.now();
     setDisabled('send', s.busy);
     setDisabled('stop', !s.busy);

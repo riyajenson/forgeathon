@@ -155,7 +155,7 @@ export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): strin
   return 'Tests (observed): ' + result + cmd;
 }
 
-type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void> };
+type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void>; attach?(): Promise<string> };
 export class AgentPanel implements vscode.Disposable {
   state = new AgentViewState();
   private panel?: vscode.WebviewPanel;
@@ -241,6 +241,7 @@ export class AgentPanel implements vscode.Disposable {
             break;
           case 'stop': this.cancelAutoResume(); await this.actions.stop(); break;
           case 'autoResume': this.setAutoResume(!this.state.autoResume); break;
+          case 'attach': { const mentions = await this.actions.attach?.(); if (mentions && panel === this.panel) void panel.webview.postMessage({insertMentions: mentions}); break; }
           case 'resume':
             // Offered only after a rate limit, once the suggested wait has passed.
             if (!this.state.busy && this.state.resume && Date.now() >= this.state.resume.at) await this.actions.resume();
@@ -269,7 +270,7 @@ button{color:var(--vscode-button-foreground);background:var(--vscode-button-back
 button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere} #banner,#verification.unverified{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:8px} #verification.verified{border-left:3px solid var(--vscode-testing-iconPassed,var(--vscode-charts-green));padding-left:8px}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
-<button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
+<button id="attach" title="Attach files or symbols as @file:/@symbol: mentions">Attach\u2026</button> <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
 <p id="status" role="status"></p><p id="verification" role="alert" hidden></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button> <button id="autoResume">Resume when ready</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><section id="recovery" hidden><h2>Recovered by fallback</h2><p id="recoveryText"></p></section><button id="trace" hidden>Open TrueForge session</button>
 <section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><h3 id="pinnedTitle">Pinned by you</h3><ul id="pinned"></ul><h3>Files (in rank order)</h3><ul id="files"></ul><h3 id="skippedGroupsTitle">Not included, by reason</h3><ul id="skippedGroups"></ul><details><summary>All entries</summary><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></details></section>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>

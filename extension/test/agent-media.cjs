@@ -58,6 +58,13 @@ exports.run = async () => {
   assert.equal(frames.length, 1, 'one frame acknowledgement is scheduled');
   assert.equal(messages.length, 0, 'the acknowledgement does not arrive before the frame');
   const mutationsAfterFirstRender = mutationCount();
+  // Attach picker result: mentions are appended to the request box, separated by a space; nothing is rendered or acknowledged.
+  element('task').value = 'add a config command';
+  const framesBefore = frames.length;
+  onMessage({ data: { insertMentions: '@file:src/flask/cli.py @symbol:FlaskGroup ' } });
+  assert.equal(element('task').value, 'add a config command @file:src/flask/cli.py @symbol:FlaskGroup ');
+  assert.equal(frames.length, framesBefore, 'an insert is not a render');
+  element('task').value = '';
   onMessage({ data: { ...state, renderSequence: 18, tools: [], summary: [], edits: [] } });
   assert.equal(mutationCount(), mutationsAfterFirstRender, 'an unchanged snapshot does not rewrite DOM content or lists');
   assert.equal(frames.length, 2, 'each snapshot still receives its own frame acknowledgement');

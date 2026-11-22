@@ -236,6 +236,13 @@ exports.run = async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON?.name === 'forgeathon-editor');
     assert.ok(ext.packageJSON.contributes.commands.some((c) => c.command === 'forgeathon.showSettings'), 'the command is contributed');
   }
+  // Attach picker: selections become @file:/@symbol: mentions the harness already understands; duplicates and paths with spaces are dropped.
+  {
+    const { mentionsFor } = require('../out/attachPicker');
+    assert.equal(mentionsFor([{kind:'file',value:'src/flask/cli.py'},{kind:'symbol',value:'FlaskGroup'},{kind:'file',value:'src/flask/cli.py'},{kind:'file',value:'docs/my notes.md'}]),
+      '@file:src/flask/cli.py @symbol:FlaskGroup ');
+    assert.equal(mentionsFor([]), '');
+  }
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

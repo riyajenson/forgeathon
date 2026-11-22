@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { EditorPort, ForgeHarness, HarnessEvent, PromptContext, Version } from 'forge-harness';
 import { createFileLister, createStatusLogger } from './editorPort';
 import { AgentPanel, commandFacts } from './agentPanel';
+import { pickAttachments } from './attachPicker';
 import { InlineReview } from './inlineReview';
 import { EditReview } from './review';
 import { TurnController } from './turn';
@@ -17,7 +18,7 @@ export class Workbench implements vscode.Disposable {
     send: text => this.run('agent', text, this.activeContext()),
     stop: () => this.stop(), review: () => this.choose(),
     command: allow => this.commandAnswer?.(allow),
-    resume: () => this.resume()
+    resume: () => this.resume(), attach: () => pickAttachments(this.folder)
   });
   private controller?: TurnController;
   private harness?: ForgeHarness;

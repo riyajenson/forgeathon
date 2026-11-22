@@ -202,7 +202,7 @@ class ForgeHarnessImpl implements ForgeHarness {
       cancelTimeoutMs: this.options.cancelTimeoutMs ?? 5000,
       watchdogMs: this.options.watchdogMs ?? 45000,
       modelWatchdogMs: this.options.modelWatchdogMs ?? 120000,
-      contextBudgetTokens: this.options.contextBudgetTokens ?? 8000,
+      contextBudgetTokens: this.options.contextBudgetTokens ?? 4000,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: this.options.settleMs ?? 10000,
       turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,

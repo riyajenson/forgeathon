@@ -10,7 +10,7 @@ export async function configuredHarness() {
   return { version: PROTOCOL_VERSION, harness: createHarness({
     trueforgeUrl: url.toString().replace(/\/$/, ''),
     mcpPort: cfg.get('mcpPort', 47615),
-    contextBudgetTokens: cfg.get('context.budgetTokens', 8000),
+    contextBudgetTokens: cfg.get('context.budgetTokens', 4000),
     modelWatchdogMs: Math.max(30, cfg.get('watchdog.modelRequestSec', 120)) * 1000
   }) };
 }

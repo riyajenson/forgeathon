@@ -1,5 +1,25 @@
 # Project status
 
+**2026-11-22, finals build (`harness/p14-trueforge-depth` → `main`, tag `round1-extended`, protocol 0.4.8):**
+- **Daytona (p15, merged):** `scripts/daytona-spike.sh` 8/8 with a key that has sandbox and snapshot write/delete permissions
+  (environment ready in 10–20 s, whole spike 27–35 s; sandboxes 1 vCPU / 1 GiB / 3 GiB, auto-stopped after ~5 min, deleted 10 min
+  later). Opt-in only; Code Mode can call read-only tools (files it reads go to Daytona's cloud), `propose_edit` is refused there.
+- **Real runs on p14 before the merge** (5710431, nvidia-free, paced ≤ 20 requests/min, pre-flight HTTP 200 each): A 6/6
+  (7.6 s first diff), B 6/6 (63.0 s / 184 s, 45 requests), C 3/3 (401 → OpenRouter), B prefixed with a read-only sub-agent
+  request 6/6 (59.9 s / 203 s, 44 requests; `create_sub_agent` offered in 43 of 44 requests, never called). 0 × 429 in 100 requests.
+  Sub-agents: 0 delegations in 6 real runs. Records: `~/forge-review/finals/p14-final-1044/`.
+- **Merge of `feature/hybrid-efficiency-native`** (38 commits incl. 658243d) via `integrate/hybrid-into-p14`. Kept from p14: contracts
+  (0.4.8 = 0.4.7 + optional `semanticSearch` and the unconfirmed cancel acknowledgement), the forge-coder prompt, separate test
+  budget (3 + 3), watchdog/Resume, sandbox mounts and redaction, hunk warnings, observed test status. Kept from the hybrid branch:
+  multi-select hunk picker with live diff preview (now with the warnings), per-hunk apply/undo, background indexing, semantic
+  search (**opt-in**, default changed back to off), bwrap Stop fix, `cd`-prefix refusal, 4000-token context default, responsiveness
+  gates and recording tooling. Dropped: the single budget of 5 with a test reserve and rerun-after-fix rule, and 658243d's
+  candidate-file-plan prompt line. Offline: 204 unit, 25 integration, e2e-mock 24/24 in both modes, UI suites, UI e2e, live,
+  responsiveness 3/3 (the injected 200 ms stall fails by design); CI green on 0be9897.
+- **Real runs on the merged build** (0be9897, same settings): A 6/6 (8.9 s), B 6/6 (100.3 s first diff, 216.8 s, 48 requests;
+  compaction fired once, before the first edit), C 3/3 (401 → OpenRouter, 9.9 s). 0 × 429. `docs/writeup/rehearsal.json`;
+  records `~/forge-review/finals/integrate-real-1457/`.
+
 **2026-11-21, phase 3 (`harness/p14-trueforge-depth`, protocol 0.4.6):** 120 s silence limit while a model
 request is in flight, Resume after a stall following writes, warnings for hunks that delete a whole class or function,
 and the observed test outcome next to the model's summary. All 13 offline suites pass. Sub-agents: 0 delegations in 2

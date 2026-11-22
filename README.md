@@ -629,13 +629,13 @@ scripts/dev-mock.sh
 Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
 real model solves the tasks: the scripted model knows the fixed tasks and, in Task B, supplies the file paths
 and edits, so a mock run is no evidence of file discovery. Real-model results: `docs/writeup/rehearsal.json`
-(this build; the first round-1 build: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 204 unit, 25 integration and 15 script tests (`node --test scripts/*.test.mjs`).
+(this build; the first round-1 build: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 204 unit, 25 integration and 17 script tests (`node --test scripts/*.test.mjs`).
 
 | Command | What it proves | Needs |
 |---|---|---|
 | `npm --prefix src/harness test` | Harness unit tests, and turn races against an in-memory TrueForge stand-in (late writes against retry and fallback; a silent server against Stop) | Nothing. The Flask ranking test needs `FORGE_FLASK_DIR`, otherwise it is skipped |
 | `npm --prefix src/harness run test:integration` | Turns through a real TrueForge 0.185.1: approvals, partial accept, deny, cancel races, 401/429/watchdog → retry or fallback, two 429s per model call absorbed by TrueForge's own retries (no harness retry, no duplicate tool call), run_command, setup | TrueForge on :8790 (`scripts/dev-mock.sh --background`) |
-| `scripts/e2e-mock.sh` | Tasks A, B, C, G (guardrails) and R (Resume after a scripted 429) through the harness on a copy of Flask 3.1.3, with the verification commands: 24 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
+| `scripts/e2e-mock.sh` | Tasks A, B, C, G (guardrails) and R (Resume after a scripted 429) through the harness on a copy of Flask 3.1.3, with the verification commands: 26 checks | Flask checkout: `--flask DIR`, default `~/flask-demo` |
 | `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
 | `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, Stop during an apply, panel (incl. the turn-end file summary), settings | A display (WSLg, or X/Wayland on Linux). Fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A (incl. undo and re-apply), B, Stop during a pending review and during a running command, and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |

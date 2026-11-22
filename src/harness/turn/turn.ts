@@ -50,6 +50,10 @@ export interface ResumeFrom {
   changedFiles: string[];
   commandsUsed: number;
   testsUsed: number;
+  /** The agent the interrupted turn was running on when it stopped (`…-fallback` after a fallback), and its TrueForge
+   * session: Resume continues that conversation, not the primary's. */
+  agentName?: string;
+  runtimeSessionId?: string;
 }
 
 /** Suggested wait before Resume after a rate limit: NVIDIA's free tier sends no Retry-After. */
@@ -291,19 +295,26 @@ export class TurnRun {
     if (this.deps.resumeFrom) {
       const n = this.deps.resumeFrom.changedFiles.length;
       const why = this.deps.resumeFrom.reason === 'stalled' ? 'stopped responding' : 'stopped on a rate limit';
-      emit({ t: 'status', state: 'starting', detail: `Resuming the turn that ${why} (${n} file${n === 1 ? '' : 's'} already changed)` });
+      const where = this.deps.resumeFrom.agentName?.endsWith(FALLBACK_SUFFIX) ? ' on the fallback model' : '';
+      emit({ t: 'status', state: 'starting', detail: `Resuming the turn that ${why} (${n} file${n === 1 ? '' : 's'} already changed)${where}` });
     }
     if (context) emit({ t: 'context_report', report: context.report });
 
-    let agent = this.deps.agentName;
-    let onFallback = false;
+    // A resumed turn continues on the agent and in the TrueForge session where the interrupted turn stopped: after a
+    // fallback that is the fallback's conversation (the primary had already failed, and the edits were made there).
+    const from = this.deps.resumeFrom;
+    let agent = from?.agentName ?? this.deps.agentName;
+    let onFallback = agent === `${this.deps.agentName}${FALLBACK_SUFFIX}`;
+    let resumeSession = from?.agentName !== undefined ? from.runtimeSessionId : undefined;
     let retried = false;
     let fresh = false;
     for (;;) {
       if (this.cancelRequested) return this.finishCancelled();
       let runtimeSessionId: string;
       try {
-        runtimeSessionId = await this.deps.runtimeSession(agent, fresh);
+        const reuse = resumeSession !== undefined && !fresh ? resumeSession : undefined;
+        resumeSession = undefined;
+        runtimeSessionId = reuse ?? await this.deps.runtimeSession(agent, fresh);
       } catch (e) {
         // A connection-level failure creating the session (nothing has run yet) is retried once: a server that
         // answered the previous request can drop one connection under load. A second failure is reported.
@@ -421,7 +432,7 @@ export class TurnRun {
       if ((rateLimited || stalled) && !this.cancelRequested) {
         // The editor may offer Resume: a new turn on the same conversation, told what this one already changed.
         const reason = rateLimited ? 'rate_limited' as const : 'stalled' as const;
-        this.resumableState = { turnId: this.req.turnId, reason, changedFiles: [...this.changedFiles].sort(), commandsUsed: this.commandsUsed, testsUsed: this.testsUsed };
+        this.resumableState = { turnId: this.req.turnId, reason, changedFiles: [...this.changedFiles].sort(), commandsUsed: this.commandsUsed, testsUsed: this.testsUsed, agentName: agent, runtimeSessionId };
         emit({ t: 'resumable', reason, retryAfterMs: rateLimited ? Math.max(RESUME_WAIT_MS, retryDelayMs(result.message, 0)) : RESUME_AFTER_STALL_MS, changedFiles: this.resumableState.changedFiles });
       }
       const code: ProtocolError['code'] = cls === 'MODEL_UNAVAILABLE' ? 'unavailable' : 'model';

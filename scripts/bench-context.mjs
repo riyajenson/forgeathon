@@ -24,6 +24,12 @@ if (!['lexical', 'hybrid'].includes(mode)) {
   console.error(`Unsupported benchmark mode "${mode}". Use --mode=lexical or --mode=hybrid.`);
   process.exit(2);
 }
+const budgetOption = option('budget-tokens', undefined);
+const budgetOverride = budgetOption === undefined ? undefined : Number(budgetOption);
+if (budgetOverride !== undefined && (!Number.isInteger(budgetOverride) || budgetOverride < 1)) {
+  console.error(`Invalid context budget "${budgetOption}". Use a positive integer.`);
+  process.exit(2);
+}
 
 const forgeRoot = path.resolve(option('root', process.env.FORGE_BENCH_ROOT ?? scriptRoot));
 const datasetPath = path.join(forgeRoot, 'src/harness/context/retrieval-benchmark.json');
@@ -41,7 +47,7 @@ const benchmarkArtifacts = new Set([
   'src/harness/context/retrieval-benchmark.ts',
   'scripts/bench-context.mjs',
 ]);
-const isBenchmarkArtifact = (file) => benchmarkArtifacts.has(file) || file.startsWith('docs/superpowers/') || file.startsWith('.superpowers/');
+const isBenchmarkArtifact = (file) => benchmarkArtifacts.has(file) || file.startsWith('docs/superpowers/') || file.startsWith('.superpowers/') || file.startsWith('graft/') || file.startsWith('.codebase-memory/');
 
 function benchmarkPort(root) {
   const source = new FakePort(root);
@@ -106,7 +112,7 @@ try {
       const context = await assembleContext(port, {
         instruction: benchmarkCase.query,
         mode: 'agent',
-        budgetTokens: benchmarkCase.budgetTokens ?? 8000,
+        budgetTokens: budgetOverride ?? benchmarkCase.budgetTokens ?? 8000,
         semanticSearch: runMode === 'hybrid',
       }, index);
       const elapsedMs = performance.now() - started;
@@ -149,11 +155,11 @@ const output = {
   unavailableCases,
   index: indexTimings,
   tokenMetadata: {
-    budgetTokens: 8000,
+    budgetTokens: budgetOverride ?? 'case-specific or 8000 default',
     estimate: 'Forge context token estimator',
     semanticModel: mode === 'hybrid' ? { id: SEMANTIC_MODEL_ID, revision: SEMANTIC_MODEL_REVISION, runtime: 'local CPU q4' } : null,
   },
-  excludedFromIndex: ['benchmark runner and dataset', 'docs/superpowers/**', '.superpowers/**'],
+excludedFromIndex: ['benchmark runner and dataset', 'docs/superpowers/**', '.superpowers/**', 'graft/**', '.codebase-memory/**'],
   metrics,
   results,
   ...(pairedComparison ? { pairedComparison } : {}),

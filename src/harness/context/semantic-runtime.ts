@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { repoRoot } from '../repo-root';
 
 /**
@@ -13,4 +14,14 @@ export function semanticRuntimeDir(env: NodeJS.ProcessEnv = process.env): string
   const fromEnv = env['FORGE_SEMANTIC_RUNTIME'];
   if (fromEnv) return path.resolve(fromEnv);
   return path.join(repoRoot(), 'src', 'harness', 'semantic-runtime');
+}
+
+/** Check the optional runtime synchronously so an absent package never burns the rerank deadline. */
+export function semanticRuntimeInstalled(runtimeDir = semanticRuntimeDir()): boolean {
+  try {
+    createRequire(path.join(runtimeDir, 'package.json')).resolve('@huggingface/transformers');
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -113,3 +113,18 @@ test('min-interval pacing: concurrent requests on one route start at least the i
     await model.stop();
   }
 });
+
+test('--log-tools records the names of the tools offered in each request, nothing else from the body', async () => {
+  const model = new MockModel();
+  model.handler = () => ({ text: 'ok' });
+  await model.start();
+  const records: MeterRecord[] = [];
+  const meter = await startMeter({ routes: { demo: `http://127.0.0.1:${model.port}/v1/` }, logTools: true, onRecord: (r) => records.push(r) });
+  try {
+    const tools = ['read_file', 'create_sub_agent'].map((name) => ({ type: 'function', function: { name, description: 'SECRET-BODY', parameters: {} } }));
+    await post(`http://127.0.0.1:${meter.port}/demo/chat/completions`, MOCK_KEY, { model: 'demo-primary', tools, messages: [{ role: 'user', content: 'SECRET-BODY' }] });
+    await post(`http://127.0.0.1:${meter.port}/demo/chat/completions`, MOCK_KEY, { model: 'demo-primary', messages: [] });
+    assert.deepEqual(records.map((r) => r.tools), [['read_file', 'create_sub_agent'], undefined]);
+    assert.ok(!JSON.stringify(records).includes('SECRET-BODY'));
+  } finally { await meter.close(); await model.stop(); }
+});

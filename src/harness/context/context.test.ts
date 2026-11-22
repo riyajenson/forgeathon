@@ -8,7 +8,7 @@ import { FakePort } from '../mcp/fake-port';
 import { chunkDocs, chunkPython } from './chunks';
 import { GitIgnore, IgnorePolicy, visibleFiles } from './files';
 import { assembleContext, buildIndex, parseMentions, rankFiles } from './index';
-import { splitIdentifier, terms } from './text';
+import { estimateTokens, splitIdentifier, terms } from './text';
 import type { EditorPort } from '../mcp/port';
 import { INDEX_FILE_LIMIT } from './workspace-index';
 
@@ -194,6 +194,38 @@ test('index skips ignored, generated and non-text files; resolves imports', asyn
   assert.equal(index.symbols.get('routes_command')?.[0]?.path, 'src/flask/cli.py');
 });
 
+test('index resolves relative JavaScript and TypeScript imports to workspace files', async () => {
+  const sources: Record<string, string> = {
+    'src/entry.ts': "import { run } from './core/run';\nexport { Options } from './core/types';\nexport function entrypoint() { return run({ verbose: true }); }\n",
+    'src/core/run.ts': "import type { Options } from './types';\nexport function run(options: Options) {}\n",
+    'src/core/types/index.ts': 'export type Options = { verbose: boolean };\n',
+    'src/entry.test.ts': 'test("independent fixture", () => {});\n',
+    'src/legacy.cjs': "const run = require('./core/run.js');\nmodule.exports = run;\n",
+  };
+  const fake: EditorPort = {
+    listFiles: async () => [...Object.keys(sources), '.gitignore'],
+    readText: async (file) => {
+      const text = file === '.gitignore' ? null : sources[file];
+      return text === undefined || text === null ? null : { text, sha256: createHash('sha256').update(text).digest('hex') };
+    },
+    log: () => {}, applyText: async () => { throw new Error('not used'); },
+  };
+
+  const index = await buildIndex(fake);
+  assert.deepEqual(index.files.get('src/entry.ts')!.imports, ['src/core/run.ts', 'src/core/types/index.ts']);
+  assert.deepEqual(index.files.get('src/core/run.ts')!.imports, ['src/core/types/index.ts']);
+  assert.deepEqual(index.files.get('src/legacy.cjs')!.imports, ['src/core/run.ts']);
+  const ranked = rankFiles(index, 'entrypoint').files;
+  assert.ok(ranked.some((file) => file.path === 'src/core/run.ts' && file.reasons.includes('imported by src/entry.ts')),
+    'an import-only dependency is discovered even when its path is absent from the request');
+  assert.ok(ranked.some((file) => file.path === 'src/core/types/index.ts' && file.reasons.includes('imported by src/entry.ts')));
+  assert.ok(ranked.some((file) => file.path === 'src/entry.test.ts' && file.reasons.includes('tests for src/entry.ts')),
+    'a source change discovers its sibling test without query terms in the test');
+  const reverse = rankFiles(index, 'run').files;
+  assert.ok(reverse.some((file) => file.path === 'src/entry.ts' && file.reasons.includes('imports src/core/run.ts')),
+    'a ranked dependency brings in a file that uses it');
+});
+
 test('ranking pairs the source file with its test and docs, with reasons', async () => {
   const index = await buildIndex(port);
   const { files } = rankFiles(index, 'Add a new built-in CLI command next to routes that lists commands');
@@ -205,6 +237,30 @@ test('ranking pairs the source file with its test and docs, with reasons', async
   assert.ok(test.reasons.includes('tests for src/flask/cli.py'));
   const docs = files.find((f) => f.path === 'docs/cli.rst')!;
   assert.ok(docs.reasons.some((r) => r.startsWith('documents src/flask/cli.py')));
+});
+
+test('rare filename terms can retrieve files without lexical body matches', async () => {
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-context-path-rank-'));
+  const files: Record<string, string> = {
+    'src/protocol.ts': 'export const handshake = 1;\n',
+    'src/session.ts': 'export const cookieState = {};\n',
+    'src/noise.ts': 'export const unrelated = true;\n',
+  };
+  for (const [relative, text] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(localRoot, relative)), { recursive: true });
+    await fs.writeFile(path.join(localRoot, relative), text);
+  }
+  try {
+    const index = await buildIndex(new FakePort(localRoot));
+    const ranked = rankFiles(index, 'preserve protocol session version').files;
+    for (const path of ['src/protocol.ts', 'src/session.ts']) {
+      const candidate = ranked.find((file) => file.path === path);
+      assert.ok(candidate, `${path} is retrievable from path terms alone`);
+      assert.ok(candidate.reasons.some((reason) => reason.startsWith('file name matches')));
+    }
+  } finally {
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
 });
 
 test('assembleContext respects the budget, pins selection and mentions, and reports skipped items', async () => {
@@ -318,6 +374,7 @@ type SemanticTestApi = {
     onProgress?: (event: { status: string; progress?: number }) => void;
   }) => {
     rank: (query: string, chunks: readonly SemanticTestChunk[], signal?: AbortSignal) => Promise<ReadonlyMap<string, number>>;
+    rankCached: (query: string, chunks: readonly SemanticTestChunk[]) => ReadonlyMap<string, number> | undefined;
     dispose: () => Promise<void>;
   };
 };
@@ -351,12 +408,13 @@ test('semantic vectors reuse unchanged file analysis and invalidate after a cont
     const first = await buildIndex(localPort);
     const firstChunks = first.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
     await ranker.rank('handler', firstChunks);
+    assert.ok(ranker.rankCached('handler', firstChunks), 'query and document vectors are synchronously reusable');
 
     const unchanged = await buildIndex(localPort);
     const unchangedChunks = unchanged.chunks.filter((chunk) => chunk.path === 'src/sample.py') as unknown as SemanticTestChunk[];
     assert.strictEqual(unchangedChunks[0]!.semanticVectors, firstChunks[0]!.semanticVectors);
     await ranker.rank('handler', unchangedChunks);
-    assert.deepEqual(batches, [firstChunks.length + 1, 1], 'unchanged chunks reuse their cached vectors');
+    assert.deepEqual(batches, [firstChunks.length + 1], 'unchanged chunks and repeated query reuse their cached vectors');
 
     await fs.writeFile(localPath, 'def handler():\n    return 2\n');
     const changed = await buildIndex(localPort);
@@ -364,7 +422,7 @@ test('semantic vectors reuse unchanged file analysis and invalidate after a cont
     assert.notStrictEqual(changedChunks[0]!.semanticVectors, firstChunks[0]!.semanticVectors);
     assert.equal(changedChunks[0]!.semanticVectors.size, 0, 'a new SHA-256 starts with an empty vector cache');
     await ranker.rank('handler', changedChunks);
-    assert.deepEqual(batches, [firstChunks.length + 1, 1, changedChunks.length + 1]);
+    assert.deepEqual(batches, [firstChunks.length + 1, changedChunks.length], 'a content change embeds new chunks but reuses the query vector');
   } finally {
     await ranker.dispose();
     await fs.rm(localRoot, { recursive: true, force: true });
@@ -480,7 +538,7 @@ type HybridEngineApi = {
     request: { instruction: string; budgetTokens: number; mode: 'inline' | 'agent'; references?: readonly { kind: 'file' | 'symbol'; path?: string; name?: string }[]; semanticSearch?: boolean },
     prebuilt?: Awaited<ReturnType<typeof buildIndex>>,
     options?: { semanticRanker?: { rank: (query: string, chunks: readonly HybridChunk[], signal?: AbortSignal) => Promise<ReadonlyMap<string, number>> } },
-  ) => Promise<{ ranked: HybridRankedFile[]; report: { estimatedTokens: number; budgetTokens: number; selections: Array<{ path: string; source: string; rationale: string; range?: { startLine: number; endLine: number } }> } }>;
+  ) => Promise<{ ranked: HybridRankedFile[]; text: string; report: { estimatedTokens: number; budgetTokens: number; skipped: Array<{ path: string; reason: string }>; selections: Array<{ path: string; source: string; rationale: string; truncated?: boolean; estimatedTokens: number; range?: { startLine: number; endLine: number } }> } }>;
 };
 
 test('hybrid context keeps explicit references first and stays within its token budget', async () => {
@@ -489,6 +547,8 @@ test('hybrid context keeps explicit references first and stays within its token 
   assert.ok(engine, 'context assembly exposes semantic ranking options');
   const index = await buildIndex(port);
   let seenCandidates: string[] = [];
+  let markSemanticStarted!: () => void;
+  const semanticStarted = new Promise<void>((resolve) => { markSemanticStarted = resolve; });
   const result = await engine.assembleContext(port, {
     instruction: 'mystery account login transaction permission orchestrator routes command',
     references: [{ kind: 'file', path: 'src/flask/cli.py' }],
@@ -499,14 +559,47 @@ test('hybrid context keeps explicit references first and stays within its token 
     semanticRanker: {
       rank: async (_query, chunks) => {
         seenCandidates = chunks.map((chunk) => chunk.path);
+        markSemanticStarted();
         return new Map(chunks.filter((chunk) => chunk.path === 'src/flask/helpers.py').map((chunk) => [`${chunk.path}:${chunk.startLine}:${chunk.endLine}`, 0.99]));
       },
     },
   });
+  await semanticStarted;
   assert.ok(seenCandidates.includes('src/flask/helpers.py'), 'structural neighbors are included in the bounded semantic candidate set');
   assert.equal(result.report.selections[0]?.path, 'src/flask/cli.py');
   assert.equal(result.report.selections[0]?.source, 'explicit');
   assert.ok(result.report.estimatedTokens <= result.report.budgetTokens);
+});
+
+test('a semantic cache miss does not block lexical context assembly', async () => {
+  const engine = require('./engine') as HybridEngineApi;
+  const index = await buildIndex(port);
+  const request = { instruction: 'mystery account login transaction permission orchestrator routes command', budgetTokens: 1000, mode: 'agent' as const, semanticSearch: true };
+  let started = false;
+  let finished = false;
+  let releaseSlowRanker: (() => void) | undefined;
+  const start = Date.now();
+  const result = await engine.assembleContext(port, request, index, {
+    semanticRanker: {
+      rank: async () => {
+        started = true;
+        return new Promise<ReadonlyMap<string, number>>((resolve) => {
+          const timer = setTimeout(() => { finished = true; resolve(new Map()); }, 1000);
+          releaseSlowRanker = () => { clearTimeout(timer); finished = true; resolve(new Map()); };
+        });
+      },
+    },
+  });
+  const elapsedMs = Date.now() - start;
+  const lexical = await engine.assembleContext(port, { ...request, semanticSearch: false }, index);
+  assert.equal(started, false, 'the current turn returns before a cache miss starts inference');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(started, true);
+  assert.equal(finished, false, 'context returned while semantic inference is still pending');
+  assert.ok(elapsedMs < 100, `semantic cache misses should not delay context assembly, got ${elapsedMs} ms`);
+  releaseSlowRanker?.();
+  assert.deepEqual(result.report.selections.map((s) => s.path), lexical.report.selections.map((s) => s.path));
+  assert.ok(result.report.skipped.some((s) => s.path === '(semantic search)' && /warming in the background/.test(s.reason)));
 });
 
 test('concurrent index builds on one port run one after the other and agree', async () => {
@@ -524,13 +617,19 @@ test('semantic search on without its runtime: lexical ranking, and the context r
   const engine = require('./engine') as HybridEngineApi;
   const { SEMANTIC_RUNTIME_MISSING } = require('./semantic-runtime') as typeof import('./semantic-runtime');
   const index = await buildIndex(port);
-  const ranker = { unavailable: undefined as Error | undefined, rank: async () => { ranker.unavailable = new Error(`${SEMANTIC_RUNTIME_MISSING} (looked in /x)`); return new Map<string, number>(); } };
   const request = { instruction: 'mystery account login transaction permission orchestrator routes command', budgetTokens: 2000, mode: 'agent' as const, semanticSearch: true };
-  const result = await engine.assembleContext(port, request, index, { semanticRanker: ranker }) as Awaited<ReturnType<HybridEngineApi['assembleContext']>> & { report: { skipped: Array<{ path: string; reason: string }> } };
-  assert.deepEqual(result.report.skipped.filter((s) => s.path === '(semantic search)').map((s) => s.reason), [SEMANTIC_RUNTIME_MISSING]);
-  const lexical = await engine.assembleContext(port, { ...request, semanticSearch: false }, index) as typeof result;
-  assert.deepEqual(result.report.selections.map((s) => s.path), lexical.report.selections.map((s) => s.path), 'same selections as lexical-only');
-  assert.equal(lexical.report.skipped.some((s) => s.path === '(semantic search)'), false, 'off by default: nothing reported');
+  const previousRuntime = process.env['FORGE_SEMANTIC_RUNTIME'];
+  process.env['FORGE_SEMANTIC_RUNTIME'] = path.join(os.tmpdir(), 'forge-missing-semantic-runtime-test');
+  try {
+    const result = await engine.assembleContext(port, request, index) as Awaited<ReturnType<HybridEngineApi['assembleContext']>> & { report: { skipped: Array<{ path: string; reason: string }> } };
+    assert.deepEqual(result.report.skipped.filter((s) => s.path === '(semantic search)').map((s) => s.reason), [SEMANTIC_RUNTIME_MISSING]);
+    const lexical = await engine.assembleContext(port, { ...request, semanticSearch: false }, index) as typeof result;
+    assert.deepEqual(result.report.selections.map((s) => s.path), lexical.report.selections.map((s) => s.path), 'same selections as lexical-only');
+    assert.equal(lexical.report.skipped.some((s) => s.path === '(semantic search)'), false, 'off by default: nothing reported');
+  } finally {
+    if (previousRuntime === undefined) delete process.env['FORGE_SEMANTIC_RUNTIME'];
+    else process.env['FORGE_SEMANTIC_RUNTIME'] = previousRuntime;
+  }
 });
 
 test('the semantic runtime is found in src/harness/semantic-runtime, or where FORGE_SEMANTIC_RUNTIME points', () => {
@@ -598,6 +697,95 @@ test('hybrid packing prefers more relevant code per estimated token after pinned
     assert.equal(automatic[0]?.path, 'src/short.py', 'the shorter relevant chunk gives more retrieval value per token');
     assert.ok(result.report.estimatedTokens <= result.report.budgetTokens);
   } finally {
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
+});
+
+test('a 4k context budget can include a relevant chunk up to 1200 tokens', async () => {
+  let engine: HybridEngineApi | undefined;
+  try { engine = require('./engine') as HybridEngineApi; } catch { engine = undefined; }
+  assert.ok(engine, 'context assembly exposes ranking and packing');
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-context-budget-share-'));
+  const line = '    return filler_alpha + filler_beta + filler_gamma + filler_delta';
+  const lines = Array.from({ length: 60 }, () => line);
+  lines[40] = '    target_value = orchid + router + table';
+  const source = `def choose_target():\n${lines.join('\n')}\n`;
+  assert.ok(estimateTokens(source) > 600 && estimateTokens(source) <= 1200, 'fixture sits between the old 15% cap and the new 1200-token cap');
+  await fs.mkdir(path.join(localRoot, 'src'), { recursive: true });
+  await fs.writeFile(path.join(localRoot, 'src', 'target.py'), source);
+  const localPort = new FakePort(localRoot);
+  try {
+    const index = await buildIndex(localPort);
+    const result = await engine.assembleContext(localPort, {
+      instruction: 'select the orchid router table from the target implementation',
+      budgetTokens: 4000,
+      mode: 'inline',
+    }, index);
+    const target = result.report.selections.find((selection) => selection.path === 'src/target.py' && selection.source === 'automatic');
+    assert.ok(target,
+      'a relevant medium-sized function is packed instead of being dropped at a budget-relative cutoff');
+    assert.equal(target.truncated, true, 'a focused excerpt is used for a large function');
+    assert.ok(target.estimatedTokens < 650, `the focused chunk stays compact, got ${target.estimatedTokens}`);
+    assert.ok(result.text.includes('target_value = orchid + router + table'), 'the matching lines survive truncation');
+    assert.ok(result.report.estimatedTokens <= 4000);
+  } finally {
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
+});
+
+test('automatic context uses a compact outline that prioritizes query-matched symbols', async () => {
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-context-task-outline-'));
+  const helpers = Array.from({ length: 10 }, (_, index) => `def unrelated_helper_${index}():\n    return ${index}\n`).join('\n');
+  const source = `${helpers}\ndef orchid_router_table():\n    return 'selected implementation'\n`;
+  await fs.mkdir(path.join(localRoot, 'src'), { recursive: true });
+  await fs.writeFile(path.join(localRoot, 'src', 'catalog.py'), source);
+  const localPort = new FakePort(localRoot);
+  try {
+    const result = await assembleContext(localPort, {
+      instruction: 'find the orchid router table implementation',
+      budgetTokens: 4000,
+      mode: 'agent',
+    });
+    const outline = result.report.selections.find((selection) => selection.path === 'src/catalog.py' && selection.rationale.startsWith('outline'));
+    assert.ok(outline, 'the automatically selected file gets a compact map');
+    assert.ok(outline.estimatedTokens <= 120, `outline is capped at 120 tokens, got ${outline.estimatedTokens}`);
+    const section = result.text.slice(result.text.indexOf('### src/catalog.py outline')).split('\n### ')[0] ?? '';
+    assert.match(section, /orchid_router_table/);
+    assert.doesNotMatch(section, /unrelated_helper/);
+  } finally {
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
+});
+
+test('semantic runtime availability is checked without starting model inference', async () => {
+  const { semanticRuntimeInstalled } = require('./semantic-runtime') as { semanticRuntimeInstalled: (runtimeDir?: string) => boolean };
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-semantic-runtime-check-'));
+  try {
+    assert.equal(semanticRuntimeInstalled(localRoot), false, 'an empty runtime path is known unavailable synchronously');
+  } finally {
+    await fs.rm(localRoot, { recursive: true, force: true });
+  }
+});
+
+test('semantic search with no installed runtime reports lexical fallback immediately', async () => {
+  const { SEMANTIC_RUNTIME_MISSING } = require('./semantic-runtime') as typeof import('./semantic-runtime');
+  const localRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-semantic-runtime-absent-'));
+  const previous = process.env['FORGE_SEMANTIC_RUNTIME'];
+  process.env['FORGE_SEMANTIC_RUNTIME'] = localRoot;
+  try {
+    const started = Date.now();
+    const result = await assembleContext(port, {
+      instruction: 'mystery account login transaction permission orchestrator routes command',
+      budgetTokens: 2000,
+      mode: 'agent',
+      semanticSearch: true,
+    });
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 100, `missing optional runtime should not consume the rerank timeout, got ${elapsed} ms`);
+    assert.ok(result.report.skipped.some((item) => item.path === '(semantic search)' && item.reason === SEMANTIC_RUNTIME_MISSING));
+  } finally {
+    if (previous === undefined) delete process.env['FORGE_SEMANTIC_RUNTIME'];
+    else process.env['FORGE_SEMANTIC_RUNTIME'] = previous;
     await fs.rm(localRoot, { recursive: true, force: true });
   }
 });

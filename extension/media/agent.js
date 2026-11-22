@@ -5,7 +5,21 @@
   const setText = (id, value) => { const node = el(id); if (node.textContent !== value) node.textContent = value; };
   const setHidden = (id, value) => { const node = el(id); if (node.hidden !== value) node.hidden = value; };
   const setDisabled = (id, value) => { const node = el(id); if (node.disabled !== value) node.disabled = value; };
-  for (const id of ['stop','review','trace','allow','deny']) el(id).onclick = () => vscode.postMessage({action:id});
+  for (const id of ['stop','review','trace','allow','deny','resume']) el(id).onclick = () => vscode.postMessage({action:id});
+  let resumeTimer;
+  // Resume is enabled once the suggested wait after a rate limit has passed; the label counts down until then.
+  const showResume = s => {
+    clearTimeout(resumeTimer);
+    setHidden('resumeBox', !s.resume || s.busy);
+    if (!s.resume || s.busy) return;
+    const files = s.resume.files.length ? ' Already changed: ' + s.resume.files.join(', ') + '.' : ' No file was changed.';
+    const why = s.resume.reason === 'stalled' ? 'Stopped: the model did not respond in time.' : 'Stopped by a model rate limit (HTTP 429).';
+    setText('resumeText', why + files + ' Resume continues the task in this conversation.');
+    const wait = s.resume.at - Date.now();
+    setDisabled('resume', wait > 0);
+    setText('resume', wait > 0 ? 'Resume (in ' + Math.ceil(wait / 1000) + ' s)' : 'Resume');
+    if (wait > 0) resumeTimer = setTimeout(() => showResume(s), Math.min(wait, 1000));
+  };
   el('send').onclick = () => {
     const text = el('task').value;
     if (text.trim()) vscode.postMessage({action:'send',text});
@@ -26,6 +40,7 @@
     setDisabled('stop', !s.busy);
     setHidden('review', !s.reviewing);
     setText('status', s.status);
+    showResume(s);
     setText('model', s.model ? 'Model: ' + s.model + (s.usage ? ' | ' + s.usage : '') : '');
     setText('banner', s.banner);
     setHidden('banner', !s.banner);
@@ -44,6 +59,10 @@
       setHidden('skippedTitle', !s.context.skipped.length);
       list('skipped',s.context.skipped.map(i => i.path + ' | ' + i.reason + ' | ' + i.estimatedTokens + ' tokens'));
     }
+    setHidden('tests', !s.tests);
+    setText('tests', s.tests || '');
+    setHidden('warnings', !s.warnings.length);
+    list('warningList', s.warnings);
     setHidden('turnFiles', !s.summary.length);
     setText('turnFilesTitle', 'Files changed in this turn: ' + s.summary.filter(line => !line.endsWith('| not changed')).length);
     list('summary',s.summary);

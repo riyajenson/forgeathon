@@ -2,9 +2,10 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+// promptTokens: input tokens to report in usage (default 10); TrueForge's compaction trigger counts them.
 export type MockReply =
-  | { text: string; delayMsPerWord?: number }
-  | { toolCalls: Array<{ name: string; args: unknown }>; text?: string; delayMsPerWord?: number }
+  | { text: string; delayMsPerWord?: number; promptTokens?: number }
+  | { toolCalls: Array<{ name: string; args: unknown }>; text?: string; delayMsPerWord?: number; promptTokens?: number }
   | { status: number; message: string; headers?: Record<string, string> };
 
 export interface MockRequest {
@@ -83,6 +84,7 @@ export class MockModel {
       return;
     }
     const id = `chatcmpl-${Date.now()}`;
+    const usage = { prompt_tokens: reply.promptTokens ?? 10, completion_tokens: 5, total_tokens: (reply.promptTokens ?? 10) + 5 };
     const chunk = (delta: unknown, finish: string | null = null) =>
       `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: req.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
     rs.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
@@ -103,7 +105,7 @@ export class MockModel {
       });
     }
     rs.write(chunk({}, finish));
-    rs.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: req.model, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })}\n\n`);
+    rs.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 1, model: req.model, choices: [], usage })}\n\n`);
     rs.end('data: [DONE]\n\n');
   }
 }

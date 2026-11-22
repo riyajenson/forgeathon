@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createHarness } from '../harness';
-import { PROTOCOL_VERSION, type ForgeHarness, type HarnessEvent, type ReviewDecision } from '../contract-types';
+import { PROTOCOL_VERSION, type ForgeHarness, type HarnessEvent, type ReviewDecision, type TurnRequest } from '../contract-types';
 import { FakePort } from '../mcp/fake-port';
 import { sha256Hex } from '../review';
 import { createClient } from '../trueforge/sdk';
@@ -42,15 +42,52 @@ let rateLimited = 0;
 let harnessRetried = false;
 // 'ratelimit-tf': 429s served per model call (keyed by whether the request carries a tool result).
 const tfLimited = new Map<string, number>();
+// 'resume429': the model call after the edit is rate limited until the test allows the resumed turn.
+let resumeAllowed = false;
+const SUBTASK = 'SUBTASK:explore';
 const TURN_LOG = path.join(os.tmpdir(), `forge-itest-turns-${process.pid}.jsonl`);
 process.env['FORGE_TURN_LOG'] = TURN_LOG;
 function script(req: MockRequest): MockReply {
   if (req.model === 'mock-fallback') return lastToolMessage(req) !== undefined ? { text: 'fallback finished' } : { text: 'fallback model answered' };
   const scenario = scenarioOf(req);
   const toolResult = lastToolMessage(req);
+  // 'compact' (agent it-compact, trigger 2000 input tokens): TrueForge asks for a summary (its compaction prompt is the
+  // last message); the summary then replaces the conversation, so later requests are recognised by it instead.
+  if (scenario === 'compact' && isSummaryRequest(req)) return { text: `${COMPACT_SUMMARY} the user asked to bump alpha; src/app.py was read.` };
+  if (req.messages.some((m) => m.role === 'assistant' && textOf(m.content).includes(COMPACT_SUMMARY))) {
+    if (toolResult !== undefined) return { text: `compact finished: ${toolResult.slice(0, 200)}` };
+    return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [{ old_text: '    return 1', new_text: '    return 10' }] } }] };
+  }
   const edit1 = { old_text: '    return 1', new_text: '    return 10' };
   const edit2 = { old_text: '    return 2', new_text: '    return 20' };
+  // A sub-agent thread (it-subagents): its only user message is the delegated task, not the scenario.
+  if (req.messages.some((m) => m.role === 'user' && textOf(m.content).includes(SUBTASK))) {
+    const results = req.messages.filter((m) => m.role === 'tool').length;
+    if (results === 0) return { toolCalls: [{ name: 'read_file', args: { path: FILE } }] };
+    if (results === 1) return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit2], summary: 'sub-agent bumps beta' } }] };
+    return { text: `explorer report: ${toolResult?.slice(0, 120) ?? ''}` };
+  }
   switch (scenario) {
+    case 'resume429': {
+      const last = textOf(req.messages.filter((m) => m.role === 'user').at(-1)?.content);
+      if (last.startsWith('Resumed turn:')) return toolResult !== undefined ? { text: 'resumed and finished' } : { text: `resumed with ${req.messages.filter((m) => m.role === 'tool').length} earlier tool result(s) in view` };
+      if (toolResult !== undefined && !resumeAllowed) return { status: 429, message: 'Too Many Requests', headers: { 'retry-after-ms': '50' } };
+      if (toolResult !== undefined) return { text: 'unexpected' };
+      return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
+    }
+    case 'stall-after-edit': {
+      // The model goes silent while generating its reply after the edit, until the turn is resumed.
+      const last = textOf(req.messages.filter((m) => m.role === 'user').at(-1)?.content);
+      if (last.startsWith('Resumed turn:')) return { text: 'resumed after the stall' };
+      if (toolResult !== undefined) return { text: 'writing a very long reply', delayMsPerWord: 5000 };
+      return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
+    }
+    case 'slow-words':
+      // 1.2 s between words: longer than the general limit, shorter than the model-request limit.
+      return { text: 'slow but steady answer', delayMsPerWord: 1200 };
+    case 'subagent':
+      if (toolResult !== undefined) return { text: `main finished after: ${toolResult.slice(0, 200)}` };
+      return { toolCalls: [{ name: 'create_sub_agent', args: { name: 'explorer', input: `${SUBTASK} read src/app.py, bump beta, and report what alpha returns` } }] };
     case 'edit2':
       if (toolResult !== undefined) return { text: `finished after: ${toolResult.slice(0, 300)}` };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1, edit2], summary: 'bump returns' } }] };
@@ -82,6 +119,9 @@ function script(req: MockRequest): MockReply {
       if (toolResult !== undefined) return { text: `finished after: ${toolResult.slice(0, 200)}` };
       return { toolCalls: [{ name: 'propose_edit', args: { path: FILE, base_sha256: currentSha, edits: [edit1] } }] };
     }
+    case 'compact':
+      // Reported input large enough that the next call crosses it-compact's 2000-token trigger.
+      return { toolCalls: [{ name: 'read_file', args: { path: FILE, start_line: 1, end_line: 6 } }], promptTokens: 5000 };
     case 'stall':
       return { text: 'thinking ... ... ...', delayMsPerWord: 4000 };
     case 'slow':
@@ -96,7 +136,11 @@ const AGENTS: Array<[string, string]> = [
   ['it-auth', 'itbad/primary'], ['it-auth-fallback', 'itfb/fb'],
   ['it-dead', 'itdead/primary'], ['it-dead-fallback', 'itfb/fb'],
   ['it-both', 'itbad/primary'], ['it-both-fallback', 'itdead/primary'],
+  ['it-compact', 'itgood/primary'], ['it-compact-fallback', 'itfb/fb'],
+  ['it-subagents', 'itgood/primary'], ['it-subagents-fallback', 'itfb/fb'],
 ];
+const COMPACT_SUMMARY = 'COMPACTED-SUMMARY:';
+const isSummaryRequest = (req: MockRequest) => /detailed summary of the conversation so far/.test(textOf(req.messages.at(-1)?.content));
 
 before(async () => {
   await mock.start(MOCK_PORT);
@@ -125,8 +169,8 @@ before(async () => {
       instructions: 'Integration test agent.',
       mcpServers: [{ name: CONNECTOR, enableTools: ['@all'], preloadTools: ['read_file', 'search_workspace', 'propose_edit', 'run_command'], requireApprovalForTools: ['propose_edit', 'run_command'] }],
       config: {
-        sandbox: { enabled: false }, dynamicSubAgents: { enabled: false }, generativeUi: { enabled: false }, askUserQuestions: { enabled: false },
-        contextManagement: { compaction: { enabled: true, trigger: { type: 'input_tokens' as const, value: 60000 } }, largeToolResponse: { enabled: false } },
+        sandbox: { enabled: false }, dynamicSubAgents: { enabled: name === 'it-subagents' }, generativeUi: { enabled: false }, askUserQuestions: { enabled: false },
+        contextManagement: { compaction: { enabled: true, trigger: { type: 'input_tokens' as const, value: name === 'it-compact' ? 2000 : 60000 } }, largeToolResponse: { enabled: false } },
         iterationLimit: 10,
       },
     };
@@ -151,10 +195,11 @@ beforeEach(async () => {
   port.onApplyStart = undefined;
   port.applies.length = 0;
   mock.requests.length = 0;
+  resumeAllowed = false;
 });
 
-async function withHarness<T>(agent: string, fn: (h: ForgeHarness, sessionId: string) => Promise<T>, watchdogMs = 15000): Promise<T> {
-  const h = createHarness({ trueforgeUrl: TF_URL, mcpPort: 0, connectorName: CONNECTOR, agents: { agent, inline: agent }, retryDelayMs: 300, watchdogMs, cancelTimeoutMs: 5000 });
+async function withHarness<T>(agent: string, fn: (h: ForgeHarness, sessionId: string) => Promise<T>, watchdogMs = 15000, modelWatchdogMs = watchdogMs): Promise<T> {
+  const h = createHarness({ trueforgeUrl: TF_URL, mcpPort: 0, connectorName: CONNECTOR, agents: { agent, inline: agent }, retryDelayMs: 300, watchdogMs, modelWatchdogMs, cancelTimeoutMs: 5000 });
   await h.start(port);
   try {
     const s = await h.createSession({ version: PROTOCOL_VERSION, requestId: rid(), body: { workspaceRoot: root } });
@@ -167,9 +212,9 @@ async function withHarness<T>(agent: string, fn: (h: ForgeHarness, sessionId: st
 
 type Ctl = { h: ForgeHarness; sessionId: string; turnId: string };
 
-async function runTurn(h: ForgeHarness, sessionId: string, instruction: string, onEvent?: (e: HarnessEvent, ctl: Ctl) => Promise<void> | void): Promise<HarnessEvent[]> {
+async function runTurn(h: ForgeHarness, sessionId: string, instruction: string, onEvent?: (e: HarnessEvent, ctl: Ctl) => Promise<void> | void, extra: Partial<TurnRequest> = {}): Promise<HarnessEvent[]> {
   const turnId = `turn-${++seq}`;
-  const sub = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId, turnId, mode: 'agent', instruction } });
+  const sub = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId, turnId, mode: 'agent', instruction, ...extra } });
   assert.ok(sub.ok, JSON.stringify(sub));
   const events: HarnessEvent[] = [];
   const deadline = setTimeout(() => { throw new Error(`turn ${turnId} did not finish in time`); }, 45000);
@@ -230,6 +275,27 @@ test('allow: review, accept all, edit saved, turn done', async () => {
   });
 });
 
+test('compaction: TrueForge summarizes mid-turn, the status line shows start and finish, the turn completes', async () => {
+  await withHarness('it-compact', async (h, sid) => {
+    const events = await runTurn(h, sid, 'SCENARIO:compact bump alpha', async (e) => {
+      if (e.t === 'review_request') await review(h, e, () => 'accept');
+    });
+    assert.equal(doneOf(events).status, 'done');
+    const details = ofType(events, 'status').map((e) => `${e.state}|${e.detail ?? ''}`);
+    const start = details.findIndex((d) => /^compacting\|Compacting context: [\d,]+ tokens reached the 2,000-token threshold$/.test(d));
+    assert.ok(start >= 0, details.join('\n'));
+    assert.match(details[start + 1] ?? '', /^running\|Context compacted in \d+\.\d s: [\d,]+ tokens summarized into [\d,]+$/);
+    assert.equal(details.filter((d) => d.startsWith('compacting')).length, 1, 'compacted once');
+    const summaryCalls = mock.requests.filter(isSummaryRequest);
+    assert.equal(summaryCalls.length, 1, 'one summary request');
+    assert.deepEqual(summaryCalls[0]!.toolNames.filter(Boolean), [], 'the summary request offers no tools');
+    const after = mock.requests.slice(mock.requests.indexOf(summaryCalls[0]!) + 1);
+    assert.ok(after.length >= 2, 'the turn continued after compaction');
+    assert.ok(after.every((r) => !r.messages.some((m) => m.role === 'user' && textOf(m.content).includes('SCENARIO:compact'))), 'the original request was replaced by the summary');
+    assert.equal(await disk(), ORIGINAL.replace('return 1', 'return 10'));
+  });
+});
+
 test('partial accept: only the accepted hunk is written and the model is told', async () => {
   await withHarness('it-coder', async (h, sid) => {
     const events = await runTurn(h, sid, 'SCENARIO:edit2 bump both', async (e) => {
@@ -270,7 +336,7 @@ test('duplicate identical calls in one step: one review, the duplicate is denied
   });
 });
 
-test('cancel while paused for review: confirmed, nothing written, late decision refused', async () => {
+test('cancel while paused for review: request acknowledged, nothing written, late decision refused', async () => {
   await withHarness('it-coder', async (h, sid) => {
     let cancelStatus: string | undefined;
     let late: unknown;
@@ -282,14 +348,14 @@ test('cancel while paused for review: confirmed, nothing written, late decision 
         late = await h.submitReview({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: p.sessionId, turnId: p.turnId, callId: p.callId, kind: 'edit', proposalId: p.proposalId, hunks: Object.fromEntries(p.hunks.map((x) => [x.hunkId, 'accept'])) } });
       }
     });
-    assert.equal(cancelStatus, 'confirmed');
+    assert.equal(cancelStatus, 'unconfirmed', 'the RPC replies before terminal confirmation; the done event remains authoritative');
     assert.equal(doneOf(events).status, 'cancelled');
     assert.equal(await disk(), ORIGINAL);
     assert.equal((late as { ok: boolean }).ok, false);
   });
 });
 
-test('cancel while streaming: confirmed quickly, done cancelled', async () => {
+test('cancel while streaming: request acknowledged quickly, done cancelled', async () => {
   await withHarness('it-coder', async (h, sid) => {
     let cancelStatus: string | undefined;
     let cancelReplyMs = 0;
@@ -305,7 +371,7 @@ test('cancel while streaming: confirmed quickly, done cancelled', async () => {
       }
     });
     const cancelRequestToDoneMs = Date.now() - cancelRequestedAt;
-    assert.equal(cancelStatus, 'confirmed');
+    assert.equal(cancelStatus, 'unconfirmed', 'the RPC replies before terminal confirmation; the done event remains authoritative');
     assert.ok(cancelReplyMs < 2000, `cancel reply took ${cancelReplyMs} ms`);
     assert.equal(doneOf(events).status, 'cancelled');
     assert.ok(cancelRequestToDoneMs < 2000, `cancel request took ${cancelRequestToDoneMs} ms to reach the final done event`);
@@ -349,7 +415,7 @@ test('cancel while an approved command is running: process stops and workspace s
       cancelStatus = cancelled.ok ? cancelled.body : 'error';
       const events = await eventsPromise;
       const cancelRequestToDoneMs = Date.now() - cancelRequestedAt;
-      assert.equal(cancelStatus, 'confirmed');
+      assert.equal(cancelStatus, 'unconfirmed', 'the RPC replies before terminal confirmation; the done event remains authoritative');
       assert.ok(cancelReplyMs < 2000, `cancel reply took ${cancelReplyMs} ms`);
       assert.equal(doneOf(events).status, 'cancelled');
       assert.ok(cancelRequestToDoneMs < 2000, `command cancellation took ${cancelRequestToDoneMs} ms to reach done`);
@@ -368,17 +434,32 @@ test('cancel racing an in-flight apply: done waits, the write is reported before
   await withHarness('it-coder', async (h, sid) => {
     port.applyDelayMs = 1500;
     let ctlRef: Ctl | undefined;
+    let cancelStatus: string | undefined;
+    let cancelReplyMs = 0;
+    let applyCompleted = false;
+    let cancelReplyBeforeApplyCompleted = false;
     port.onApplyStart = () => {
-      if (ctlRef) void h.cancel({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: ctlRef.sessionId, turnId: ctlRef.turnId } });
+      if (ctlRef) {
+        const started = Date.now();
+        void h.cancel({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: ctlRef.sessionId, turnId: ctlRef.turnId } }).then((reply) => {
+          cancelReplyMs = Date.now() - started;
+          cancelStatus = reply.ok ? reply.body : 'error';
+          cancelReplyBeforeApplyCompleted = !applyCompleted;
+        });
+      }
     };
     const events = await runTurn(h, sid, 'SCENARIO:edit2', async (e, ctl) => {
+      if (e.t === 'edit_applied') applyCompleted = true;
       if (e.t === 'review_request') { ctlRef = ctl; await review(h, e, () => 'accept'); }
     });
     const done = doneOf(events);
     const appliedIdx = events.findIndex((e) => e.t === 'edit_applied');
     assert.ok(appliedIdx >= 0 && appliedIdx < events.length - 1, 'edit_applied is delivered before done');
+    assert.equal(cancelStatus, 'unconfirmed', 'cancellation is acknowledged while the approved write finishes');
+    assert.equal(cancelReplyBeforeApplyCompleted, true, 'the RPC reply does not wait for the approved write to settle');
     assert.equal(done.status, 'cancelled');
     assert.notEqual(await disk(), ORIGINAL, 'the in-flight write completed and was reported');
+    console.log(`CANCEL during approved apply: reply ${cancelReplyMs} ms; terminal waits for reported write`);
   });
 });
 
@@ -560,4 +641,101 @@ test('a model switch in TrueForge (scripts/use-models.sh) shows on the next turn
   } finally {
     await client.agents.update(original.id, { description: original.description ?? '', manifest: original.manifest as never });
   }
+});
+
+test('resume after a rate limit: the turn stops after its edit with resumable; Resume continues the same conversation and finishes', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    const instruction = 'SCENARIO:resume429 bump alpha';
+    const first = await runTurn(h, sid, instruction, async (e) => { if (e.t === 'review_request') await review(h, e, () => 'accept'); });
+    assert.equal(doneOf(first).status, 'error');
+    const resumable = ofType(first, 'resumable');
+    assert.equal(resumable.length, 1, JSON.stringify(first.slice(-4)));
+    assert.deepEqual([resumable[0]!.reason, resumable[0]!.changedFiles], ['rate_limited', [FILE]]);
+    assert.ok(first.indexOf(resumable[0]!) < first.findIndex((e) => e.t === 'error'), 'resumable before the error');
+    assert.match(ofType(first, 'error')[0]!.error.message, /429/);
+    assert.equal(ofType(first, 'fallback').length, 0, 'no fallback after a write');
+    assert.equal(await disk(), ORIGINAL.replace('return 1', 'return 10'));
+    const firstTurnId = first[0]!.turnId;
+    const firstSession = ofType(first, 'session')[0]!.runtimeSessionId;
+
+    // Resuming a turn that is not resumable is refused before anything starts.
+    const bogus = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: sid, turnId: `turn-${++seq}`, mode: 'agent', instruction, resumeOf: 'no-such-turn' } });
+    assert.ok(!bogus.ok && bogus.error.code === 'invalid');
+
+    resumeAllowed = true;
+    const before = mock.requests.length;
+    const second = await runTurn(h, sid, instruction, undefined, { resumeOf: firstTurnId });
+    assert.equal(doneOf(second).status, 'done', JSON.stringify(ofType(second, 'error')));
+    assert.equal(ofType(second, 'session')[0]!.runtimeSessionId, firstSession, 'same TrueForge conversation');
+    assert.ok(ofType(second, 'status').some((e) => /^Resuming the turn that stopped on a rate limit \(1 file already changed\)$/.test(e.detail ?? '')));
+    const resumedReq = mock.requests.slice(before).find((r) => textOf(r.messages.filter((m) => m.role === 'user').at(-1)?.content).startsWith('Resumed turn:'))!;
+    assert.ok(resumedReq, 'the model received the resume note');
+    const note = textOf(resumedReq.messages.filter((m) => m.role === 'user').at(-1)?.content);
+    assert.match(note, /Already changed in that turn: src\/app\.py\./);
+    assert.match(note, /Original request:\nSCENARIO:resume429 bump alpha/);
+    assert.ok(resumedReq.messages.some((m) => m.role === 'tool'), 'the interrupted turn\'s tool results are still in the conversation');
+    assert.match(ofType(second, 'text').map((e) => e.delta).join(''), /resumed with [1-9]\d* earlier tool result\(s\) in view/);
+
+    // A turn is resumed once.
+    const again = await h.submitTurn({ version: PROTOCOL_VERSION, requestId: rid(), body: { sessionId: sid, turnId: `turn-${++seq}`, mode: 'agent', instruction, resumeOf: firstTurnId } });
+    assert.ok(!again.ok && again.error.code === 'conflict');
+  });
+});
+
+test('watchdog on the mock: a slow generation within the model-request limit finishes (general limit 1 s, model limit 4 s)', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    const events = await runTurn(h, sid, 'SCENARIO:slow-words');
+    assert.equal(doneOf(events).status, 'done', JSON.stringify(ofType(events, 'error')));
+    assert.equal(ofType(events, 'status').filter((s) => s.state === 'retrying').length, 0, 'no watchdog retry');
+    assert.match(ofType(events, 'text').map((e) => e.delta).join(''), /slow but steady answer/);
+  }, 1000, 4000);
+});
+
+test('watchdog on the mock: a stall after an edit is resumable; Resume continues the same conversation', async () => {
+  await withHarness('it-coder', async (h, sid) => {
+    const instruction = 'SCENARIO:stall-after-edit bump alpha';
+    const first = await runTurn(h, sid, instruction, async (e) => { if (e.t === 'review_request') await review(h, e, () => 'accept'); });
+    assert.equal(doneOf(first).status, 'error');
+    const r = ofType(first, 'resumable');
+    assert.equal(r.length, 1, JSON.stringify(first.slice(-4)));
+    assert.deepEqual([r[0]!.reason, r[0]!.changedFiles], ['stalled', [FILE]]);
+    assert.match(ofType(first, 'error')[0]!.error.message, /no response from the model for 2 s/);
+    assert.equal(ofType(first, 'fallback').length, 0, 'no fallback after a write');
+    const second = await runTurn(h, sid, instruction, undefined, { resumeOf: first[0]!.turnId });
+    assert.equal(doneOf(second).status, 'done', JSON.stringify(ofType(second, 'error')));
+    assert.ok(ofType(second, 'status').some((e) => /^Resuming the turn that stopped responding \(1 file already changed\)$/.test(e.detail ?? '')));
+    assert.match(ofType(second, 'text').map((e) => e.delta).join(''), /resumed after the stall/);
+  }, 1000, 2000);
+});
+
+test('sub-agents on the mock: TrueForge delegates, the sub-agent reads and edits through review, the parent gets its report', async () => {
+  await withHarness('it-subagents', async (h, sid) => {
+    const events = await runTurn(h, sid, 'SCENARIO:subagent bump beta via a helper', async (e) => {
+      if (e.t === 'review_request') await review(h, e, () => 'accept');
+    });
+    assert.equal(doneOf(events).status, 'done', JSON.stringify(ofType(events, 'error')));
+    const subs = ofType(events, 'subagent');
+    assert.deepEqual(subs.map((e) => [e.phase, e.name, e.ok]), [['started', 'explorer', undefined], ['finished', 'explorer', true]]);
+    assert.match(subs[0]!.task ?? '', /^SUBTASK:explore read src\/app\.py/);
+    assert.equal(subs[0]!.threadId, subs[1]!.threadId);
+    const details = ofType(events, 'status').map((e) => e.detail ?? '');
+    assert.ok(details.some((d) => d.startsWith('Delegated to sub-agent "explorer": SUBTASK:explore')), details.join('\n'));
+    assert.ok(details.includes('Sub-agent "explorer" finished'));
+    // The sub-agent's edit went through the same review and was applied.
+    const reviews = ofType(events, 'review_request');
+    assert.equal(reviews.length, 1);
+    assert.equal(reviews[0]!.proposal.summary, 'sub-agent bumps beta');
+    assert.equal(ofType(events, 'edit_applied')[0]!.result.status, 'saved');
+    assert.equal(await disk(), ORIGINAL.replace('return 2', 'return 20'));
+    // Main thread offered create_sub_agent; the child got the same editor tools, and its text stayed out of the reply.
+    const main = mock.requests.find((r) => r.messages.some((m) => m.role === 'user' && textOf(m.content).includes('SCENARIO:subagent')))!;
+    assert.ok(main.toolNames.includes('create_sub_agent'), main.toolNames.join(','));
+    const child = mock.requests.find((r) => r.messages.some((m) => m.role === 'user' && textOf(m.content).includes(SUBTASK)))!;
+    for (const t of ['read_file', 'propose_edit']) assert.ok(child.toolNames.includes(t), child.toolNames.join(','));
+    assert.ok(!child.toolNames.includes('create_sub_agent'), 'sub-agents cannot delegate further');
+    const reply = ofType(events, 'text').map((e) => e.delta).join('');
+    assert.match(reply, /^main finished after: /);
+    assert.match(reply, /explorer report: /, 'the parent received the sub-agent report as the tool result');
+    assert.equal(reply.split('explorer report').length - 1, 1, "the sub-agent's own text is not streamed as the reply");
+  });
 });

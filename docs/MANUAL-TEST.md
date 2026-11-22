@@ -22,12 +22,13 @@ hand. Run it once with the demo model and once with the real models before recor
 | A.3 | Paste instruction A, Enter | Notification "Forge inline edit — waiting for the model…" with **Cancel** |
 | A.4 | Wait | Diff editor "src/flask/helpers.py - proposed changes" opens with the hunk picker "Select hunks to accept" above it; its title bar has ✓ and ✕ (the demo model makes 2 hunks; a real model may differ) |
 | A.5 | Look at the picker; hover ✓ and ✕ | Every hunk listed (e.g. the docstring and the `{"0", "false", "no", "off", "n"}` line), all checked; tooltips "Accept all hunks" / "Reject all hunks". Escape hides the picker, **Review hunks** in the status bar reopens it |
-| A.6 | Uncheck one hunk, Enter | Only the checked hunks change `helpers.py`; the file is saved (no dirty dot) |
-| A.7 | Command palette: **Forge-a-thon: Undo Last Reviewed Edit** | `helpers.py` back to the original; `git status` clean |
-| A.8 | Repeat A.1–A.4, click **✓** | Both hunks applied and saved |
-| A.9 | Terminal: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` | `False` |
-| A.10 | Same with `FLASK_DEBUG=N` and `FLASK_DEBUG=1` | `False`, `True` |
-| A.11 | `git checkout -- .` | Clean |
+| A.6 | Uncheck one hunk; inspect the proposed side before Enter | The editor diff immediately shows the exact result with only checked hunks; the workspace file is still unchanged |
+| A.7 | Press Enter | Only the checked hunks change `helpers.py`; the file is saved (no dirty dot) |
+| A.8 | Command palette: **Forge-a-thon: Undo Last Reviewed Edit** | `helpers.py` back to the original; `git status` clean |
+| A.9 | Repeat A.1–A.5, click **✓** | Both hunks applied and saved |
+| A.10 | Terminal: `FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` | `False` |
+| A.11 | Same with `FLASK_DEBUG=N` and `FLASK_DEBUG=1` | `False`, `True` |
+| A.12 | `git checkout -- .` | Clean |
 
 ## Task B — agent panel
 

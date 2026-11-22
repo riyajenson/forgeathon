@@ -15,3 +15,4 @@ config/models.json
 
 # Generated documents (render with scripts/render-writeup.sh)
 docs/writeup/WRITEUP.pdf
+.env.daytona

@@ -1,4 +1,6 @@
-// Usage: node scripts/setup-trueforge.mjs [--config config/models.json] [--agents agent] [--url http://127.0.0.1:8790] [--dry-run]
+// Usage: node scripts/setup-trueforge.mjs [--config config/models.json] [--agents agent] [--url http://127.0.0.1:8790] [--dry-run] [--no-subagents]
+// TrueForge's dynamic sub-agents are on for agents whose template defines them (forge-coder); --no-subagents turns
+// them off. --subagents is accepted (the default).
 import { repoRoot } from '../repo-root';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -17,6 +19,7 @@ async function main(): Promise<void> {
   const agentsDir = path.resolve(arg('--agents', path.join(repo, 'agent')));
   const url = arg('--url', process.env['TRUEFORGE_URL'] ?? 'http://127.0.0.1:8790');
   const dryRun = process.argv.includes('--dry-run');
+  const subAgents = !process.argv.includes('--no-subagents');
 
   let cfg: ModelsConfig;
   try {
@@ -39,7 +42,7 @@ async function main(): Promise<void> {
     }
   }
   console.log(`TrueForge ${url}${dryRun ? ' (dry run)' : ''}; config ${path.relative(process.cwd(), configPath)}; templates ${templates.map((t) => t.name).join(', ')}`);
-  const report = await runSetup({ client, cfg, templates, env: process.env, log: (l) => console.log(`  ${l}`), dryRun });
+  const report = await runSetup({ client, cfg, templates, env: process.env, log: (l) => console.log(`  ${l}`), dryRun, subAgents });
   if (report.missingModels.length) process.exitCode = 2;
 }
 

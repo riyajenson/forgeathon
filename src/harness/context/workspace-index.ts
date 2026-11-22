@@ -1,4 +1,4 @@
-// In-memory index of the workspace: chunks with term counts, a Python symbol table and import edges.
+// In-memory index of the workspace: chunks with term counts, symbols and local import edges.
 import type { EditorPort } from '../mcp/port';
 import { chunkFile, type Chunk } from './chunks';
 import { isIndexable, LIST_LIMIT, MAX_INDEX_CHARS, visibleFiles } from './files';
@@ -22,7 +22,7 @@ export interface IndexedFile {
   chunks: IndexedChunk[];
   /** Dotted Python module name, e.g. flask.cli. */
   module?: string;
-  /** Workspace paths this file imports (Python, resolved inside the workspace). */
+  /** Workspace paths this file imports (resolved inside the workspace). */
   imports: string[];
   pathTerms: Set<string>;
 }
@@ -60,6 +60,54 @@ function parseImports(text: string, module: string | undefined, isPackage: boole
   }
   for (const m of text.matchAll(/^\s*import\s+([\w.]+)/gm)) out.push(m[1]!);
   return out;
+}
+
+const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+function localImportSpecifiers(text: string): string[] {
+  const found: string[] = [];
+  const patterns = [
+    /\b(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s*)?['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const specifier = match[1];
+      if (specifier?.startsWith('./') || specifier?.startsWith('../')) found.push(specifier);
+    }
+  }
+  return found;
+}
+
+function relativeWorkspacePath(sourcePath: string, specifier: string): string | undefined {
+  const segments = sourcePath.split('/').slice(0, -1);
+  for (const segment of specifier.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (!segments.length) return undefined;
+      segments.pop();
+    } else segments.push(segment);
+  }
+  return segments.length ? segments.join('/') : undefined;
+}
+
+function resolveSourceImport(sourcePath: string, specifier: string, files: ReadonlyMap<string, IndexedFile>): string | undefined {
+  const base = relativeWorkspacePath(sourcePath, specifier);
+  if (!base) return undefined;
+  const candidates = [base];
+  const extension = base.slice(base.lastIndexOf('/') + 1).match(/\.[^.]+$/)?.[0];
+  if (extension && SOURCE_EXTENSIONS.includes(extension)) {
+    // TypeScript projects commonly write runtime imports with a .js suffix while the source is .ts.
+    if (['.js', '.jsx', '.mjs', '.cjs'].includes(extension)) {
+      const stem = base.slice(0, -extension.length);
+      for (const ext of ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']) candidates.push(stem + ext);
+    }
+  } else if (!extension) {
+    for (const ext of SOURCE_EXTENSIONS) candidates.push(base + ext);
+  }
+  for (const ext of SOURCE_EXTENSIONS) candidates.push(`${base}/index${ext}`);
+  return candidates.find((candidate) => files.has(candidate));
 }
 
 async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -172,11 +220,17 @@ async function buildIndexNow(port: EditorPort): Promise<WorkspaceIndex> {
   const modules = new Map<string, string>();
   for (const f of files.values()) if (f.module) modules.set(f.module, f.path);
   for (const f of files.values()) {
-    if (!f.module) continue;
     const targets = new Set<string>();
-    for (const imp of parseImports(f.text, f.module, f.path.endsWith('__init__.py'))) {
-      const hit = modules.get(imp) ?? modules.get(imp.split('.').slice(0, -1).join('.'));
-      if (hit && hit !== f.path) targets.add(hit);
+    if (f.module) {
+      for (const imp of parseImports(f.text, f.module, f.path.endsWith('__init__.py'))) {
+        const hit = modules.get(imp) ?? modules.get(imp.split('.').slice(0, -1).join('.'));
+        if (hit && hit !== f.path) targets.add(hit);
+      }
+    } else {
+      for (const specifier of localImportSpecifiers(f.text)) {
+        const hit = resolveSourceImport(f.path, specifier, files);
+        if (hit && hit !== f.path) targets.add(hit);
+      }
     }
     f.imports = [...targets];
     await yieldNow();

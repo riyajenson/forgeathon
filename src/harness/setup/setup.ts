@@ -45,6 +45,14 @@ export interface AgentTemplate {
   name: string;
   description: string;
   manifest: Record<string, unknown> & { model?: { params?: Record<string, unknown> } };
+  /** Present on templates that may delegate: unless setup --no-subagents, TrueForge's dynamic sub-agents are enabled for
+   * this agent and these instructions are appended to its own. Not part of the manifest. */
+  subAgents?: { instructions: string };
+}
+
+export interface BuildOptions {
+  /** Enable dynamic sub-agents on templates that define `subAgents`. Default on; false is setup --no-subagents. */
+  subAgents?: boolean;
 }
 
 export interface AgentDefinition {
@@ -130,11 +138,19 @@ export function planProvider(p: ProviderConfig, env: NodeJS.ProcessEnv, usedProv
 }
 
 /** Primary agents use the primary model; `<name>-fallback` variants are generated with the fallback model. */
-export function buildAgents(templates: AgentTemplate[], cfg: ModelsConfig, connectorName: string): AgentDefinition[] {
+export function buildAgents(templates: AgentTemplate[], cfg: ModelsConfig, connectorName: string, options: BuildOptions = {}): AgentDefinition[] {
   const out: AgentDefinition[] = [];
   for (const t of templates) {
-    for (const [suffix, model, note] of [['', cfg.agents.primaryModel, ''], [FALLBACK_SUFFIX, cfg.agents.fallbackModel, ' (fallback model)']] as const) {
+    const delegate = options.subAgents !== false && typeof t.subAgents?.instructions === 'string';
+    for (const [suffix, model, fallbackNote] of [['', cfg.agents.primaryModel, ''], [FALLBACK_SUFFIX, cfg.agents.fallbackModel, ' (fallback model)']] as const) {
       const manifest = structuredClone(t.manifest) as Record<string, unknown>;
+      let note: string = fallbackNote;
+      if (delegate) {
+        const config = (manifest['config'] ??= {}) as Record<string, unknown>;
+        config['dynamicSubAgents'] = { enabled: true };
+        manifest['instructions'] = `${String(manifest['instructions'] ?? '')}\n\n${t.subAgents!.instructions}`;
+        note += ' (sub-agents on)';
+      }
       const params = (t.manifest.model?.params ?? {}) as Record<string, unknown>;
       manifest['model'] = { name: model, ...(Object.keys(params).length ? { params } : {}) };
       const servers = manifest['mcpServers'];
@@ -161,6 +177,8 @@ export interface SetupOptions {
   env: NodeJS.ProcessEnv;
   log(line: string): void;
   dryRun?: boolean;
+  /** Dynamic sub-agents for templates that define them (forge-coder): default on; false is setup --no-subagents. */
+  subAgents?: boolean;
 }
 
 export interface SetupReport {
@@ -176,7 +194,7 @@ export async function runSetup(o: SetupOptions): Promise<SetupReport> {
   const used = new Set([providerOf(o.cfg.agents.primaryModel), providerOf(o.cfg.agents.fallbackModel)]);
   const plans = o.cfg.providers.map((p) => planProvider(p, o.env, used));
   const connector = { ...DEFAULT_CONNECTOR, ...(o.cfg.connector ?? {}) };
-  const agents = buildAgents(o.templates, o.cfg, connector.name);
+  const agents = buildAgents(o.templates, o.cfg, connector.name, { subAgents: o.subAgents !== false });
   const report: SetupReport = { providers: plans, connector: connector.name, agents: [], missingModels: [] };
 
   for (const plan of plans) {
@@ -201,8 +219,9 @@ export async function runSetup(o: SetupOptions): Promise<SetupReport> {
 
   for (const a of agents) {
     const model = String((a.manifest['model'] as { name: string }).name);
+    const subs = ((a.manifest['config'] as { dynamicSubAgents?: { enabled?: boolean } } | undefined)?.dynamicSubAgents?.enabled === true) ? ', sub-agents on' : '';
     if (o.dryRun) {
-      o.log(`agent ${a.name}: would upsert with model ${model}`);
+      o.log(`agent ${a.name}: would upsert with model ${model}${subs}`);
       report.agents.push({ name: a.name, model, action: 'planned' });
       continue;
     }
@@ -210,7 +229,7 @@ export async function runSetup(o: SetupOptions): Promise<SetupReport> {
     const found = page.data.find((x) => x.name === a.name);
     if (found) await o.client.agents.update(found.id, { description: a.description, manifest: a.manifest as never });
     else await o.client.agents.create({ name: a.name, description: a.description, manifest: a.manifest as never });
-    o.log(`agent ${a.name}: ${found ? 'updated' : 'created'} (model ${model})`);
+    o.log(`agent ${a.name}: ${found ? 'updated' : 'created'} (model ${model}${subs})`);
     report.agents.push({ name: a.name, model, action: found ? 'updated' : 'created' });
   }
 

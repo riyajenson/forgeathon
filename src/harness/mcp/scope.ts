@@ -26,6 +26,8 @@ export interface CommandRun {
   command: string;
   exitCode: number | null;
   changedFiles: string[];
+  /** The last few thousand characters of stdout and stderr (for the observed test outcome). */
+  output?: string;
 }
 
 export class SessionScope {

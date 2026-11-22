@@ -83,7 +83,7 @@
         "forge.context.semanticSearch": {
           "type": "boolean",
           "default": false,
-          "description": "Use local semantic reranking (CPU) when keyword evidence is weak. Opt-in: first run scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the model (about 54 MB) downloads on first use. Without the runtime, ranking stays lexical and the Context block says so. Off by default: current benchmarks show higher retrieval latency."
+          "description": "Opt-in local semantic reranking (CPU) when keyword/structure evidence is weak: waits up to 200 ms, then keeps the lexical/structural shortlist. Needs scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the embedding model onnx-community/all-MiniLM-L6-v2-ONNX (about 54 MB) downloads from Hugging Face on first use. Off by default."
         },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",
@@ -92,15 +92,33 @@
         },
         "forge.commandBudget.agent": {
           "type": "integer",
-          "default": 5,
+          "default": 3,
           "minimum": 0,
-          "description": "Most commands the agent may run in one turn (asked or auto-approved). Further run_command calls are refused by the harness without asking, and the panel shows \"command budget reached\"."
+          "description": "Most commands other than test runs the agent may run in one turn (asked or auto-approved). Further run_command calls are refused by the harness without asking, and the panel shows \"command budget reached\". Test runs have forge.testCommandBudget.agent."
         },
         "forge.commandBudget.inline": {
           "type": "integer",
           "default": 1,
           "minimum": 0,
           "description": "Most commands an inline edit may run in one turn (the inline agent does not run commands today)."
+        },
+        "forge.testCommandBudget.agent": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 0,
+          "description": "Most test runs (pytest, python -m pytest) the agent may make in one turn, counted separately from other commands, so a denied or extra command never uses up a test rerun. Further test runs are refused without asking (\"test-command budget reached\")."
+        },
+        "forge.testCommandBudget.inline": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 0,
+          "description": "Most test runs an inline edit may make in one turn."
+        },
+        "forge.watchdog.modelRequestSec": {
+          "type": "integer",
+          "default": 120,
+          "minimum": 30,
+          "description": "Seconds the model may stay silent while a request is in flight (a long edit can stream nothing for a while) before the turn is stopped as unresponsive. Other waits keep the 45 s limit. A stop after the turn changed files offers Resume."
         }
       }
     }

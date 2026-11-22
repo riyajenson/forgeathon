@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { ContextReport, HarnessEvent } from 'forge-harness';
+import { proposalWarnings } from './destructive';
 
 export class AgentViewState {
   text = '';
@@ -22,12 +23,28 @@ export class AgentViewState {
   /** Set when the turn ends: every file the turn changed (then reviewed files left unchanged), on one screen. */
   summary: string[] = [];
   command?: {command: string; cwd: string; warning?: string};
+  /** Set when the turn stopped on a rate limit or a stall: Resume is offered from `at` (ms since epoch). */
+  resume?: {at: number; files: string[]; reason: 'rate_limited' | 'stalled'};
+  /** Proposals in this turn with hunks that delete a whole class or function. */
+  warnings: string[] = [];
+  /** Set when an agent turn ends: the observed outcome of its last test command, shown next to the model's summary. */
+  tests = '';
+  private compaction?: {id: string; label: string; detail: string};
 
   update(e: HarnessEvent) {
     switch (e.t) {
       case 'session': this.trace = e.traceUrl; this.model = e.model + ' (' + e.agentName + ')'; break;
       case 'turn_started': this.status = 'Running'; break;
-      case 'status': this.status = e.detail || e.state; break;
+      case 'status':
+        this.status = e.detail || e.state;
+        // Compaction also stays in the activity list: started (compacting), then finished (the next status with detail).
+        if (e.state === 'compacting') {
+          this.compaction = {id: 'compaction:' + this.tools.length, label: 'Context compaction', detail: e.detail || 'running'};
+          this.tools.push(this.compaction);
+        } else if (this.compaction && e.detail) {
+          this.compaction.detail = e.detail; this.compaction = undefined;
+        }
+        break;
       case 'text': this.text = (this.text + e.delta).slice(-100000); break;
       case 'tool_call':
         if (e.tool !== 'internal') this.tools.push({id:e.callId, label:e.displayName, detail:e.summary});
@@ -42,6 +59,7 @@ export class AgentViewState {
         this.reviewing = true; this.status = 'Review hunks in ' + e.proposal.path;
         const f = this.files[e.proposal.path] ??= {reviews: 0, hunks: 0, accepted: 0, status: ''};
         f.reviews++; f.hunks += e.proposal.hunks.length;
+        for (const w of proposalWarnings(e.proposal)) this.warnings.push(e.proposal.path + ': ' + w);
         break;
       }
       case 'command_request':
@@ -51,11 +69,22 @@ export class AgentViewState {
           break;
         }
         this.status = 'Waiting for command approval'; this.command = {command: e.command, cwd: e.cwd, ...(e.unrestricted ? {warning: e.warning || 'Unrestricted command'} : {})}; break;
-      case 'command_budget_reached':
-        // Refused by the harness without a prompt: the model was told to stop running commands.
-        this.status = 'command budget reached';
-        this.tools.push({id:'budget:' + e.callId, label:'command budget reached (' + e.budget + ' per turn): ' + e.command, detail:'not run'});
+      case 'command_budget_reached': {
+        // Refused by the harness without a prompt: the model was told to stop running commands (or tests).
+        const which = e.kind === 'test' ? 'test-command budget' : 'command budget';
+        this.status = which + ' reached';
+        this.tools.push({id:'budget:' + e.callId, label:which + ' reached (' + e.budget + ' per turn): ' + e.command, detail:'not run'});
         break;
+      }
+      case 'subagent':
+        if (e.phase === 'started') this.tools.push({id:'subagent:' + e.threadId, label:'Sub-agent: ' + e.name, detail:e.task || 'running'});
+        else {
+          const item = this.tools.find(tool => tool.id === 'subagent:' + e.threadId);
+          const detail = e.ok ? 'Done' : 'Failed' + (e.error ? ': ' + e.error : '');
+          if (item) item.detail = detail; else this.tools.push({id:'subagent:' + e.threadId, label:'Sub-agent: ' + e.name, detail});
+        }
+        break;
+      case 'resumable': this.resume = {at: Date.now() + e.retryAfterMs, files: e.changedFiles, reason: e.reason}; break;
       case 'edit_applied':
         this.reviewing = false;
         this.edits.push(e.result.path + ' | ' + e.result.status);
@@ -72,6 +101,7 @@ export class AgentViewState {
         this.status = e.summary || e.status; this.outcome = e.status; this.busy = this.reviewing = false; this.command = undefined;
         if (e.usage) this.usage = e.usage.inputTokens + ' input / ' + e.usage.outputTokens + ' output tokens';
         this.summary = this.fileSummary();
+        this.tests = testsLine(e.tests);
         break;
     }
   }
@@ -84,7 +114,18 @@ export class AgentViewState {
   }
 }
 
-type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void };
+/** The observed test outcome as one line: what actually ran, not what the model says. */
+export function testsLine(t: Extract<HarnessEvent, {t: 'done'}>['tests']): string {
+  if (!t) return '';
+  if (t.status === 'not_run') return 'Tests (observed): not run in this turn';
+  const counts = t.status === 'passed' ? 'passed' : (t.failed ? t.failed + ' failed' : 'failed (exit ' + t.exitCode + ')');
+  const result = counts + (t.summary ? ' \u2014 ' + t.summary : '');
+  const cmd = t.command ? ' \u2014 $ ' + t.command : '';
+  if (t.editedAfter?.length) return 'Tests (observed): edited after last test run (last result: ' + result + ')' + cmd + ' \u2014 changed since: ' + t.editedAfter.join(', ');
+  return 'Tests (observed): ' + result + cmd;
+}
+
+type Actions = { send(text: string): Promise<void>; stop(): Promise<void>; review(): void; command(allow: boolean): void; resume(): Promise<void> };
 export class AgentPanel implements vscode.Disposable {
   state = new AgentViewState();
   private panel?: vscode.WebviewPanel;
@@ -149,6 +190,10 @@ export class AgentPanel implements vscode.Disposable {
               await this.actions.send(m.text);
             break;
           case 'stop': await this.actions.stop(); break;
+          case 'resume':
+            // Offered only after a rate limit, once the suggested wait has passed.
+            if (!this.state.busy && this.state.resume && Date.now() >= this.state.resume.at) await this.actions.resume();
+            break;
           case 'review': this.actions.review(); break;
           case 'allow': case 'deny':
             if (this.state.command) {
@@ -174,10 +219,10 @@ button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></section>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
-<section id="context" hidden><h2>Context</h2><p id="budget"></p><ul id="selected"></ul><h2 id="skippedTitle">Skipped</h2><ul id="skipped"></ul></section>
 <section id="changes" hidden><h2>Reviewed edits</h2><ul id="edits"></ul></section>
 <script nonce="${nonce}" src="${script}"></script></body></html>`;
     panel.onDidDispose(() => {

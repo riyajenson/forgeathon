@@ -76,18 +76,39 @@ test('buildAgents makes primary and -fallback variants from each template, with 
   for (const a of agents) {
     const m = a.manifest as Record<string, any>;
     assert.deepEqual(m['mcpServers'][0].requireApprovalForTools, ['propose_edit', 'run_command']);
-    assert.equal(m['config'].dynamicSubAgents.enabled, false);
+    assert.equal(m['config'].dynamicSubAgents.enabled, a.name.startsWith('forge-coder'), `${a.name}: sub-agents on by default for forge-coder only`);
     assert.equal(m['config'].generativeUi.enabled, false);
     assert.equal(m['config'].askUserQuestions.enabled, false);
     assert.equal(m['config'].sandbox.enabled, false);
     assert.equal(m['config'].contextManagement.largeToolResponse.enabled, false);
-    assert.deepEqual(m['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 60000 } });
   }
-  assert.equal(byName['forge-coder']!['config'].iterationLimit, 60);
+  // Agent mode compacts once in Task B, after its first edit (~32-36k input tokens; a run reaches 42k or more); inline turns never get near 60k.
+  assert.deepEqual(byName['forge-coder']!['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 40000 } });
+  assert.deepEqual(byName['forge-inline']!['config'].contextManagement.compaction, { enabled: true, trigger: { type: 'input_tokens', value: 60000 } });
+  assert.equal(byName['forge-coder']!['config'].iterationLimit, 80);
   assert.equal(byName['forge-inline']!['config'].iterationLimit, 8);
   assert.deepEqual(byName['forge-inline']!['mcpServers'][0].enableTools, ['read_file', 'propose_edit']);
   assert.equal(buildAgents(templates, example, 'vscode-it')[0]!.manifest['mcpServers'] && (buildAgents(templates, example, 'vscode-it')[0]!.manifest['mcpServers'] as Array<{ name: string }>)[0]!.name, 'vscode-it');
   assert.equal((templates[0]!.manifest['model'] as Record<string, unknown>)['name'], undefined, 'templates are not mutated');
+});
+
+test('buildAgents: dynamic sub-agents and the delegation instructions on forge-coder by default; --no-subagents turns them off', () => {
+  const plain = buildAgents(templates, example, 'vscode', { subAgents: false });
+  const agents = buildAgents(templates, example, 'vscode');
+  assert.deepEqual(buildAgents(templates, example, 'vscode', { subAgents: true }), agents, 'on is the default');
+  for (const a of plain) assert.equal(((a.manifest as Record<string, any>)['config'].dynamicSubAgents ?? { enabled: false }).enabled, false, `${a.name} off with --no-subagents`);
+  const byName = Object.fromEntries(agents.map((a) => [a.name, a]));
+  const plainByName = Object.fromEntries(plain.map((a) => [a.name, a]));
+  for (const name of ['forge-coder', 'forge-coder-fallback']) {
+    const m = byName[name]!.manifest as Record<string, any>;
+    assert.equal(m['config'].dynamicSubAgents.enabled, true, name);
+    assert.ok(String(m['instructions']).startsWith(String((plainByName[name]!.manifest as Record<string, any>)['instructions'])), 'own instructions first');
+    assert.match(String(m['instructions']), /\n\nSub-agents\. create_sub_agent is available\. Use it at most once per task/);
+    assert.match(byName[name]!.description, /\(sub-agents on\)$/);
+    assert.equal('subAgents' in m, false, 'the template key is not part of the manifest');
+  }
+  for (const name of ['forge-inline', 'forge-inline-fallback']) assert.deepEqual(byName[name], plainByName[name], 'inline agents unchanged');
+  assert.equal((templates[0]!.manifest['config'] as Record<string, any>)['dynamicSubAgents'].enabled, false, 'templates are not mutated');
 });
 
 test('runSetup dry run touches nothing and never prints keys', async () => {

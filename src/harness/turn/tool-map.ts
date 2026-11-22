@@ -52,6 +52,9 @@ export function summarizeArgs(tool: string, args: unknown): string {
     case 'list_files':
       s = str(a['prefix']) || '(workspace)';
       break;
+    case 'create_sub_agent':
+      s = `${str(a['name'])}: ${str(a['input'])}`;
+      break;
     default:
       s = '';
   }

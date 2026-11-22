@@ -1,0 +1,107 @@
+{
+  "url": "http://127.0.0.1:8790",
+  "config": "/home/riyajenson/projects/forgeathon/config/models.json",
+  "results": [
+    {
+      "task": "B",
+      "startedAt": "2026-11-21T21:09:40.474Z",
+      "status": "error",
+      "seconds": 133.8,
+      "toolCalls": 13,
+      "toolsByName": {
+        "read_file": 7,
+        "search_workspace": 6
+      },
+      "edits": [],
+      "reviews": 0,
+      "reviewsByFile": {},
+      "commandPrompts": 0,
+      "autoApproved": 0,
+      "budgetReached": 0,
+      "testBudgetReached": 0,
+      "subagents": [],
+      "runtimeSessions": [
+        "01m7zz315bfy28v6ckh3ehg6d2",
+        "01m7zz315bfy28v6ckh3ehg6d2",
+        "01m7zz6hnaq23s33f701yt7t30"
+      ],
+      "sessionId": "c74697a9-b355-4afc-93c5-a3e246beb80a",
+      "turnId": "a860fa1c-f2e5-422c-b0fe-6b12af35897a",
+      "unrestrictedPrompts": 0,
+      "deniedCommands": 0,
+      "text": "",
+      "contextFiles": [
+        "src/flask/cli.py",
+        "docs/cli.rst",
+        "docs/config.rst",
+        "tests/test_config.py",
+        "src/flask/sansio/app.py",
+        "src/flask/config.py",
+        "tests/test_cli.py",
+        "src/flask/app.py"
+      ],
+      "compactions": [],
+      "malformedEdits": 0,
+      "refusedEdits": 0,
+      "warnings": [],
+      "destructiveHunks": [],
+      "contextUsed": "7456/8000 tokens, 28 items, 7 skipped",
+      "session": "http://127.0.0.1:8790/sessions?view=sessions&sessionId=01m7zz6hnaq23s33f701yt7t30",
+      "statusLines": [
+        "rate limited; retrying once in 5 s",
+        "[Model Error] Request failed (429): Too Many Requests"
+      ],
+      "fallback": "nvidia/nemotron-3-ultra → openrouter/nemotron-3-ultra-free: [Model Error] Request failed (429): Too Many Requests",
+      "resumable": {
+        "reason": "rate_limited",
+        "retryAfterMs": 60000,
+        "changedFiles": []
+      },
+      "error": "Model unavailable: [Model Error] Request failed (429): Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day: https://openrouter.ai/settings/credits?utm_source=api&utm_campaign=free_daily_limit (fallback model also failed)",
+      "tests": {
+        "status": "not_run"
+      },
+      "requests": {
+        "total": 36,
+        "status429": 23,
+        "otherErrors": 0,
+        "byModel": {
+          "nvidia nvidia/nemotron-3-ultra-550b-a55b": 31,
+          "openrouter nvidia/nemotron-3-ultra-550b-a55b:free": 5
+        }
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "B: turn done",
+      "ok": false,
+      "detail": "Model unavailable: [Model Error] Request failed (429): Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day: https://openrouter.ai/settings/credits?utm_source=api&utm_campaign=free_daily_limit (fallback model also failed)"
+    },
+    {
+      "name": "B: ≥3 files changed incl. cli.py, test_cli.py, cli.rst",
+      "ok": false,
+      "detail": ""
+    },
+    {
+      "name": "B: context report includes src/flask/cli.py",
+      "ok": true,
+      "detail": "7456/8000 tokens, 28 items, 7 skipped"
+    },
+    {
+      "name": "B: pytest tests/test_cli.py -q passes",
+      "ok": true,
+      "detail": "55 passed, 3 skipped in 0.14s"
+    },
+    {
+      "name": "B: flask --help lists config",
+      "ok": false,
+      "detail": ""
+    },
+    {
+      "name": "B: flask config prints JSON with secrets masked",
+      "ok": false,
+      "detail": "Usage: flask [OPTIONS] COMMAND [ARGS]...\nTry 'flask --help' for help.\n\nError: No such command 'config'."
+    }
+  ]
+}

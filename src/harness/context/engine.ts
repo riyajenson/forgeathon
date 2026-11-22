@@ -5,10 +5,10 @@ import type { EditorPort } from '../mcp/port';
 import { normalizeWorkspacePath } from '../mcp/paths';
 import { rankFiles, shouldUseSemantic, type RankedFile } from './rank';
 import { isBinaryText, isSecretPath, modelPathRefusal } from './files';
-import { estimateTokens } from './text';
+import { estimateTokens, terms } from './text';
 import { buildIndex, type IndexedChunk, type IndexedFile, type WorkspaceIndex } from './workspace-index';
 import { LocalSemanticRanker, type SemanticProgressHandler } from './semantic';
-import { SEMANTIC_RUNTIME_MISSING } from './semantic-runtime';
+import { SEMANTIC_RUNTIME_MISSING, semanticRuntimeInstalled } from './semantic-runtime';
 
 export interface ContextRequest {
   instruction: string;
@@ -26,7 +26,7 @@ export interface ContextRequest {
 
 export interface ContextAssemblyOptions {
   /** Test or host injection; production calls share one lazy local model worker. */
-  semanticRanker?: Pick<LocalSemanticRanker, 'rank'>;
+  semanticRanker?: Pick<LocalSemanticRanker, 'rank'> & Partial<Pick<LocalSemanticRanker, 'rankCached'>>;
   /** Reports the one-time local model load/download to the active turn. */
   onSemanticProgress?: SemanticProgressHandler;
 }
@@ -43,9 +43,10 @@ type Selection = ContextReport['selections'][number];
 type Skipped = ContextReport['skipped'][number];
 
 const MAX_RANKED_FILES = 8;
-const OUTLINE_FILES = 5;
+const OUTLINE_FILES = MAX_RANKED_FILES;
+const OUTLINE_TOKEN_CAP = 120;
 const CHUNKS_PER_FILE = 3;
-const MAX_CHUNK_SHARE = 0.15;
+const MAX_FOCUSED_EXCERPT_TOKENS = 600;
 const MAX_SEMANTIC_FILES = 20;
 const pathOrder = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
 let sharedSemanticRanker: LocalSemanticRanker | undefined;
@@ -77,12 +78,58 @@ function fence(path: string): string {
 const depth = (c: IndexedChunk): number => (c.qualname ?? '').split('.').length;
 
 /** Top-level definitions and methods (or doc section titles), one line each with its line number. */
-function outlineOf(file: IndexedFile): string {
-  return file.chunks
+function outlineOf(file: IndexedFile, queryTerms: readonly string[] = []): string {
+  const query = new Set(queryTerms);
+  const candidates = file.chunks
     .filter((c) => (c.kind === 'section' ? !!c.name : (c.kind === 'function' || c.kind === 'class') && depth(c) <= 2))
-    .slice(0, 40)
-    .map((c) => `${String(c.startLine).padStart(5)}  ${c.kind === 'section' ? `§ ${c.name}` : `${'  '.repeat(depth(c) - 1)}${c.signature ?? c.name}`}`)
-    .join('\n');
+    .map((c) => {
+      const label = c.kind === 'section' ? `§ ${c.name}` : `${'  '.repeat(depth(c) - 1)}${c.signature ?? c.name}`;
+      const words = new Set(terms(`${c.name ?? ''} ${c.signature ?? ''}`));
+      const relevance = [...words].filter((word) => query.has(word)).length;
+      return { line: `${String(c.startLine).padStart(5)}  ${label}`, startLine: c.startLine, relevance };
+    });
+  const matches = candidates.filter((candidate) => candidate.relevance > 0)
+    .sort((left, right) => right.relevance - left.relevance || left.startLine - right.startLine);
+  const outlineCandidates = (matches.length ? matches.slice(0, 8) : candidates.slice(0, 8))
+    .sort((left, right) => left.startLine - right.startLine);
+  const selected: string[] = [];
+  for (const candidate of outlineCandidates) {
+    const next = [...selected, candidate.line];
+    if (estimateTokens(next.join('\n')) <= OUTLINE_TOKEN_CAP) selected.push(candidate.line);
+  }
+  return selected.join('\n');
+}
+
+/** Keep a definition line and the most query-relevant source lines when a chunk is too large. */
+function focusedExcerpt(text: string, startLine: number, matchedTerms: readonly string[], tokenCap: number): string {
+  const lines = text.split('\n');
+  const queryTerms = matchedTerms.filter((term) => term.length > 1).map((term) => term.toLowerCase());
+  const weights = lines.map((line) => {
+    const lower = line.toLowerCase();
+    return queryTerms.reduce((score, term) => score + Number(lower.includes(term)), 0);
+  });
+  let focus = 0;
+  for (let i = 1; i < weights.length; i++) if (weights[i]! > weights[focus]!) focus = i;
+  const omission = (first: number, last: number) => `… omitted source lines ${startLine + first}-${startLine + last} …`;
+  let windowStart = Math.max(1, focus - 8);
+  let windowEnd = Math.min(lines.length - 1, windowStart + 16);
+  if (windowEnd < focus) {
+    windowEnd = focus;
+    windowStart = Math.max(1, windowEnd - 16);
+  }
+  const render = () => [
+    lines[0]!,
+    ...(windowStart > 1 ? [omission(1, windowStart - 1)] : []),
+    ...lines.slice(windowStart, windowEnd + 1),
+    ...(windowEnd < lines.length - 1 ? [omission(windowEnd + 1, lines.length - 1)] : []),
+  ].join('\n');
+  let excerpt = render();
+  while (estimateTokens(excerpt) > tokenCap && windowEnd > windowStart) {
+    if (focus - windowStart >= windowEnd - focus) windowStart++;
+    else windowEnd--;
+    excerpt = render();
+  }
+  return estimateTokens(excerpt) <= tokenCap ? excerpt : (lines[focus] ?? lines[0] ?? '');
 }
 
 function resolveSymbol(index: WorkspaceIndex, name: string): IndexedChunk[] {
@@ -204,7 +251,10 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
   const task = `${req.instruction.replace(/@(file|symbol):\S+/g, ' ')} ${pinnedSymbols}`;
   const lexical = rankFiles(index, task);
   let semanticRanks: ReadonlyMap<string, number> | undefined;
-  if (req.semanticSearch && !req.signal?.aborted && shouldUseSemantic(lexical.files, lexical.queryTerms)) {
+  const wantsSemantic = req.semanticSearch && !req.signal?.aborted && shouldUseSemantic(lexical.files, lexical.queryTerms);
+  if (wantsSemantic && !options.semanticRanker && !semanticRuntimeInstalled()) {
+    skipped.push({ path: '(semantic search)', reason: SEMANTIC_RUNTIME_MISSING, estimatedTokens: 0 });
+  } else if (wantsSemantic) {
     const candidates = new Map<string, RankedFile>();
     for (const file of lexical.files.slice(0, MAX_SEMANTIC_FILES)) candidates.set(file.path, file);
     const neighbours = lexical.files.filter((file) => file.reasons.some((reason) => /^(tests for|documents|imported by) /.test(reason)));
@@ -215,14 +265,23 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
       .map((rankedChunk) => rankedChunk.chunk));
     if (chunks.length) {
       const ranker = options.semanticRanker ?? defaultSemanticRanker();
-      semanticRanks = await ranker.rank(task, chunks, req.signal, options.onSemanticProgress);
-      const unavailable = (ranker as Partial<Pick<LocalSemanticRanker, 'unavailable'>>).unavailable;
-      if (!semanticRanks.size && unavailable && !req.signal?.aborted) {
-        skipped.push({ path: '(semantic search)', reason: unavailable.message.startsWith(SEMANTIC_RUNTIME_MISSING) ? SEMANTIC_RUNTIME_MISSING : `semantic search unavailable (${unavailable.message.slice(0, 160)}); ranking stayed lexical`, estimatedTokens: 0 });
+      semanticRanks = ranker.rankCached?.(task, chunks);
+      if (semanticRanks === undefined) {
+        const unavailable = (ranker as Partial<Pick<LocalSemanticRanker, 'unavailable'>>).unavailable;
+        if (unavailable) {
+          skipped.push({ path: '(semantic search)', reason: unavailable.message.startsWith(SEMANTIC_RUNTIME_MISSING) ? SEMANTIC_RUNTIME_MISSING : `semantic search unavailable (${unavailable.message.slice(0, 160)}); ranking stayed lexical`, estimatedTokens: 0 });
+        } else {
+          // A cache miss never delays the turn: use lexical + structural ranking now and let local
+          // embeddings warm for a later request. Fully cached semantic ranks are applied synchronously.
+          setImmediate(() => { void ranker.rank(task, chunks, req.signal, options.onSemanticProgress).catch(() => undefined); });
+          skipped.push({ path: '(semantic search)', reason: 'semantic reranking is warming in the background; lexical and structural ranking used for this turn', estimatedTokens: 0 });
+        }
       }
     }
   }
-  const { files: ranked } = rankFiles(index, task, semanticRanks);
+  // A cold or unavailable semantic pass leaves the already-computed lexical ranking unchanged.
+  // Avoid a second full BM25/graph pass unless cached semantic evidence actually exists.
+  const ranked = semanticRanks?.size ? rankFiles(index, task, semanticRanks).files : lexical.files;
   const candidates = ranked.filter((f) => f.score > 0);
   const limit = req.mode === 'inline' ? 2 : MAX_RANKED_FILES;
   const chosen = candidates.slice(0, limit);
@@ -231,12 +290,13 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
     skipped.push({ path: f.path, reason: `ranked #${limit + i + 1} (score ${f.score.toFixed(1)} vs top ${topScore.toFixed(1)}), below the cut of ${limit} files`, estimatedTokens: estimateTokens(index.files.get(f.path)?.text ?? '') });
   }
   const why = (f: RankedFile) => f.reasons.join('; ');
+  const outlineTerms = terms(req.instruction.replace(/@(file|symbol):\S+/g, ' '));
 
   if (req.mode === 'agent') {
     for (const f of chosen.slice(0, OUTLINE_FILES)) {
       if (pinnedPaths.has(f.path)) continue;
       const file = index.files.get(f.path);
-      const outline = file ? outlineOf(file) : '';
+      const outline = file ? outlineOf(file, outlineTerms) : '';
       if (!outline) continue;
       if (!add({ path: f.path, source: 'automatic', rationale: `outline · ${why(f)}`, truncated: false }, outline, `${f.path} outline (rank ${candidates.indexOf(f) + 1}, score ${f.score.toFixed(1)})`)) {
         skipped.push({ path: f.path, reason: `outline does not fit the remaining budget (${remaining} tokens left)`, estimatedTokens: estimateTokens(outline) });
@@ -244,28 +304,33 @@ export async function assembleContext(port: EditorPort, req: ContextRequest, pre
     }
   }
 
+  const excerptCap = Math.max(1, Math.min(MAX_FOCUSED_EXCERPT_TOKENS, Math.floor(budget * 0.3)));
   const pool = chosen.flatMap((f) => f.chunks
     .filter((r, chunkIndex) => r.score > 0 || r.semanticScore !== undefined || chunkIndex === 0)
     .slice(0, CHUNKS_PER_FILE)
     .map((r) => {
-      const tokens = estimateTokens(r.chunk.text);
+      const sourceTokens = estimateTokens(r.chunk.text);
+      const packedTokens = Math.min(sourceTokens, excerptCap);
       const relevance = r.relevance ?? (r.score > 0 ? r.score : f.score * 0.4);
-      return { f, r, tokens, relevance, density: relevance / Math.max(tokens, 1) };
+      return { f, r, sourceTokens, packedTokens, relevance, density: relevance / Math.max(packedTokens, 1) };
     }))
     .sort((a, b) => b.density - a.density || b.relevance - a.relevance || pathOrder(a.r.chunk.path, b.r.chunk.path) || a.r.chunk.startLine - b.r.chunk.startLine);
-  for (const { f, r, tokens } of pool) {
+  for (const { f, r, sourceTokens } of pool) {
     const c = r.chunk;
     const id = `${c.path}:${c.startLine}`;
     if (includedChunks.has(id) || pinnedPaths.has(c.path) || overlapsIncludedRange(c.path, c.startLine, c.endLine)) continue;
-    if (tokens > budget * MAX_CHUNK_SHARE) { skipped.push({ path: c.path, reason: `${c.qualname ?? c.name ?? `lines ${c.startLine}-${c.endLine}`} is too large for the budget (${tokens} tokens); the outline lists it`, estimatedTokens: tokens }); continue; }
+    const body = sourceTokens > excerptCap ? focusedExcerpt(c.text, c.startLine, r.matched, excerptCap) : c.text;
+    const tokens = estimateTokens(body);
+    const truncated = body !== c.text;
     const label = c.qualname ?? c.name;
     const matched = r.semanticScore !== undefined
       ? `semantic similarity (${r.semanticScore.toFixed(3)})`
       : r.matched.length ? `matches ${r.matched.slice(0, 4).map((t) => `"${t}"`).join(', ')}` : 'best part of a neighbour file';
+    const excerptReason = truncated ? ' · focused excerpt; omitted lines are marked, read the full file before editing' : '';
     const ok = add(
-      { path: c.path, ...(label ? { symbol: label } : {}), range: { startLine: c.startLine, endLine: c.endLine }, source: 'automatic', rationale: `${matched} · ${why(f)}`, truncated: false },
-      c.text,
-      `${c.path} lines ${c.startLine}-${c.endLine}${label ? ` · ${label}` : ''}`,
+      { path: c.path, ...(label ? { symbol: label } : {}), range: { startLine: c.startLine, endLine: c.endLine }, source: 'automatic', rationale: `${matched} · ${why(f)}${excerptReason}`, truncated },
+      body,
+      `${c.path} lines ${c.startLine}-${c.endLine}${label ? ` · ${label}` : ''}${truncated ? ' (focused excerpt)' : ''}`,
     );
     if (ok) {
       includedChunks.add(id);

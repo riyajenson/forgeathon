@@ -182,24 +182,49 @@ function cosineSimilarity(left: readonly number[], right: readonly number[]): nu
 
 export class LocalSemanticRanker {
   private worker: SemanticEmbeddingWorker | undefined;
+  private readonly queryVectors = new Map<string, readonly number[]>();
   /** Why the last rank() returned no scores, when it failed (cleared by the next success). */
   unavailable: Error | undefined;
 
   constructor(private readonly options: LocalSemanticRankerOptions = {}) {}
 
+  /** Return semantic scores without model work when this exact query and every candidate chunk are cached. */
+  rankCached(query: string, chunks: readonly IndexedChunk[]): ReadonlyMap<string, number> | undefined {
+    const key = query.trim().replace(/\s+/g, ' ').toLowerCase();
+    const queryVector = this.queryVectors.get(key);
+    if (!queryVector) return undefined;
+    const scores = new Map<string, number>();
+    for (const chunk of chunks) {
+      const id = semanticChunkId(chunk);
+      const vector = chunk.semanticVectors.get(id);
+      if (!vector) return undefined;
+      scores.set(id, cosineSimilarity(queryVector, vector));
+    }
+    // Touch the entry to keep frequently repeated queries in the bounded cache.
+    this.queryVectors.delete(key);
+    this.queryVectors.set(key, queryVector);
+    return scores;
+  }
+
   async rank(query: string, chunks: readonly IndexedChunk[], signal?: AbortSignal, onProgress?: SemanticProgressHandler): Promise<ReadonlyMap<string, number>> {
     if (!query.trim() || !chunks.length || signal?.aborted) return new Map();
 
+    const queryKey = query.trim().replace(/\s+/g, ' ').toLowerCase();
+    const cachedQuery = this.queryVectors.get(queryKey);
     const missing = chunks.filter((chunk) => !chunk.semanticVectors.has(semanticChunkId(chunk)));
     try {
-      const texts = [query, ...missing.map(embeddingText)];
+      const texts = [...(cachedQuery ? [] : [query]), ...missing.map(embeddingText)];
+      if (!texts.length) return this.rankCached(query, chunks) ?? new Map();
       const vectors = await this.client().embed(texts, signal, onProgress ?? this.options.onProgress);
       if (signal?.aborted) return new Map();
-      if (vectors.length !== texts.length || !vectors[0]?.length) throw new Error('Semantic worker returned incomplete embeddings');
+      if (vectors.length !== texts.length) throw new Error('Semantic worker returned incomplete embeddings');
 
-      const queryVector = vectors[0]!;
+      const queryVector = cachedQuery ?? vectors[0];
+      if (!queryVector?.length) throw new Error('Semantic worker returned an empty query embedding');
+      if (!cachedQuery) this.rememberQuery(queryKey, queryVector);
+      const chunkOffset = cachedQuery ? 0 : 1;
       for (let i = 0; i < missing.length; i++) {
-        const vector = vectors[i + 1];
+        const vector = vectors[i + chunkOffset];
         if (vector?.length) missing[i]!.semanticVectors.set(semanticChunkId(missing[i]!), [...vector]);
       }
 
@@ -223,6 +248,12 @@ export class LocalSemanticRanker {
       try { this.options.onUnavailable?.(error); } catch { /* fallback observers cannot block lexical retrieval */ }
       return new Map();
     }
+  }
+
+  private rememberQuery(key: string, vector: readonly number[]): void {
+    this.queryVectors.delete(key);
+    this.queryVectors.set(key, [...vector]);
+    while (this.queryVectors.size > 32) this.queryVectors.delete(this.queryVectors.keys().next().value!);
   }
 
   private client(): SemanticEmbeddingWorker {

@@ -16,7 +16,8 @@ export class Workbench implements vscode.Disposable {
   private readonly panel = new AgentPanel({
     send: text => this.run('agent', text, this.activeContext()),
     stop: () => this.stop(), review: () => this.choose(),
-    command: allow => this.commandAnswer?.(allow)
+    command: allow => this.commandAnswer?.(allow),
+    resume: () => this.resume()
   });
   private controller?: TurnController;
   private harness?: ForgeHarness;
@@ -103,7 +104,14 @@ export class Workbench implements vscode.Disposable {
     } catch (error) { await harness.dispose(); this.harness = undefined; throw error; }
   }
 
-  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext) {
+  /** Resume the last agent turn after it stopped on a rate limit: same conversation, same instruction. */
+  async resume() {
+    const target = this.controller?.resumeTarget;
+    if (!target) { this.panel.notice('Nothing to resume.'); return; }
+    await this.run('agent', target.instruction, target.context, target.turnId);
+  }
+
+  async run(mode: 'inline' | 'agent', instruction: string, context: PromptContext, resumeOf?: string) {
     if (!vscode.workspace.isTrusted || this.closed) throw new Error('A trusted workspace is required');
     if (this.pendingRun) throw new Error('A turn is already in progress');
     const run = this.pendingRun = new AbortController(); this.panel.start();
@@ -117,8 +125,13 @@ export class Workbench implements vscode.Disposable {
       // Hard per-turn limit on commands, enforced by the harness (default 3 agent, 1 inline).
       const budget = cfg.get<unknown>(`commandBudget.${mode}`);
       const commandBudget = typeof budget === 'number' && Number.isInteger(budget) && budget >= 0 ? budget : undefined;
+      // Test runs (pytest, python -m pytest) have their own budget (default 3 agent, 1 inline).
+      const tests = cfg.get<unknown>(`testCommandBudget.${mode}`);
+      const testCommandBudget = typeof tests === 'number' && Number.isInteger(tests) && tests >= 0 ? tests : undefined;
+      // Opt-in local semantic reranking (hybrid branch); off unless the setting is true.
       const semanticSearch = cfg.get<unknown>('context.semanticSearch', false) === true;
-      await controller.run(mode, instruction, context, {autoApproveSafeCommands, semanticSearch, ...(commandBudget === undefined ? {} : {commandBudget})});
+      await controller.run(mode, instruction, context, {autoApproveSafeCommands, semanticSearch, ...(commandBudget === undefined ? {} : {commandBudget}),
+        ...(testCommandBudget === undefined ? {} : {testCommandBudget}), ...(resumeOf === undefined ? {} : {resumeOf})});
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Turn failed';
       this.panel.error(message); this.panel.notice('Failed'); throw error;

@@ -21,6 +21,8 @@ export interface MeterRecord {
   error?: string;
   /** Time the request waited in the meter to keep the route's pace (--min-interval-ms). */
   queuedMs?: number;
+  /** Names of the tools offered to the model in this request (only with --log-tools). */
+  tools?: string[];
 }
 
 export interface MeterSummary {
@@ -97,7 +99,7 @@ const TAIL_CHARS = 16_384;
  * minIntervalMs: upstream requests on one route start at least this far apart (e.g. 1600 ms keeps a provider under
  * 40 requests/min, NVIDIA's free tier). Requests wait in the meter; TrueForge only sees a slower response.
  */
-export async function startMeter(o: { port?: number; routes: Record<string, string>; minIntervalMs?: number; onRecord(r: MeterRecord): void }): Promise<Meter> {
+export async function startMeter(o: { port?: number; routes: Record<string, string>; minIntervalMs?: number; logTools?: boolean; onRecord(r: MeterRecord): void }): Promise<Meter> {
   const routes = new Map(Object.entries(o.routes).map(([k, v]) => [k, new URL(v.replace(/\/+$/, ''))]));
   const nextSlot = new Map<string, number>();
   const paced = (route: string): Promise<number> => {
@@ -114,7 +116,7 @@ export async function startMeter(o: { port?: number; routes: Record<string, stri
     if (!upstream) { res.writeHead(404).end('unknown route'); return; }
     const target = new URL(`${upstream.pathname}/${rest.join('/')}`, upstream);
     let started = Date.now();
-    let base: { ts: string; route: string; path: string; queuedMs?: number } = { ts: '', route: routeName, path: `/${rest.join('/')}` };
+    let base: { ts: string; route: string; path: string; queuedMs?: number; tools?: string[] } = { ts: '', route: routeName, path: `/${rest.join('/')}` };
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', async () => {
@@ -123,7 +125,13 @@ export async function startMeter(o: { port?: number; routes: Record<string, stri
       base = { ts: new Date(started).toISOString(), route: routeName, path: base.path, ...(queuedMs ? { queuedMs } : {}) };
       const body = Buffer.concat(chunks);
       let model: string | undefined;
-      try { const m = (JSON.parse(body.toString('utf8')) as { model?: unknown }).model; if (typeof m === 'string') model = m; } catch { /* not JSON */ }
+      let tools: string[] | undefined;
+      try {
+        const parsed = JSON.parse(body.toString('utf8')) as { model?: unknown; tools?: Array<{ function?: { name?: unknown } }> };
+        if (typeof parsed.model === 'string') model = parsed.model;
+        if (o.logTools && Array.isArray(parsed.tools)) tools = parsed.tools.map((t) => String(t?.function?.name ?? '?'));
+      } catch { /* not JSON */ }
+      if (tools) base = { ...base, tools };
       const headers: http.OutgoingHttpHeaders = { ...req.headers, host: target.host, 'content-length': String(body.length) };
       delete headers['accept-encoding']; // plain responses so usage can be read; bodies are never stored
       const send = target.protocol === 'https:' ? https.request : http.request;

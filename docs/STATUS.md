@@ -1,5 +1,37 @@
 # Project status
 
+**2026-11-22, finals build (`harness/p14-trueforge-depth` → `main`, tag `round1-extended`, protocol 0.4.8):**
+- **Daytona (p15, merged):** `scripts/daytona-spike.sh` 8/8 with a key that has sandbox and snapshot write/delete permissions
+  (environment ready in 10–20 s, whole spike 27–35 s; sandboxes 1 vCPU / 1 GiB / 3 GiB, auto-stopped after ~5 min, deleted 10 min
+  later). Opt-in only; Code Mode can call read-only tools (files it reads go to Daytona's cloud), `propose_edit` is refused there.
+- **Real runs on p14 before the merge** (5710431, nvidia-free, paced ≤ 20 requests/min, pre-flight HTTP 200 each): A 6/6
+  (7.6 s first diff), B 6/6 (63.0 s / 184 s, 45 requests), C 3/3 (401 → OpenRouter), B prefixed with a read-only sub-agent
+  request 6/6 (59.9 s / 203 s, 44 requests; `create_sub_agent` offered in 43 of 44 requests, never called). 0 × 429 in 100 requests.
+  Sub-agents: 0 delegations in 6 real runs. Records: `~/forge-review/finals/p14-final-1044/`.
+- **Merge of `feature/hybrid-efficiency-native`** (38 commits incl. 658243d) via `integrate/hybrid-into-p14`. Kept from p14: contracts
+  (0.4.8 = 0.4.7 + optional `semanticSearch` and the unconfirmed cancel acknowledgement), the forge-coder prompt, separate test
+  budget (3 + 3), watchdog/Resume, sandbox mounts and redaction, hunk warnings, observed test status. Kept from the hybrid branch:
+  multi-select hunk picker with live diff preview (now with the warnings), per-hunk apply/undo, background indexing, semantic
+  search (**opt-in**, default changed back to off), bwrap Stop fix, `cd`-prefix refusal, 4000-token context default, responsiveness
+  gates and recording tooling. Dropped: the single budget of 5 with a test reserve and rerun-after-fix rule, and 658243d's
+  candidate-file-plan prompt line. Offline: 204 unit, 25 integration, e2e-mock 24/24 in both modes, UI suites, UI e2e, live,
+  responsiveness 3/3 (the injected 200 ms stall fails by design); CI green on 0be9897.
+- **Real runs on the merged build** (0be9897, same settings): A 6/6 (8.9 s), B 6/6 (100.3 s first diff, 216.8 s, 48 requests;
+  compaction fired once, before the first edit), C 3/3 (401 → OpenRouter, 9.9 s). 0 × 429. `docs/writeup/rehearsal.json`;
+  records `~/forge-review/finals/integrate-real-1457/`.
+
+**2026-11-21, phase 3 (`harness/p14-trueforge-depth`, protocol 0.4.6):** 120 s silence limit while a model
+request is in flight, Resume after a stall following writes, warnings for hunks that delete a whole class or function,
+and the observed test outcome next to the model's summary. All 13 offline suites pass. Sub-agents: 0 delegations in 2
+more real runs with a "delegate first" instruction (4 in all), so the wording is reverted and sub-agents stay off. The
+second run hit persistent 429s (NVIDIA, then OpenRouter's daily cap) and the batch stopped. See REHEARSAL-P14, phase 3.
+
+**2026-11-21, finals branch `harness/p14-trueforge-depth` (phase 2):** protocol 0.4.5 adds a separate test-command
+budget, Resume after a rate limit and sub-agent events (`setup-trueforge.mjs --subagents`, off by default). All 13
+offline suites pass on 9883169 (149 unit, 22 integration, e2e-mock 24/24 in both modes, UI suites). Real batch on a new
+NVIDIA key, paced at 20 requests per minute or fewer: Task B with compaction at 40k scored 3/6 (watchdog after edits)
+and 6/6; with sub-agents on, 6/6 and 5/6, and the model never delegated. 0 × 429 in 236 requests. Details:
+`docs/harness/REHEARSAL-P14.md`, phase 2.
 **2026-11-21, round-1 deadline extended to 22 Nov:** `main` is the updated round-1 submission (branch
 `feature/hybrid-efficiency-native` merged; tag `round1-final`; the first round-1 build stays at tag `round1-submission`).
 The video will be re-recorded on this build; until then the write-up links the current video.
@@ -158,7 +190,7 @@ per provider.
   relative paths (mock-tested only).
 - It split `cli.py` into 3 reviews and `test_cli.py` into 2 although the instructions say one call per file.
 - Token use comes from 49 steps that each resend the growing conversation (largest tool result 6.5k chars;
-  compaction at 60k tokens was not reached).
+  compaction at 60k tokens was not reached; the finals branch compacts at 40k).
 - Tightening the verification instructions: done in the tuning round below.
 
 ## Guardrails round (2026-11-19, branches harness/p11-command-budget, docs/readme-final)
@@ -331,7 +363,7 @@ All automated checks use the scripted demo model: they prove the plumbing, not r
   after review, undo of created files — all tested.
 - **TrueForge depth:** deferred `find_symbol` / `list_files` (loaded through `call_tool`, visible in the session
   view); approvals for `propose_edit` / `run_command`; compaction configured (60k tokens) but not reached by the
-  demo tasks — documented honestly.
+  demo tasks — documented honestly (finals branch: 30k, fires in Task B; `docs/harness/REHEARSAL-P14.md`).
 - **run_command:** git status before/after, changed files reported, counts as a write; workspace `.venv` first on PATH.
 
 ## Rehearsal of 19 Nov (`main` at `e5afea6`; historical, superseded by `docs/writeup/rehearsal.json`)
@@ -439,6 +471,8 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
   proposals despite its instructions. NVIDIA's free tier is ≈ 40 requests/min account-wide: Task B peaked well below that, but two Task B
   runs back to back could approach it (TrueForge resends a 429 up to 4 times, then the harness retries once, then
   falls back to OpenRouter, whose free tier allows 50 requests/day without credit).
+- Compaction (agent mode, 40k input tokens on harness/p14-trueforge-depth) fires once in Task B, after the first
+  edit. At 30k it fired before the first edit and doubled the turn time (`docs/harness/REHEARSAL-P14.md`).
 - Compaction is configured but never triggered by the demo tasks.
 - **Follow-up, not fixed: repeated identical edit rejections.** In the 21 Nov rehearsal's Task B (`f2f87bb`, passed
   6/6) the model sent 24 `propose_edit` calls whose `old_text` equalled `new_text` (it was trying to add a missing

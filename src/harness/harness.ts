@@ -25,8 +25,12 @@ export interface HarnessOptions {
   prewarmIndex?: boolean;
   /** How long cancel waits for TrueForge to confirm. Default 5000 ms. */
   cancelTimeoutMs?: number;
-  /** No TrueForge events for this long while running → cancel and treat as model unavailable. Default 45000 ms. */
+  /** No TrueForge events for this long while running → cancel and treat as model unavailable. Default 45000 ms.
+   *  Applies outside model requests; see modelWatchdogMs. */
   watchdogMs?: number;
+  /** The same limit while a model request is in flight: a long generation (a large edit) can stream nothing for a
+   *  while. Default 120000 ms (setting forge.watchdog.modelRequestSec). */
+  modelWatchdogMs?: number;
   /** How long a finished attempt waits for its tool calls to settle before deciding on retry/fallback. Default 10000 ms. */
   settleMs?: number;
   /** Delay before the single retry of an unavailable model. Default 2000 ms. */
@@ -159,10 +163,23 @@ class ForgeHarnessImpl implements ForgeHarness {
     if (b.commandBudget !== undefined && !(Number.isInteger(b.commandBudget) && b.commandBudget >= 0)) {
       return refuse(req, err('invalid', 'commandBudget must be a non-negative integer'));
     }
+    if (b.testCommandBudget !== undefined && !(Number.isInteger(b.testCommandBudget) && b.testCommandBudget >= 0)) {
+      return refuse(req, err('invalid', 'testCommandBudget must be a non-negative integer'));
+    }
+    if (b.resumeOf !== undefined && (typeof b.resumeOf !== 'string' || !b.resumeOf)) return refuse(req, err('invalid', 'resumeOf must be a turn id'));
     const session = this.sessions.get(b.sessionId);
     if (!session || session.state !== 'open') return refuse(req, err('invalid', 'unknown or closed session'));
     if (session.turns.has(b.turnId)) return refuse(req, err('conflict', 'turnId already exists in this session'));
     if (session.active && !session.active.done) return refuse(req, err('conflict', 'another turn is still running in this session', true));
+    let resumeFrom: ReturnType<() => TurnRun['resumable']>;
+    if (b.resumeOf !== undefined) {
+      const prior = session.turns.get(b.resumeOf);
+      if (!prior) return refuse(req, err('invalid', 'resumeOf names no turn of this session'));
+      if (prior.req.mode !== b.mode) return refuse(req, err('invalid', 'a resumed turn must use the mode of the turn it resumes'));
+      resumeFrom = prior.resumable;
+      if (!resumeFrom) return refuse(req, err('conflict', 'that turn cannot be resumed: it did not stop on a rate limit or a stall, or it was already resumed'));
+      prior.markResumed(b.turnId);
+    }
 
     const agentName = b.mode === 'inline' ? (this.options.agents?.inline ?? 'forge-inline') : (this.options.agents?.agent ?? 'forge-coder');
     const client = this.client;
@@ -184,10 +201,12 @@ class ForgeHarnessImpl implements ForgeHarness {
       agentModel: (agent) => this.modelOf(agent),
       cancelTimeoutMs: this.options.cancelTimeoutMs ?? 5000,
       watchdogMs: this.options.watchdogMs ?? 45000,
+      modelWatchdogMs: this.options.modelWatchdogMs ?? 120000,
       contextBudgetTokens: this.options.contextBudgetTokens ?? 4000,
       retryDelayMs: this.options.retryDelayMs ?? 2000,
       settleMs: this.options.settleMs ?? 10000,
       turnLogPath: this.options.turnLogPath === undefined ? defaultTurnLogPath() : this.options.turnLogPath || undefined,
+      resumeFrom,
     });
     session.turns.set(b.turnId, run);
     session.active = run;
@@ -220,7 +239,7 @@ class ForgeHarnessImpl implements ForgeHarness {
     if (bad) return refuse(req, bad);
     const run = this.sessions.get(req.body?.sessionId)?.turns.get(req.body?.turnId);
     if (!run) return refuse(req, err('invalid', 'unknown turn'));
-    return reply(req, await run.cancel());
+    return reply(req, run.requestCancel());
   }
 
   async getSessionStatus(req: Request<{ sessionId: SessionId }>): Promise<Response<SessionStatus>> {

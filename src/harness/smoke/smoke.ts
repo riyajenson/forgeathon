@@ -17,6 +17,8 @@
 // Task R (mock model only, scripts/e2e-mock.sh): the resume path. The scripted model makes Task A's edit, then
 // answers 429 until the turn stops with resumable; the smoke resumes it after 1 s and checks the outcome.
 // --no-subagents: Task C's temporary re-setup turns dynamic sub-agents off (use it when the agents were set up so).
+// --task-b-prefix TEXT: put TEXT and a space before Task B's instruction (for example a request to delegate the
+// exploration to a sub-agent); the checks are unchanged.
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -317,7 +319,8 @@ async function main(): Promise<void> {
       check('A: docstring lists every false value (0, false, no, off, n)', docstring !== '' && missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : '');
     }
     if (tasks.includes('B')) {
-      const bBody = { mode: 'agent' as const, instruction: TASK_B, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) };
+      const bPrefix = arg('--task-b-prefix', '').trim();
+      const bBody = { mode: 'agent' as const, instruction: bPrefix ? `${bPrefix} ${TASK_B}` : TASK_B, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) };
       const b = await turn(h, ws, 'B', bBody, 'accept', meterLog);
       results.push(b);
       if (b.resumable && process.argv.includes('--resume-after-rate-limit')) {

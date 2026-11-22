@@ -231,6 +231,7 @@ exports.run = async () => {
     assert.deepEqual(state.tools,[{id:'ctx',label:'gather_context',detail:'Done: one selected'}]);
     assert.deepEqual(state.context,report);
     assert.match(state.banner,/unreachable.*backup/);
+    assert.equal(state.recovery,'primary \u2192 backup \u2014 reason: unreachable. The turn restarted on the fallback model in a fresh TrueForge session (its own trace). The failed attempt changed no files: Forge falls back only before any edit or command has taken effect.');
     assert.equal(wb.reviewControlsOpen(),false,'a command approval does not open edit-review controls');
     wb.choose(); wb.decideAll('accept');
     await delay(50);

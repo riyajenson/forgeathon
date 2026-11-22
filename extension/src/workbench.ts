@@ -41,8 +41,8 @@ export class Workbench implements vscode.Disposable {
   }
   events(event: HarnessEvent) {
     this.panel.event(event);
-    // Also notify outside the panel, which may be closed during an inline edit.
-    if (event.t === 'fallback') {
+    // Also notify outside the panel when it is not visible (an inline edit); a visible panel shows the recovery card.
+    if (event.t === 'fallback' && !this.panel.visible) {
       void vscode.window.showWarningMessage('Primary model failed: ' + event.reason + ' → switched to ' + event.toModel);
     } else if (event.t === 'error') {
       void vscode.window.showErrorMessage('Forge: ' + event.error.message);

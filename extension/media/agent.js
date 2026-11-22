@@ -44,6 +44,8 @@
     setText('model', s.model ? 'Model: ' + s.model + (s.usage ? ' | ' + s.usage : '') : '');
     setText('banner', s.banner);
     setHidden('banner', !s.banner);
+    setHidden('recovery', !s.recovery);
+    setText('recoveryText', s.recovery || '');
     setHidden('trace', !s.trace);
     setHidden('cmd', !s.command);
     setText('cmdText', s.command

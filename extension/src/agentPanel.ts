@@ -32,6 +32,8 @@ export class AgentViewState {
   tests = '';
   /** Set when an agent turn that changed files ends: Verified, or Unverified with the reason (see verification.ts). */
   verification = '';
+  /** Set when the turn fell back: one card with both models, the reason and the workspace effect (see recoveryCard). */
+  recovery = '';
   private compaction?: {id: string; label: string; detail: string};
 
   update(e: HarnessEvent) {
@@ -98,7 +100,7 @@ export class AgentViewState {
         }
         if (e.result.status === 'save_failed') this.banner = 'Applied to the buffer. Save failed. Inspect the document before retrying Save.';
         break;
-      case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; break;
+      case 'fallback': this.banner = 'Primary model failed: ' + e.reason + ' \u2192 switched to ' + e.toModel; this.recovery = recoveryCard(e); break;
       case 'error': this.banner = e.error.message + '; workspace effect: ' + e.error.workspaceEffect; break;
       case 'done':
         this.status = e.summary || e.status; this.outcome = e.status; this.busy = this.reviewing = false; this.command = undefined;
@@ -116,6 +118,13 @@ export class AgentViewState {
     return [...all.filter(([, f]) => f.accepted > 0).map(([path, f]) => path + ' | ' + counts(f) + ' | ' + f.status),
       ...all.filter(([, f]) => f.accepted === 0).map(([path, f]) => path + ' | ' + counts(f) + ' | not changed')];
   }
+}
+
+/** The fallback as one card: which model failed and why, which model took over, and what that means for the workspace. */
+export function recoveryCard(e: Extract<HarnessEvent, {t: 'fallback'}>): string {
+  return e.fromModel + ' \u2192 ' + e.toModel + ' \u2014 reason: ' + e.reason + '. The turn restarted on the fallback model in a fresh ' +
+    'TrueForge session (its own trace). The failed attempt changed no files: Forge falls back only before any edit or command ' +
+    'has taken effect.';
 }
 
 /** The observed test outcome as one line: what actually ran, not what the model says. */
@@ -176,6 +185,8 @@ export class AgentPanel implements vscode.Disposable {
   /** The command decision was given elsewhere (quick pick): retire the panel's Allow/Deny buttons. */
   commandAnswered() { if (this.state.command) { const eventAt = performance.now(), wallAt = Date.now(); this.state.command = undefined; this.refreshControl(eventAt, wallAt); } }
   error(message: string) { const eventAt = performance.now(), wallAt = Date.now(); this.state.banner = message; this.refreshControl(eventAt, wallAt); }
+  /** True while the Forge Agent panel is shown, so notices need not be repeated outside it. */
+  get visible(): boolean { return this.panel?.visible === true; }
   open() {
     if (this.panel) { this.panel.reveal(vscode.ViewColumn.Beside); return; }
     const media = vscode.Uri.joinPath(vscode.Uri.file(__dirname), '..', 'media');
@@ -223,7 +234,7 @@ button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><p id="verification" role="alert" hidden></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><p id="verification" role="alert" hidden></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><section id="recovery" hidden><h2>Recovered by fallback</h2><p id="recoveryText"></p></section><button id="trace" hidden>Open TrueForge session</button>
 <section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></section>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>

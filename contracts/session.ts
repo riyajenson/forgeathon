@@ -5,6 +5,8 @@ import type { Request, Response, SessionId, TurnId, TurnRef } from './protocol';
 
 export type TurnRequest = TurnRef & PromptContext & {
   mode: 'inline' | 'agent'; instruction: string;
+  /** 0.4.8 (hybrid branch): allow local semantic reranking when lexical/structural evidence is weak; opt-in, off by default. */
+  semanticSearch?: boolean;
   /** 0.4.3, default off: the adapter allows pytest, python -m pytest, git status and git diff (no shell
    * operators, 0.4.4) itself and reports them with command_request.autoApproved. Everything else, unrestricted
    * commands and edits are never auto-approved. */
@@ -24,6 +26,7 @@ export type TurnRequest = TurnRef & PromptContext & {
 export type SessionStatus = {
   sessionId: SessionId; state: 'open' | 'closed'; activeTurnId: string | null;
 };
+/** `unconfirmed` means cancellation was acknowledged before the turn reached a terminal state; streamed `done` is authoritative. */
 export type CancelStatus = 'confirmed' | 'already_terminal' | 'unconfirmed';
 // Local adapter methods. Only envelopes and individual events cross a transport.
 export interface ForgeHarness {

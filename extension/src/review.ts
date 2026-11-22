@@ -8,8 +8,10 @@ const refKey = (r: TurnRef) => JSON.stringify([r.sessionId, r.turnId]);
 const key = (r: TurnRef & { callId: string; proposalId: string }) =>
   JSON.stringify([r.sessionId, r.turnId, r.callId, r.proposalId]);
 type Choice = 'accept' | 'reject';
-type Receipt = { doc: vscode.TextDocument; before: string; after: string; saveOnUndo: boolean; created?: boolean };
-type Approval = { path: string; base: string | null; digest: string; ids: readonly string[] };
+type UndoHunk = { startOffset: number; endOffset: number; oldText: string };
+type Receipt = { doc: vscode.TextDocument; before: string; after: string; saveOnUndo: boolean; undoHunks?: readonly UndoHunk[]; created?: boolean };
+type ApprovedHunk = Pick<EditProposal['hunks'][number], 'startOffset' | 'endOffset' | 'oldText' | 'newText'>;
+type Approval = { path: string; base: string | null; digest: string; ids: readonly string[]; hunks: readonly ApprovedHunk[] };
 
 // Compose the preview while the user is reviewing. applyText uses the adapter's exact text.
 export function preview(p: EditProposal, choices?: Readonly<Record<string, Choice>>) {
@@ -58,7 +60,9 @@ export class EditReview implements vscode.Disposable {
     const ids = p.hunks.filter(h => choices[h.hunkId] === 'accept').map(h => h.hunkId);
     this.approvals.delete(key(p));
     if (ids.length) this.approvals.set(key(p), { path: p.path, base: p.baseSha256,
-      digest: hash(preview(p, choices)), ids });
+      digest: hash(preview(p, choices)), ids,
+      hunks: p.hunks.filter(h => choices[h.hunkId] === 'accept')
+        .map(({ startOffset, endOffset, oldText, newText }) => ({ startOffset, endOffset, oldText, newText })) });
     return { kind: 'edit', sessionId: p.sessionId, turnId: p.turnId, callId: p.callId,
       proposalId: p.proposalId, hunks: { ...choices } };
   }
@@ -90,12 +94,21 @@ export class EditReview implements vscode.Disposable {
       if (current !== a.base) return { ...base, status: 'stale', expectedSha256: a.base, observedSha256: current };
       if (a !== this.approvals.get(id) || !this.isActive(r) || !vscode.workspace.isTrusted) return denied;
       this.approvals.delete(id);
+      let offsetDelta = 0;
+      const undoHunks = a.hunks.map((hunk) => {
+        const startOffset = hunk.startOffset + offsetDelta;
+        offsetDelta += hunk.newText.length - (hunk.endOffset - hunk.startOffset);
+        return { startOffset, endOffset: startOffset + hunk.newText.length, oldText: hunk.oldText };
+      });
       const edit = new vscode.WorkspaceEdit();
-      edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(before.length)), r.text);
+      for (const hunk of a.hunks) {
+        edit.replace(doc.uri, new vscode.Range(doc.positionAt(hunk.startOffset), doc.positionAt(hunk.endOffset)), hunk.newText);
+      }
       submitted = true;
       if (!await vscode.workspace.applyEdit(edit)) return { ...base, status: 'failed_before_apply', message: 'VS Code declined the text edit' };
       const undoId = randomUUID();
-      const receipt = { doc, before, after: digest, saveOnUndo: false };
+      const receipt: Receipt = { doc, before, after: digest, saveOnUndo: false,
+        ...(hash(doc.getText()) === digest ? { undoHunks } : {}) };
       this.receipts.set(undoId, receipt);
       const details = () => ({ ...base, appliedHunkIds: [...a.ids], undo: { undoId, path: r.path, expectedPostSha256: receipt.after } });
       let result: ApplyTextResult;
@@ -109,6 +122,7 @@ export class EditReview implements vscode.Disposable {
         if (saved && !doc.isDirty) {
           receipt.after = hash(doc.getText());
           receipt.saveOnUndo = true;
+          if (receipt.after !== digest) delete receipt.undoHunks;
           result = { ...details(), status: 'saved', savedTextSha256: receipt.after };
         } else {
           result = { ...details(), status: 'save_failed', message: 'Inspect the document and retry Save',
@@ -182,7 +196,13 @@ export class EditReview implements vscode.Disposable {
         return;
       }
       const edit = new vscode.WorkspaceEdit();
-      edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), r.before);
+      if (r.undoHunks) {
+        for (const hunk of r.undoHunks) {
+          edit.replace(doc.uri, new vscode.Range(doc.positionAt(hunk.startOffset), doc.positionAt(hunk.endOffset)), hunk.oldText);
+        }
+      } else {
+        edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), r.before);
+      }
       if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code declined undo');
       if (hash(doc.getText()) !== hash(r.before)) {
         r.after = hash(doc.getText()); // keep the receipt: Undo can be retried after inspection

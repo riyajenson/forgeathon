@@ -17,5 +17,7 @@ python3 -m venv "$work/venv" && "$work/venv/bin/pip" install -q -e "$work/flask"
 "$repo/scripts/dev-mock.sh" --background
 trap '"$repo/scripts/dev-mock.sh" stop; rm -rf "$work"' EXIT
 
-export PATH="$work/venv/bin:$PATH" VIRTUAL_ENV="$work/venv" FORGE_EDH_WORKSPACE="$work/flask"
+# The extension talks to the scripted TrueForge started above (TRUEFORGE_PORT, default 8790).
+export PATH="$work/venv/bin:$PATH" VIRTUAL_ENV="$work/venv" FORGE_EDH_WORKSPACE="$work/flask" \
+  TRUEFORGE_URL="http://127.0.0.1:${TRUEFORGE_PORT:-8790}"
 "$repo/scripts/test-extension.sh" "${FORGE_E2E_TEST:-tasks.cjs}"

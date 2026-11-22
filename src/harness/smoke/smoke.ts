@@ -7,7 +7,7 @@
 // --deny-unrestricted: deny commands flagged unrestricted instead of allowing them (as in the demo video).
 // Task G (mock model only, scripts/e2e-mock.sh): the guardrails. The scripted model sends a malformed propose_edit
 // twice on one file, then five commands (git status, python -c, the unrestricted `ls src`, git status, git diff);
-// the harness must flag `ls src` as unrestricted, refuse the last two by the command budget (3) without prompting,
+// the harness must flag `ls src` as unrestricted, refuse the last two by the command budget (set to 3 for this task; the default is 5) without prompting,
 // and spell out the propose_edit argument shape in the second refusal.
 // --meter-log: the log of scripts/model-meter.mjs, to report model requests and 429s per task (TrueForge's
 // internal retries included).
@@ -78,6 +78,8 @@ interface TurnStats {
   turnId?: string;
   /** TrueForge sessions the turn ran in (more than one after a fallback). */
   runtimeSessions: string[];
+  /** Every run_command call in order, with what happened to it (auto-approved, allow, deny, budget, shape). */
+  commands: Array<{ command: string; outcome: string }>;
   /** The model's reply text. */
   text: string;
   fallback?: string;
@@ -132,11 +134,12 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
   const t0 = Date.now();
   const sub = await h.submitTurn(req({ ...body, sessionId, turnId }));
   if (!sub.ok) throw new Error(sub.error.message);
-  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, testBudgetReached: 0, subagents: [], runtimeSessions: [], sessionId, turnId, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [], compactions: [], malformedEdits: 0, refusedEdits: 0, warnings: [], destructiveHunks: [] };
+  const stats: TurnStats = { task, startedAt: new Date(t0).toISOString(), status: 'unknown', seconds: 0, toolCalls: 0, toolsByName: {}, edits: [], reviews: 0, reviewsByFile: {}, commandPrompts: 0, autoApproved: 0, budgetReached: 0, testBudgetReached: 0, subagents: [], commands: [], runtimeSessions: [], sessionId, turnId, unrestrictedPrompts: 0, deniedCommands: 0, text: '', contextFiles: [], compactions: [], malformedEdits: 0, refusedEdits: 0, warnings: [], destructiveHunks: [] };
   const toolNames = new Map<string, string>();
   const proposals = new Map<string, { path: string; summary: string; hunks: readonly { hunkId: string; oldText: string; newText: string; deletes?: readonly { kind: string; name: string; lines: number }[] }[] }>();
   const compactionTimes: number[] = [];
   let firstDiffAt: number | undefined;
+  const commandOf = new Map<string, { command: string; outcome: string }>();
   for await (const r of h.stream(req({ sessionId, turnId, afterSequence: 0 }))) {
     if (!r.ok) { stats.error = r.error.message; break; }
     const e: HarnessEvent = r.body;
@@ -151,13 +154,17 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
         stats.toolsByName[e.displayName] = (stats.toolsByName[e.displayName] ?? 0) + 1;
         toolNames.set(e.callId, e.displayName);
         console.log(`  [${task}] tool ${e.displayName} ${e.summary}`);
+        if (e.displayName === 'run_command') { const c = { command: e.summary, outcome: 'pending' }; commandOf.set(e.callId, c); stats.commands.push(c); }
         break;
-      case 'tool_result':
+      case 'tool_result': {
         if (!e.ok) {
           console.log(`  [${task}]   failed: ${e.summary}`);
           if (toolNames.get(e.callId) === 'propose_edit') stats[editFailureKind(e.summary) === 'malformed' ? 'malformedEdits' : 'refusedEdits']++;
         }
+        const c = commandOf.get(e.callId);
+        if (c && !e.ok && /COMMAND_SHAPE/.test(e.summary)) c.outcome = 'refused: shape';
         break;
+      }
       case 'review_request': {
         const p = e.proposal;
         stats.reviews++;
@@ -171,16 +178,19 @@ async function turn(h: ForgeHarness, workspace: string, task: string, body: Omit
         break;
       }
       case 'command_request': {
-        if (e.autoApproved) { stats.autoApproved++; console.log(`  [${task}] command ${e.command} → auto-approved`); break; }
+        const c = commandOf.get(e.callId);
+        if (c) c.command = e.command;
+        if (e.autoApproved) { if (c) c.outcome = 'auto-approved'; stats.autoApproved++; console.log(`  [${task}] command ${e.command} → auto-approved`); break; }
         stats.commandPrompts++;
         const allow = !(e.unrestricted && process.argv.includes('--deny-unrestricted'));
         if (e.unrestricted) stats.unrestrictedPrompts++;
         if (!allow) stats.deniedCommands++;
+        if (c) c.outcome = `${allow ? 'allowed' : 'denied'}${e.unrestricted ? ' (unrestricted)' : ''}`;
         console.log(`  [${task}] command ${e.command}${e.unrestricted ? ' (UNRESTRICTED)' : ''} → ${allow ? 'allow' : 'deny'}`);
         await h.submitReview(req({ sessionId, turnId, callId: e.callId, kind: 'command' as const, allow }));
         break;
       }
-      case 'command_budget_reached':
+      case 'command_budget_reached': { const c = commandOf.get(e.callId); if (c) { c.command = e.command; c.outcome = `refused: ${e.kind === 'test' ? 'test-command' : 'command'} budget`; } }
         if (e.kind === 'test') stats.testBudgetReached++; else stats.budgetReached++;
         console.log(`  [${task}] command ${e.command} → refused: ${e.kind === 'test' ? 'test-command' : 'command'} budget (${e.budget}) reached`);
         break;
@@ -351,7 +361,7 @@ async function main(): Promise<void> {
     }
     if (tasks.includes('G')) {
       await sh('git', ['checkout', '--', '.'], ws);
-      const g = await turn(h, ws, 'G', { mode: 'agent', instruction: GUARD_TASK, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) }, 'accept', meterLog);
+      const g = await turn(h, ws, 'G', { mode: 'agent', instruction: GUARD_TASK, commandBudget: 3, ...(autoApprove ? { autoApproveSafeCommands: true } : {}) }, 'accept', meterLog);
       results.push(g);
       check('G: turn done', g.status === 'done', g.error ?? '');
       const shown = g.commandPrompts + g.autoApproved;
@@ -417,6 +427,7 @@ async function main(): Promise<void> {
   for (const s of results.flatMap((x) => (x.resumed ? [x, x.resumed] : [x]))) {
     console.log(`${s.task}: ${s.status} in ${s.seconds}s, ${s.toolCalls} tool calls ${JSON.stringify(s.toolsByName)}, ${s.reviews} review(s) ${JSON.stringify(s.reviewsByFile)}, ${s.commandPrompts} command approval(s), ${s.autoApproved} auto-approved, ${s.budgetReached} refused by the budget, ${s.unrestrictedPrompts} unrestricted (${s.deniedCommands} denied), tokens ${s.usage ? `${s.usage.inputTokens} in / ${s.usage.outputTokens} out` : 'n/a'}`);
     if (s.firstDiffMs !== undefined) console.log(`   first diff after ${(s.firstDiffMs / 1000).toFixed(1)} s`);
+    for (const c of s.commands) console.log(`   command: ${c.command} → ${c.outcome}`);
     if (s.requests) console.log(`   model requests: ${s.requests.total} (${s.requests.status429} × 429, ${s.requests.otherErrors} other errors) ${JSON.stringify(s.requests.byModel)}`);
     if (s.contextUsed) console.log(`   context: ${s.contextUsed}: ${s.contextFiles.join(', ')}`);
     console.log(`   edits: ${s.edits.join('; ') || 'none'}`);

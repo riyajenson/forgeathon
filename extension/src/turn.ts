@@ -10,7 +10,7 @@ export type TurnView = {
   notice(text: string): void;
 };
 type Active = { stopped: boolean; ref?: TurnRef; last: number; submitted: boolean };
-export type TurnOptions = {autoApproveSafeCommands?: boolean; commandBudget?: number; testCommandBudget?: number; resumeOf?: string};
+export type TurnOptions = {autoApproveSafeCommands?: boolean; commandBudget?: number; testCommandBudget?: number; resumeOf?: string; semanticSearch?: boolean};
 /** The last agent turn, when it stopped on a rate limit: what Resume sends again. */
 export type ResumeTarget = { turnId: string; instruction: string; context: PromptContext };
 export class TurnController {
@@ -45,7 +45,8 @@ export class TurnController {
         ...(options.autoApproveSafeCommands === true ? {autoApproveSafeCommands: true} : {}),
         ...(options.commandBudget === undefined ? {} : {commandBudget: options.commandBudget}),
         ...(options.testCommandBudget === undefined ? {} : {testCommandBudget: options.testCommandBudget}),
-        ...(options.resumeOf === undefined ? {} : {resumeOf: options.resumeOf})}));
+        ...(options.resumeOf === undefined ? {} : {resumeOf: options.resumeOf}),
+        ...(options.semanticSearch === true ? {semanticSearch: true} : {})}));
       if (!turn.ok) throw new Error(turn.error.message);
       a.submitted = true;
       if (a.stopped) await this.stop();

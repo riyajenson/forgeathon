@@ -77,8 +77,13 @@
         "forge.context.budgetTokens": {
           "type": "integer",
           "minimum": 1,
-          "default": 8000,
+          "default": 4000,
           "description": "Agent-mode context budget in tokens."
+        },
+        "forge.context.semanticSearch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in local semantic reranking (CPU) when keyword/structure evidence is weak: waits up to 200 ms, then keeps the lexical/structural shortlist. Needs scripts/enable-semantic-search.sh (installs the runtime, about 230 MB); the embedding model onnx-community/all-MiniLM-L6-v2-ONNX (about 54 MB) downloads from Hugging Face on first use. Off by default."
         },
         "forge.autoApproveSafeCommands": {
           "type": "boolean",

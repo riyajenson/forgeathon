@@ -12,7 +12,7 @@ const { configuredHarness } = require('../out/connect');
 
 const run = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const { until } = require('./driver.cjs');
+const { until, renderer } = require('./driver.cjs');
 const TASK_A = "Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false.";
 const TASK_B = 'Add a new built-in CLI command flask config that prints the loaded application\'s configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as "***". It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands.';
 
@@ -41,6 +41,60 @@ async function withAnswers(ui, choice, work, { stopAtFirstReview = false } = {})
   return seen;
 }
 
+// Where keyboard focus is: the extension API (active editor, window focus) and, when the test profile has a
+// DevTools port (FORGE_TEST_CDP_PROFILE), the workbench DOM (focused element, editor text focus, quick input, webview).
+async function focusReport(root, cdp) {
+  const ed = vscode.window.activeTextEditor;
+  const report = { windowFocused: vscode.window.state.focused, activeEditor: ed ? path.relative(root, ed.document.uri.fsPath) : null };
+  if (!cdp) return { ...report, dom: 'unavailable (no FORGE_TEST_CDP_PROFILE)' };
+  report.dom = await cdp.evaluate(`(() => {
+    const a = document.activeElement;
+    const editor = a && a.closest('.monaco-editor');
+    const part = a && a.closest('[id^="workbench.parts."]');
+    const quick = document.querySelector('.quick-input-widget');
+    return {
+      documentHasFocus: document.hasFocus(),
+      element: a ? a.tagName.toLowerCase() + (typeof a.className === 'string' && a.className.trim() ? '.' + a.className.trim().split(/\\s+/).slice(0, 3).join('.') : '') : null,
+      editorTextFocus: !!(editor && editor.classList.contains('focused')),
+      editorUri: editor ? editor.getAttribute('data-uri') : null,
+      quickInputFocused: !!(a && a.closest('.quick-input-widget')),
+      quickInputVisible: !!(quick && quick.style.display !== 'none'),
+      webviewFocused: !!(a && (a.tagName === 'IFRAME' || a.closest('.webview'))),
+      part: part ? part.id : null,
+    };
+  })()`);
+  return report;
+}
+
+// Ctrl+Z after Forge's undo must restore the accepted change byte for byte. Logs focus before every attempt.
+async function reapplyWithUndo(root, doc, expectedBytes) {
+  const cdp = process.env.FORGE_TEST_CDP_PROFILE ? await renderer() : undefined;
+  try {
+    const undone = doc.getText();
+    let attempts = 0;
+    for (;;) {
+      await vscode.window.showTextDocument(doc);
+      await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+      await until(() => vscode.window.activeTextEditor?.document.uri.toString() === doc.uri.toString(), 'helpers.py is the active editor', 5000);
+      attempts++;
+      const focus = await focusReport(root, cdp);
+      console.log(`UNDO-FOCUS attempt ${attempts}: ${JSON.stringify(focus)}`);
+      await vscode.commands.executeCommand('undo');
+      const changed = await until(() => doc.getText() !== undone, 'buffer changed', 5000).then(() => true, () => false);
+      if (changed) break;
+      const textFocusInHelpers = focus.dom && focus.dom.editorTextFocus && String(focus.dom.editorUri || '').endsWith('helpers.py');
+      assert.ok(!textFocusInHelpers, 'Undo with text focus in helpers.py did nothing: Forge undo is not re-appliable with Ctrl+Z');
+      assert.ok(attempts < 2, 'Ctrl+Z after Forge undo re-applies the accepted change (no change after a retry)');
+      console.log('UNDO-RETRY: attempt 1 left helpers.py unchanged for 5 s; retrying once');
+    }
+    console.log(`UNDO-ATTEMPTS ${attempts}`);
+    await doc.save();
+    assert.ok(!doc.isDirty, 'helpers.py saved after Ctrl+Z');
+    const bytes = await fs.readFile(doc.uri.fsPath);
+    assert.ok(bytes.equals(expectedBytes), `Ctrl+Z after Forge undo re-applies exactly the accepted change (${bytes.length} bytes on disk, ${expectedBytes.length} expected)`);
+  } finally { if (cdp) cdp.close(); }
+}
+
 exports.run = async () => {
   const folder = vscode.workspace.workspaceFolders[0];
   const root = folder.uri.fsPath;
@@ -58,16 +112,17 @@ exports.run = async () => {
     const a = await withAnswers(ui, 'accept', () => ui.run('inline', TASK_A, { activeFile: 'src/flask/helpers.py', selection }));
     assert.equal(a.reviews >= 1, true, 'Task A showed a review');
     const afterA = await fs.readFile(helpers.fsPath, 'utf8');
+    const afterABytes = await fs.readFile(helpers.fsPath);
     assert.match(afterA, /\{"0", "false", "no", "off", "n"\}/, 'Task A edit saved to disk');
     assert.ok(ui.panel.state.trace.includes('sessionId='), 'TrueForge session link available');
     assert.ok(ui.panel.state.context && ui.panel.state.context.selections.some((s) => s.source === 'selection'), 'context report with the pinned selection');
     await ui.undo();
     assert.equal(await git(root, 'status', '--porcelain'), '', 'undo restores helpers.py');
     // The video's re-apply step: the editor's own Undo (Ctrl+Z) reverts the Forge undo, then Ctrl+S saves.
-    await vscode.window.showTextDocument(doc);
-    await vscode.commands.executeCommand('undo');
-    await doc.save();
-    assert.equal(await fs.readFile(helpers.fsPath, 'utf8'), afterA, 'Ctrl+Z after Forge undo re-applies the accepted change');
+    // VS Code's 'undo' goes to whatever has keyboard focus (a focused input, e.g. a quick pick, takes it before the
+    // active editor), so focus the editor group first and log where focus is before every attempt. One retry at
+    // most, and only when focus was not in helpers.py's text: an Undo that does nothing there is a Forge bug.
+    await reapplyWithUndo(root, doc, afterABytes);
     await git(root, 'checkout', '--', '.');
     console.log('PASS Task A: inline review, accept, saved, session link, context report, undo, re-apply with Ctrl+Z');
 
@@ -78,7 +133,7 @@ exports.run = async () => {
     assert.ok(b.reviews >= 3, `three reviews (saw ${b.reviews})`);
     assert.ok(b.commands >= 1, 'the pytest command was approved');
     const st = ui.panel.state;
-    assert.ok(st.context.estimatedTokens > 0 && st.context.budgetTokens === 8000, 'context budget visible');
+    assert.ok(st.context.estimatedTokens > 0 && st.context.budgetTokens === 4000, 'context budget visible');
     assert.ok(st.context.selections.some((s) => s.path === 'src/flask/cli.py' && s.rationale), 'cli.py chosen with a reason');
     assert.ok(Array.isArray(st.context.skipped), 'skipped items visible');
     assert.ok(st.tools.some((t) => t.label === 'propose_edit') && st.tools.some((t) => t.label === 'run_command'), 'tool activity listed');
@@ -97,16 +152,16 @@ exports.run = async () => {
     const reviewTurn = ui.run('agent', 'stop check: pending review of src/flask/helpers.py', {}).catch((e) => e);
     await until(() => ui.panel.state.reviewing, 'a pending review', 30000);
     await until(() => previewTabs().length === 1, 'the review diff tab', 10000);
-    await until(() => ui.reviewControlsOpen(), 'the review prompt showing before Stop', 5000);
+    await until(() => ui.reviewControlsOpen(), 'the hunk picker showing before Stop', 5000);
     await ui.stop();
     await reviewTurn;
     assert.equal(ui.panel.state.outcome, 'cancelled', 'the turn ended cancelled');
     assert.ok(!ui.panel.state.busy && !ui.panel.state.reviewing, 'panel idle after Stop');
     await until(() => previewTabs().length === 0, 'diff tab closed', 5000);
-    assert.ok(!ui.reviewControlsOpen(), 'no review prompt or Accept All control left after Stop');
+    assert.ok(!ui.reviewControlsOpen(), 'no hunk picker or other review control left after Stop');
     assert.equal(await fs.readFile(helpers.fsPath, 'utf8'), helpersBefore, 'helpers.py unchanged');
     assert.equal(await git(root, 'status', '--porcelain'), '', 'Stop during review leaves no edits');
-    console.log('PASS Stop during a pending review: turn cancelled, diff tab and review prompt closed, file unchanged');
+    console.log('PASS Stop during a pending review: turn cancelled, diff tab and hunk picker closed, file unchanged');
 
     // ---------------- Stop (2): an approved command is certainly running, then Stop → cancelled, process gone
     const running = async () => (await run('pgrep', ['-f', 'forge-stop-check']).catch(() => ({ stdout: '' }))).stdout.trim().split('\n').filter(Boolean).length;

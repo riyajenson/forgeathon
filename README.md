@@ -37,8 +37,8 @@ Built for the TrueFoundry Forge-a-thon (Techfest IIT Bombay), Round 1.
 | Model configuration lives in TrueForge and is not tied to one provider | Providers and models come from `config/models.json`, which the setup script loads into TrueForge. Switching models means editing the file and rerunning the setup | `config/models.example.json`, `scripts/setup-trueforge.mjs` |
 | TrueForge in local mode | `npx @truefoundry/trueforge@0.185.1` with SQLite | [Quickstart](#quickstart-with-real-models) |
 | Agent definition in the repository | `forge-coder` (agent mode) and `forge-inline` (inline edit), plus `-fallback` variants created by the setup | `agent/forge-coder.json`, `agent/forge-inline.json` |
-| Inline edit with in-editor diff, accept/reject, no copy-paste | Diff editor, per-hunk picker, Accept/Reject All, undo | `extension/src/review.ts`, Task A |
-| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; every proposed change is reviewed before it is written (a file can get several reviews). Passed on real models in earlier rehearsals; the result on the submitted commit is in `docs/writeup/rehearsal.json`. The mock B is scripted (it supplies the paths and edits) | `agent/forge-coder.json`, Task B |
+| Inline edit with in-editor diff, accept/reject, no copy-paste | Native diff editor whose proposed side updates with the checked hunks; the workspace stays untouched until submit | `extension/src/inlineReview.ts`, Task A |
+| Agent mode: one request, ≥ 3 files found and edited | The agent finds the files itself; every proposed change is reviewed before it is written (a file can get several reviews). Passed on real models in the first round-1 build (tag `round1-submission`); on this updated build 3 of 3 real runs passed 6/6 (`f2f87bb`) and the A/B/C rehearsal passed (`d1f4c68`, 21 Nov), details in `docs/writeup/rehearsal.json`. The mock B is scripted (it supplies the paths and edits) | `agent/forge-coder.json`, Task B |
 | Context: `@file`, `@symbol`, automatic retrieval, budget, visible rationale | Context engine and the panel's Context block | `src/harness/context/`, [How context is selected](#how-context-is-selected) |
 | Diff safety: preview, per-hunk accept/reject, no silent writes, undo | Review before write, stale-base refusal, guarded undo | [Safety model](#safety-model) |
 | Streaming and cancellation, workspace consistent | Streamed text and tool calls; Stop cancels the TrueForge turn and closes the review; an approved edit already handed to VS Code is saved and reported before the turn ends | `src/harness/turn/turn.ts`, `extension/src/agentPanel.ts` |
@@ -308,8 +308,11 @@ Run them in the Extension Development Host on `~/flask-demo`, in the integrated 
    > Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list
    > every value that is treated as false.
 
-**What you'll see:** a progress notification, then a diff editor with "Review N hunks". **Choose Hunks**
-opens the per-hunk picker; **Accept All** writes and saves the file. **Undo Last Reviewed Edit** restores it.
+**What you'll see:** a progress notification, then a diff editor and, above it, the hunk picker "Select hunks to
+accept", with every hunk checked. The proposed side of the diff updates as you check or uncheck hunks, so it
+shows the exact result before submission. **Enter** writes and saves the checked hunks; unchecked hunks are rejected. The
+picker's title bar has **✓** (*Accept all hunks*) and **✕** (*Reject all hunks*). Escape hides the picker;
+**Review hunks** in the status bar reopens it. **Undo Last Reviewed Edit** restores the file.
 
 **Verify:**
 
@@ -336,16 +339,20 @@ FLASK_DEBUG=off .venv/bin/python -c "from flask.helpers import get_debug_flag; p
 - The test run, then a summary.
 - At turn end, **Files changed in this turn: 3**, listing the three paths together with their review and
   accepted-hunk counts.
-- At most 3 commands per turn. Any more appear as "command budget reached".
+- At most 5 commands per turn (`forge.commandBudget.agent`); with a budget of 4 or more, the last 2 are kept for
+  test runs (`pytest`, `python -m pytest`), so other commands get at most 3. After that, one rerun of a test command that already
+  ran is still allowed once a fix was accepted, so a failing test can always be fixed and checked; any other
+  command appears as "command budget reached". A `cd … && …` command is refused before any prompt, without
+  using the budget, and the model is told the corrected call.
 
 **What to click:**
 
 | What appears | Click |
 |---|---|
-| Each diff | **Accept All** (or choose hunks) |
+| Each diff | **✓** (*Accept all hunks*) in the picker's title bar, or uncheck hunks and press Enter |
 | `python -m pytest …` | Nothing if auto-approval is on (an "auto-approved: …" line appears). Otherwise **Allow** |
 | A command prompt without a warning (`python -c …`, `flask …`) | **Allow** if you agree with it |
-| A prompt marked **⚠ Unrestricted** (`cd …`, pipes, here-docs, `python -m flask …`) | **Deny**. The reason goes back to the model |
+| A prompt marked **⚠ Unrestricted** (pipes, here-docs, `python -m flask …`) | **Deny**. The reason goes back to the model |
 
 **Verify:**
 
@@ -375,7 +382,7 @@ cd ~/flask-demo
 (also shown as a VS Code notification). Then the fallback model's diff appears, about 8 s after the instruction
 (measured 2026-11-19: 1 NVIDIA 401, then 3 OpenRouter requests); the editor stays responsive.
 
-**Click:** **Reject All**.
+**Click:** **✕** (*Reject all hunks*) in the picker's title bar.
 
 **Verify:**
 
@@ -406,7 +413,8 @@ source ~/.forge-keys.env && scripts/use-models.sh nvidia-free
 - **Packing:** outlines of the top files come first, then whole functions and sections, until the budget is
   reached. Anything that does not fit is listed as skipped.
 - **More on demand:** the agent can ask for more context with the `gather_context` tool.
-- **Budget:** `forge.context.budgetTokens` (default 8000 tokens, estimated as characters ÷ 4).
+- **Budget:** `forge.context.budgetTokens` (default 4000 tokens, estimated as characters ÷ 4; every agent request resends
+  the context, so a larger budget multiplies across a turn's ~30 requests).
 
 **Reading the Context block** in the agent panel:
 
@@ -423,14 +431,25 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 
 - **Review before write:**
   - `propose_edit` never writes by itself. Only the hunks you accept are applied, through one VS Code
-    `WorkspaceEdit`, and then saved.
+    text-only `WorkspaceEdit` containing just those hunk ranges, and then saved. VS Code applies a text-only
+    workspace edit atomically; if one range cannot be applied, none of the accepted hunks are applied.
   - The result is one of six reported outcomes (stale, approval missing, failed before apply, applied but
     unsaved, save failed, saved).
 - **Per hunk:** accept or reject each hunk, or all of them.
+- **Live preview benchmark:** for two hunks, the extension-host test checks all four accept/reject combinations.
+  The old static diff matched the selected result in 1/4 states (25%); the live diff matches 4/4 (100%), a
+  4× increase in preview-state coverage. This measures whether the shown result matches the checkboxes, not review time.
 - **Apply:** the reviewed text (the original with only the accepted hunks) is verified by hash before it is
   saved; save-time formatters (format on save) may alter the saved file, and the receipt records the post-save hash.
 - **Undo:** restores the reviewed original text, verified by hash (saved without save participants), after
   checking the file has not changed since.
+- **Hunk edit footprint:** the extension-host test applies two accepted hunks, rejects a third, and then undoes in a
+  93,936-character file. Apply plus undo submits 116 characters of ranges and replacement text, versus 375,756
+  characters for whole-document replacements: a 99.97% smaller edit footprint. This measures editor edit scope,
+  not human review time. If saving changes the reviewed postimage (for example, a formatter rewrites the file),
+  undo falls back to the hash-guarded full snapshot so it can still restore the exact original.
+- **Review actions:** the direct multi-select picker uses one submit action instead of two in the prior nested
+  picker flow, a measured 50% reduction in picker submissions; this is an interaction count, not elapsed time.
 - **Stale-base refusal:** an edit is based on the file's sha256. If the file changed since it was read, the
   edit is refused (in both the harness and the editor), and the model is told to read it again.
 - **Cancel:**
@@ -492,7 +511,8 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 |---|---|---|
 | `forge.trueforgeUrl` | `http://127.0.0.1:8790` | TrueForge server |
 | `forge.mcpPort` | `47615` | Loopback port of the editor's MCP server (random bearer token, generated each time the server starts) |
-| `forge.context.budgetTokens` | `8000` | Agent-mode context budget |
+| `forge.context.budgetTokens` | `4000` | Agent-mode context budget |
+| `forge.context.semanticSearch` | `true` | Use cached local semantic scores for a weak keyword/structure shortlist; cache misses warm in the background |
 | `forge.autoApproveSafeCommands` | `false` | Run bare `pytest`, `python -m pytest`, `git status` and `git diff` without asking; each one is shown as "auto-approved: …" |
 | `forge.commandBudget.agent` | `3` | Most commands per agent turn, test runs not included |
 | `forge.commandBudget.inline` | `1` | Most commands per inline turn (the inline agent does not run commands today) |
@@ -504,6 +524,27 @@ On Flask 3.1.3, Task B packs 7,456 of 8,000 tokens (28 items, 7 skipped), with `
 | `MODEL_HTTP_CONNECT_TIMEOUT_MS`, `MODEL_HTTP_MAX_RETRIES` | TrueForge defaults (5000, 2) | We use `3000` and `4`: a short connect timeout, and TrueForge resends a rate-limited (429) model request up to 4 times (about 15 s) before the turn sees the error |
 | `SQLITE_PATH` | TrueForge default | TrueForge's database; a new path starts fresh |
 | `FORGE_FLASK_DIR` | `~/projects/flask-3.1.3` | Flask checkout for the context-ranking unit test |
+
+Automatic context ranking combines BM25 keyword matches, identifier/symbol and basename matches, path-term rarity, Python and relative JavaScript/TypeScript imports, reverse importers, and nearby test and documentation files. Structural expansion is bounded to one hop. A direct “CLI command” request also prioritizes a matching CLI entry-point file over output/support modules. Explicit selection and `@file`/`@symbol` references stay pinned ahead of automatic results; the active file contributes a compact outline. Automatic context adds query-focused outlines for at most eight files (up to 120 estimated tokens each), then packs relevant chunks or focused excerpts (up to 600 tokens, and no more than 30% of the context budget per excerpt). The report shows the chosen paths, ranking reasons, omitted ranges, and skipped files. This uses a bounded repo map and targeted excerpts instead of spending the budget on whole large files.
+
+When the top five files cover less than 40% of task terms or the top two scores are within 10%, semantic retrieval can rerank the bounded shortlist. It is enabled by default but uses an optional local install. A default install (`npm ci` in `src/harness`) does not include its runtime and stays the same size as before (about 70 MB of `node_modules`). To use semantic reranking, run `scripts/enable-semantic-search.sh` once. It installs the pinned `@huggingface/transformers` runtime into `src/harness/semantic-runtime/` (about 230 MB, CPU only: ONNX Runtime's CUDA/TensorRT download is skipped, and only this platform's binaries are kept). `--remove` deletes it again. Model files and vectors stay outside the workspace. A fully cached semantic result may rank the current request; on a cache miss, Forge returns lexical/structural context immediately and warms semantic vectors in the background for a later request. If the runtime is absent or inference fails, it keeps the lexical/structural result and reports why. Set `forge.context.semanticSearch` to `false` to turn semantic retrieval off.
+
+### Context-selection benchmark
+
+The benchmark has 13 labeled tasks across Forge and pinned Flask 3.1.3. These are retrieval/packing measurements, not end-to-end coding success. With the extension's default 4,000-token budget, the prior single-run baseline had recall@5 0.699, MRR 0.660, relevant-file density 0.461 files per 1,000 packed tokens, 4.55 ms median assembly, and 9 of 30 expected files packed. The current implementation, measured across three runs with semantic inference deliberately unavailable to isolate lexical/structural selection, had recall@5 0.801, MRR 0.733, density 0.492, 4.04 ms median assembly, and 25 of 30 expected files packed. That is +14.7% recall@5, +11.2% MRR, +6.7% density, 11.1% lower assembly latency, and 9→25 expected files in packed context. It does **not** show a 50% gain on every metric.
+
+At an 8,000-token benchmark budget, the previous run measured recall@5 0.699, MRR 0.660, density 0.244, and 203.16 ms median assembly (including the old semantic wait on a cold/missing runtime). The current three-run median was recall@5 0.801, MRR 0.733, density 0.315, and 4.06 ms assembly. The latency reduction is 98.0%, largely because a semantic cache miss no longer blocks context assembly and lexical ranking is not needlessly recomputed. The 4,000- and 8,000-token figures are different budget settings. Older baseline runs are single directional runs, and their indexed source trees differed slightly as implementation files changed; use these comparisons as directional evidence, not a controlled universal result. Semantic ranking quality itself was not measured in these runs.
+
+Run the paired benchmark from the repository root to compare lexical and hybrid results on the same cases:
+
+```bash
+npm --prefix src/harness test
+node scripts/bench-context.mjs --mode lexical
+node scripts/bench-context.mjs --mode hybrid
+node scripts/bench-context.mjs --mode hybrid --budget-tokens 4000
+```
+
+The hybrid mode performs both retrieval passes and includes per-case results, quality metrics, and latency in its JSON report. Flask cases are marked unavailable when `FORGE_FLASK_DIR` does not point to a Flask checkout. The fixed Task A/B mock workflow (`scripts/e2e-mock.sh --tasks A,B`) also needs a Flask checkout; pass its location with `--flask PATH`.
 
 The turn log at `~/.forge/turns.jsonl` records model, attempts, tokens, timing and approvals per turn, with no
 content.
@@ -536,7 +577,7 @@ scripts/dev-mock.sh
 6. **Tasks A and B:** as in [Running Tasks A, B and C](#running-tasks-a-b-and-c), with the same instructions
    and verification commands. The TrueForge UI is at http://localhost:8790.
 7. **Task C (mock override):** in a second terminal, `scripts/dev-mock.sh --break-primary`, then repeat Task A.
-   The banner reads "Primary model failed: … 401 … → switched to demo-fallback/scripted"; click **Reject All**;
+   The banner reads "Primary model failed: … 401 … → switched to demo-fallback/scripted"; click **✕** (*Reject all hunks*);
    `git -C ~/flask-demo status --short` prints nothing. Then `scripts/dev-mock.sh --restore`.
 
 ## Testing
@@ -544,7 +585,7 @@ scripts/dev-mock.sh
 Every automated check below uses the scripted model. These checks show that the plumbing works, not that a
 real model solves the tasks: the scripted model knows the fixed tasks and, in Task B, supplies the file paths
 and edits, so a mock run is no evidence of file discovery. Real-model results: `docs/writeup/rehearsal.json`
-(the submitted commit) and `docs/STATUS.md` (history). Current counts: 134 unit and 19 integration tests.
+(this build; the first round-1 build: tag `round1-submission`) and `docs/STATUS.md` (history). Current counts: 163 unit and 20 integration tests.
 
 | Command | What it proves | Needs |
 |---|---|---|
@@ -554,8 +595,8 @@ and edits, so a mock run is no evidence of file discovery. Real-model results: `
 | `scripts/e2e-mock.sh --auto-approve-safe-commands --deny-unrestricted` | The same with the video's settings: the test run is auto-approved, and Task G's ⚠ Unrestricted `ls src` is denied | As above |
 | `scripts/test-extension.sh` | Extension suites in a real VS Code window: EditorPort, review and the six apply outcomes, undo, Stop during an apply, panel (incl. the turn-end file summary), settings | A display (WSLg, or X/Wayland on Linux). Fetches 3 libraries without sudo |
 | `scripts/test-extension-e2e.sh` | Tasks A (incl. undo and re-apply), B, Stop during a pending review and during a running command, and C through the extension's UI code against TrueForge and the demo model | As above, plus the Flask checkout |
-| `FORGE_E2E_TEST=responsiveness.cjs scripts/test-extension-e2e.sh` | In a measured scripted Task B run, no extension-host block exceeds 150 ms (event-loop delay, CPU profile summary). A bounded measurement, not a guarantee for every machine | As above |
-| `scripts/test-extension-live.sh` | The native UI driven through the DevTools port: inline command, diff tab, hunk picker (hunk 1 only, then hunk 2 only, exactly that hunk saved), undo, and no Accept All left on screen after a decision or Stop | As above, plus TrueForge 0.185.1 in the npx cache |
+| `FORGE_E2E_TEST=responsiveness.cjs scripts/test-extension-e2e.sh` | In a measured scripted Task B run: no extension-host block over 150 ms (event-loop delay, CPU profile summary), no render that takes the webview over 100 ms from receipt to its frame, DOM update p95 ≤ 10 ms, and median event-to-frame latency ≤ 50 ms (control) / 40 ms (streamed text). `FORGE_TEST_INJECT_STALL_MS=200` blocks the extension host once mid-turn and must fail it. A bounded measurement, not a guarantee for every machine | As above |
+| `scripts/test-extension-live.sh` | The native UI driven through the DevTools port: inline command, diff tab, hunk picker (hunk 1 only, then hunk 2 only: exactly that hunk saved; the ✓ title button clicked with the mouse saves both, ✕ neither), undo, and no picker left on screen after a decision or Stop | As above, plus TrueForge 0.185.1 in the npx cache |
 | `src/harness/node_modules/.bin/tsc -p contracts/tsconfig.json` | The shared protocol types compile | `npm ci` in `src/harness` |
 | `node scripts/smoke-real-model.mjs --tasks A,B,C` | The `e2e-mock.sh` checks with your real models (costs real requests) | Keys, `config/models.json`, TrueForge |
 | `node --test scripts/submission-readiness.test.mjs` | Tests of the submission-evidence checker | Nothing |
@@ -602,11 +643,11 @@ The smoke script also accepts these options:
 ```text
 agent/        TrueForge agent definitions (forge-coder.json, forge-inline.json)
 config/       models.example.json (real providers), models.mock.example.json (demo model)
-contracts/    shared TypeScript contract between extension and harness (protocol 0.4.6)
+contracts/    shared TypeScript contract between extension and harness (protocol 0.4.8)
 extension/    VS Code extension: commands, inline review, agent panel, EditorPort
 src/harness/  forge-harness: TrueForge adapter, MCP server and tools, context engine,
               review core, command budget, demo model, model meter
-scripts/      setup, demo mode, end-to-end checks, real-model smoke test, model meter
+scripts/      setup, demo mode, end-to-end checks, real-model smoke test, model meter, demo-video recording (demo-recording/)
 docs/         status, write-up, demo script, manual test, submission checklist, images
 spike/        TrueForge 0.185.1 feasibility spike and findings (not shipped)
 ```

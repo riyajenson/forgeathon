@@ -29,6 +29,8 @@ export class AgentViewState {
   command?: {command: string; cwd: string; warning?: string; facts?: string};
   /** Set when the turn stopped on a rate limit or a stall: Resume is offered from `at` (ms since epoch). */
   resume?: {at: number; files: string[]; reason: 'rate_limited' | 'stalled'};
+  /** The user asked to resume automatically once, when the wait ends (cancelled by Stop, a new turn or closing the panel). */
+  autoResume = false;
   /** Proposals in this turn with hunks that delete a whole class or function. */
   warnings: string[] = [];
   /** Set when an agent turn ends: the observed outcome of its last test command, shown next to the model's summary. */
@@ -172,9 +174,27 @@ export class AgentPanel implements vscode.Disposable {
   private readonly controlWebviewDom: number[] = [];
   private readonly textWebviewDom: number[] = [];
   constructor(private readonly actions: Actions) {}
+  private autoResumeTimer?: NodeJS.Timeout;
+  /** Schedules (or cancels) one Resume when the suggested wait ends; it fires only if that same turn is still resumable. */
+  setAutoResume(on: boolean) {
+    this.cancelAutoResume();
+    const target = this.state.resume;
+    this.state.autoResume = on && target !== undefined && !this.state.busy;
+    if (this.state.autoResume && target) {
+      this.autoResumeTimer = setTimeout(() => {
+        this.autoResumeTimer = undefined;
+        if (this.state.resume !== target || !this.state.autoResume || this.state.busy) return;
+        this.state.autoResume = false;
+        void this.actions.resume();
+      }, Math.max(0, target.at - Date.now()));
+    }
+    this.refreshControl();
+  }
+  private cancelAutoResume() { if (this.autoResumeTimer) clearTimeout(this.autoResumeTimer); this.autoResumeTimer = undefined; this.state.autoResume = false; }
   start() {
     const eventAt = performance.now();
     const wallAt = Date.now();
+    this.cancelAutoResume();
     this.state = new AgentViewState(); this.state.busy = true; this.state.status = 'Starting'; this.refreshControl(eventAt, wallAt);
   }
   finish() {
@@ -219,7 +239,8 @@ export class AgentPanel implements vscode.Disposable {
             if (!this.state.busy && typeof m.text === 'string' && m.text.trim() && m.text.length <= 32000)
               await this.actions.send(m.text);
             break;
-          case 'stop': await this.actions.stop(); break;
+          case 'stop': this.cancelAutoResume(); await this.actions.stop(); break;
+          case 'autoResume': this.setAutoResume(!this.state.autoResume); break;
           case 'resume':
             // Offered only after a rate limit, once the suggested wait has passed.
             if (!this.state.busy && this.state.resume && Date.now() >= this.state.resume.at) await this.actions.resume();
@@ -249,7 +270,7 @@ button:disabled{opacity:.55} pre,li{white-space:pre-wrap;overflow-wrap:anywhere}
 h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1px solid var(--vscode-focusBorder)}</style></head>
 <body><label for="task">Task</label><textarea id="task" rows="3" maxlength="32000"></textarea>
 <button id="send">Send</button> <button id="stop" disabled>Stop</button> <button id="review" hidden>Review hunks</button>
-<p id="status" role="status"></p><p id="verification" role="alert" hidden></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><section id="recovery" hidden><h2>Recovered by fallback</h2><p id="recoveryText"></p></section><button id="trace" hidden>Open TrueForge session</button>
+<p id="status" role="status"></p><p id="verification" role="alert" hidden></p><p id="tests" hidden></p><section id="resumeBox" hidden><p id="resumeText"></p><button id="resume">Resume</button> <button id="autoResume">Resume when ready</button></section><section id="turnFiles" hidden><h2 id="turnFilesTitle"></h2><ul id="summary"></ul></section><section id="warnings" hidden><h2>Destructive hunks</h2><ul id="warningList"></ul></section><p id="model"></p><p id="banner" role="alert" hidden></p><section id="recovery" hidden><h2>Recovered by fallback</h2><p id="recoveryText"></p></section><button id="trace" hidden>Open TrueForge session</button>
 <section id="context" hidden><h2>Context selected for this turn</h2><p id="budget"></p><p>Selected files and reasons shown here were sent to the agent.</p><h3 id="pinnedTitle">Pinned by you</h3><ul id="pinned"></ul><h3>Files (in rank order)</h3><ul id="files"></ul><h3 id="skippedGroupsTitle">Not included, by reason</h3><ul id="skippedGroups"></ul><details><summary>All entries</summary><ul id="selected"></ul><h2 id="skippedTitle">Not included</h2><ul id="skipped"></ul></details></section>
 <section id="cmd" hidden><h2>Command approval</h2><pre id="cmdText"></pre><button id="allow">Allow once</button> <button id="deny">Deny</button></section>
 <pre id="text"></pre><section id="activity" hidden><h2>Tool activity</h2><ul id="tools"></ul></section>
@@ -367,6 +388,7 @@ h2{font-size:1em;margin-top:18px} ul{padding-left:18px} :focus-visible{outline:1
   }
 
   dispose() {
+    this.cancelAutoResume();
     this.clearTextTimer();
     this.pendingTextEvents.length = 0;
     this.pendingRenders.clear();

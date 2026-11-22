@@ -197,6 +197,33 @@ exports.run = async () => {
   assert.equal(stopping.status, 'Stopped \u00b7 settled: no change was applied in this turn; nothing else will run');
   const stoppedAfterEdit = changedTurn([{t:'done',status:'cancelled'}]);
   assert.equal(stoppedAfterEdit.status, 'Stopped \u00b7 settled: 1 file changed before the stop (listed below); nothing else will run');
+  // Resume when ready: one scheduled Resume, only for the same resumable turn; Stop, a new turn or a second click cancel it.
+  {
+    let resumed = 0;
+    const p = new AgentPanel({ send: async () => {}, stop: async () => {}, review() {}, command() {}, resume: async () => { resumed++; } });
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    p.event({t:'resumable',reason:'rate_limited',retryAfterMs:60,changedFiles:['src/flask/cli.py']});
+    p.setAutoResume(true);
+    assert.equal(p.state.autoResume, true);
+    await wait(150);
+    assert.equal(resumed, 1, 'resumed once when the wait ended');
+    assert.equal(p.state.autoResume, false);
+    await wait(100);
+    assert.equal(resumed, 1, 'never twice');
+    p.event({t:'resumable',reason:'rate_limited',retryAfterMs:60,changedFiles:[]});
+    p.setAutoResume(true); p.setAutoResume(false);
+    await wait(150);
+    assert.equal(resumed, 1, 'a second click cancels it');
+    p.event({t:'resumable',reason:'rate_limited',retryAfterMs:60,changedFiles:[]});
+    p.setAutoResume(true); p.start();
+    await wait(150);
+    assert.equal(resumed, 1, 'a new turn cancels it');
+    p.finish(); p.event({t:'resumable',reason:'stalled',retryAfterMs:60,changedFiles:[]});
+    p.setAutoResume(true); p.state.resume = {at: Date.now() + 60, files: [], reason: 'stalled'};
+    await wait(150);
+    assert.equal(resumed, 1, 'a different resumable turn is not resumed by an older schedule');
+    p.dispose();
+  }
   // Destructive hunks: a hunk that deletes a whole class is listed with its name and line count.
   const destructive = new AgentViewState();
   destructive.update({t:'review_request',proposal:{path:'tests/test_cli.py',originalText:'import x\n\nclass TestRoutes:\n    pass\n',hunks:[

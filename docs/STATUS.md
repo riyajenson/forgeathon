@@ -1,7 +1,7 @@
 # Project status
 
 **2026-11-22, research sprint (`sprint/round1-research` from `28e8f9e`, protocol 0.4.8 unchanged):** 49 recommendations triaged from six
-research reports (`docs/ROUND1-SPRINT.md`); 21 in: verification verdict, write barrier across Resume, source secret masking
+research reports (`docs/internal/ROUND1-SPRINT.md`); 21 in: verification verdict, write barrier across Resume, source secret masking
 (default on; 0 hits in Flask 3.1.3), fallback recovery card, grouped context report, long wait hints for Resume,
 status-first error classification, three-state Stop, command-prompt facts, Resume when ready, Attach picker, Show Effective
 Settings, Undo this turn's changes, inline stale-selection refusal, collapsible tool timeline, "tested saved files only",
@@ -14,7 +14,7 @@ retries): A 6/6 (13.9 s first diff, 15.6 s, 3 requests), B 8/8 (46.5 s, 421.8 s,
 and fixed the `timedelta` JSON error itself), C 3/3 (401 → OpenRouter, 9.9 s, 4 requests); 0 × 429.
 `docs/writeup/rehearsal.json`; records `~/forge-review/finals/sprint-real-1905/`.
 
-**2026-11-22, finals build (`harness/p14-trueforge-depth` → `main`, tag `round1-extended`, protocol 0.4.8):**
+**2026-11-22, finals build (`harness/p14-trueforge-depth` → `main`, commit `babc29c`, protocol 0.4.8):**
 - **Daytona (p15, merged):** `scripts/daytona-spike.sh` 8/8 with a key that has sandbox and snapshot write/delete permissions
   (environment ready in 10–20 s, whole spike 27–35 s; sandboxes 1 vCPU / 1 GiB / 3 GiB, auto-stopped after ~5 min, deleted 10 min
   later). Opt-in only; Code Mode can call read-only tools (files it reads go to Daytona's cloud), `propose_edit` is refused there.
@@ -45,9 +45,9 @@ budget, Resume after a rate limit and sub-agent events (`setup-trueforge.mjs --s
 offline suites pass on 9883169 (149 unit, 22 integration, e2e-mock 24/24 in both modes, UI suites). Real batch on a new
 NVIDIA key, paced at 20 requests per minute or fewer: Task B with compaction at 40k scored 3/6 (watchdog after edits)
 and 6/6; with sub-agents on, 6/6 and 5/6, and the model never delegated. 0 × 429 in 236 requests. Details:
-`docs/harness/REHEARSAL-P14.md`, phase 2.
+`docs/internal/REHEARSAL-P14.md`, phase 2.
 **2026-11-21, round-1 deadline extended to 22 Nov:** `main` is the updated round-1 submission (branch
-`feature/hybrid-efficiency-native` merged; tag `round1-final`; the first round-1 build stays at tag `round1-submission`).
+`feature/hybrid-efficiency-native` merged; commit `31fffd2`; the original Round 1 submission is commit `2b265c7`).
 The video will be re-recorded on this build; until then the write-up links the current video.
 
 **2026-11-21 (Stop fix and final rehearsal), updated round-1 build at `d1f4c68`:** the native UI test failed once in 20 runs
@@ -56,7 +56,7 @@ killed bwrap's process group before the sandbox process (its own session, `--new
 `--die-with-parent`; the sandbox kept running the command and holding stdout/stderr, so the turn waited for the
 command to end. Logging every hop (panel → controller → harness → turn → scope → command runner) showed the cancel
 reaching the command runner in under 1 ms; only the kill missed. Standalone with real bwrap, a SIGTERM 0–5 ms after
-spawn left the sandbox running in 35 of 60 tries. Not a regression: `round1-submission` hung in 5 of 6 fast Stops,
+spawn left the sandbox running in 35 of 60 tries. Not a regression: the original Round 1 submission (`2b265c7`) hung in 5 of 6 fast Stops,
 this branch in 2 of 6. Fix (`src/harness/mcp/command.ts` only): bwrap reports the sandbox pid on `--info-fd`, Stop
 waits for that report (bounded at 1 s) and then SIGKILLs the sandbox by pid as `--die-with-parent` would, besides the
 existing SIGTERM/SIGKILL of bwrap's group. Two unit tests reproduce the race deterministically with a stand-in
@@ -126,7 +126,7 @@ Pre-flight: NVIDIA ready (HTTP 200).
 
 Updated: 2026-11-19 (late night), after merging `origin/main` (PRs #3 and #4 by another contributor:
 bubblewrap command protection, hold-until-idle for unsettled tools, retrieval coverage reporting, submission
-evidence gate). See "Merge of origin/main" and `docs/review/merge-origin-main.md`. All automated checks are
+evidence gate). See "Merge of origin/main" and `docs/internal/MERGE-ORIGIN-MAIN.md`. All automated checks are
 green on the mock. The real-model runs below **predate the sandbox**. Readiness is tracked by
 `node scripts/check-submission.mjs` (fails until the human evidence is filled in; `docs/harness/CONTEXT-READINESS.md`).
 
@@ -138,7 +138,7 @@ passed (see "Real-model validation of the guardrails"). The README was reconcile
 Earlier: the first
 real-model run and a Task B tuning round (free tiers only, $0). **Tasks A, B and C passed with real models**,
 but the Task B tuning target (≤ 3 command approvals, 1 review per file) was **not** met. Earlier the same day: the independent review
-(`~/forge-review/CODEX-REVIEW.md`), triaged in `docs/review/codex-review-triage.md`; blockers B2-B4 and issues
+(`~/forge-review/CODEX-REVIEW.md`), triaged in `docs/internal/CODEX-REVIEW-TRIAGE.md`; blockers B2-B4 and issues
 I1-I10 are fixed and merged. Remaining human steps are at the end of this file (manual test, push, video, PDF,
 form).
 
@@ -164,7 +164,7 @@ verification commands. "Real run" = `scripts/smoke-real-model.mjs` (same checks)
 | Cancel: Stop ends the turn, review closes, nothing applied after Stop | ✅ | UI e2e + harness integration (cancel while paused / streaming / racing an apply) + unit races (Stop before a command spawns; silent TrueForge ends the turn once, bounded) + extension suite (Stop after the edit reached VS Code: saved, reported as saved). Edits saved earlier in the turn stay |
 | TrueForge session link | ✅ | UI e2e (link present); opening it is manual |
 | Demo without keys | ✅ | `scripts/dev-mock.sh` |
-| Real model (Tasks A, B, C) | ✅ `d1f4c68` · see rehearsal.json | 2026-11-21: Task B 6/6 in 3 of 3 runs on `f2f87bb`; A 6/6, B 6/6, C 3/3 on `d1f4c68` (top of this file). Earlier builds: real runs 2026-11-19 (see "Real-model run", "Task B tuning round"); round 1: tag `round1-submission` |
+| Real model (Tasks A, B, C) | ✅ `d1f4c68` · see rehearsal.json | 2026-11-21: Task B 6/6 in 3 of 3 runs on `f2f87bb`; A 6/6, B 6/6, C 3/3 on `d1f4c68` (top of this file). Earlier builds: real runs 2026-11-19 (see "Real-model run", "Task B tuning round"); original Round 1 submission: commit `2b265c7` |
 | Optional auto-approval (`forge.autoApproveSafeCommands`, default off), narrowed to bare `pytest`, `python -m pytest`, `git status`, `git diff` | ✅ | Harness unit tests (these auto-approved and run; `python -c`, `flask`, path/env-prefixed pytest, pipes, `cd`, edits always ask; off unless `true`); extension suite; `e2e-mock.sh --auto-approve-safe-commands` 20/20 (Task G: `git status`/`git diff` auto-approved, `python -c` asked) |
 | Command budget per turn (`forge.commandBudget.agent` 5 since the hybrid branch, was 3; `.inline` 1), enforced by the harness | ✅ | Unit tests (4th and 5th command refused without a prompt with the exact message; denied, unrestricted and auto-approved commands count; 0 refuses all, edits unaffected; defaults); extension suite ("command budget reached" in the panel, settings reach the harness); `e2e-mock.sh` Task G (3 shown, 2 refused, refusal reached the model). Not yet measured with a real model |
 | Guardrails with the real models (video settings) | ✅ | Real run 4 (2026-11-19): Task B 6/6, 3 commands shown (1 auto-approved, 2 asked), 4 refused by the budget, 6 reviews; A 6/6, C 3/3 (see "Real-model validation of the guardrails") |
@@ -247,7 +247,7 @@ Merged `origin/main` (`fe72740`) with `git merge` (no rebase, no force-push). De
   approval, ⚠ Unrestricted label, command budget, auto-approval and change report.
 - **Hold until idle for unsettled tools:** origin's behaviour.
 
-Every resolution is listed in `docs/review/merge-origin-main.md`.
+Every resolution is listed in `docs/internal/MERGE-ORIGIN-MAIN.md`.
 
 | Check (on the merge) | Result |
 |---|---|
@@ -377,7 +377,7 @@ All automated checks use the scripted demo model: they prove the plumbing, not r
   after review, undo of created files — all tested.
 - **TrueForge depth:** deferred `find_symbol` / `list_files` (loaded through `call_tool`, visible in the session
   view); approvals for `propose_edit` / `run_command`; compaction configured (60k tokens) but not reached by the
-  demo tasks — documented honestly (finals branch: 30k, fires in Task B; `docs/harness/REHEARSAL-P14.md`).
+  demo tasks — documented honestly (finals branch: 30k, fires in Task B; `docs/internal/REHEARSAL-P14.md`).
 - **run_command:** git status before/after, changed files reported, counts as a write; workspace `.venv` first on PATH.
 
 ## Rehearsal of 19 Nov (`main` at `e5afea6`; historical, superseded by `docs/writeup/rehearsal.json`)
@@ -432,9 +432,9 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
 | harness/p8-model-config | provider examples (Gemini, Groq, OpenRouter, Anthropic, OpenAI), reasoning efforts |
 | docs/submission | README, LICENSE, notices, write-up + PDF script, demo script, manual test, checklist, `.gitignore` |
 | editor/e7-notifications, editor/e8-test-cache | fallback/error notifications; shared VS Code test download |
-| integrate/origin-main | merge of origin/main (PRs #3, #4): bubblewrap protection, hold-until-idle, coverage reporting, submission evidence gate; resolutions in `docs/review/merge-origin-main.md` |
+| integrate/origin-main | merge of origin/main (PRs #3, #4): bubblewrap protection, hold-until-idle, coverage reporting, submission evidence gate; resolutions in `docs/internal/MERGE-ORIGIN-MAIN.md` |
 | harness/p11-command-budget | command budget (protocol 0.4.4), narrowed auto-approval, argument-shape hint, mock e2e Task G, editor settings and panel line |
-| docs/readme-final | README reconciled with the submission spec (real models first, eligibility table, Mermaid architecture, beginner key steps, tasks, safety model, troubleshooting, mock mode last), `docs/images/README.md`, mock Task G with an ⚠ Unrestricted command, write-up, demo script with measured numbers, checklist, this file |
+| docs/readme-final | README reconciled with the submission spec (real models first, eligibility table, Mermaid architecture, beginner key steps, tasks, safety model, troubleshooting, mock mode last), `docs/images/README.md` (since removed), mock Task G with an ⚠ Unrestricted command, write-up, demo script with measured numbers, checklist, this file |
 | harness/p10-task-b-tuning | forge-coder instructions (two rounds), `forge.autoApproveSafeCommands` (protocol 0.4.3), `edits`-as-string fix, approvals per task in the smoke run, demo script timings |
 | harness/p7-real-model | real-model setup (NVIDIA primary, Groq fallback, OpenRouter spare), `scripts/model-meter.mjs`, `--meter-log`, `run_command` description, NVIDIA 401 regression test, docs |
 | harness/p9-real-model-readiness | inline agent stops after a rejection |
@@ -486,7 +486,7 @@ is a fast-forward from it. All branches below are merged into `main` with `--no-
   runs back to back could approach it (TrueForge resends a 429 up to 4 times, then the harness retries once, then
   falls back to OpenRouter, whose free tier allows 50 requests/day without credit).
 - Compaction (agent mode, 40k input tokens on harness/p14-trueforge-depth) fires once in Task B, after the first
-  edit. At 30k it fired before the first edit and doubled the turn time (`docs/harness/REHEARSAL-P14.md`).
+  edit. At 30k it fired before the first edit and doubled the turn time (`docs/internal/REHEARSAL-P14.md`).
 - Compaction is configured but never triggered by the demo tasks.
 - **Follow-up, not fixed: repeated identical edit rejections.** In the 21 Nov rehearsal's Task B (`f2f87bb`, passed
   6/6) the model sent 24 `propose_edit` calls whose `old_text` equalled `new_text` (it was trying to add a missing

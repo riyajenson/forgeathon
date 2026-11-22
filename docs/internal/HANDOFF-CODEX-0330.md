@@ -61,7 +61,7 @@ npm run compile
 After everything is merged into one checkout, `npm install` in `extension/` re-links `forge-harness` to that
 checkout's `src/harness`.
 
-TrueForge + agents (see `docs/harness/HANDOFF-0100.md` on the harness branch for details):
+TrueForge + agents (see `docs/internal/HANDOFF-0100.md` on the harness branch for details):
 
 ```bash
 mkdir -p ~/forge-demo

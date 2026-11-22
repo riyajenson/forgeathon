@@ -1,6 +1,6 @@
 # Rehearsal log: harness/p14-trueforge-depth
 
-Real-model runs for the finals branch `harness/p14-trueforge-depth` (based on `round1-submission`, 2b265c7).
+Real-model runs for the finals branch `harness/p14-trueforge-depth` (based on the original Round 1 submission, commit `2b265c7`).
 Every run: profile `nvidia-free` (NVIDIA `nemotron-3-ultra-550b-a55b`, free tier), a fresh TrueForge 0.185.1
 database, requests through `scripts/model-meter.mjs`, run by
 `node scripts/smoke-real-model.mjs --tasks B --auto-approve-safe-commands --deny-unrestricted --meter-log … --json …`

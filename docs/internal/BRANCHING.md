@@ -19,7 +19,7 @@ integration/<task>           Short-lived branches where harness and editor are c
 docs/<topic>                 README, write-up material, setup docs. e.g. docs/readme-setup
 ```
 
-Final submission: tag `round1-submission` on main (the human creates and pushes it).
+Final submission: the original Round 1 submission was commit `2b265c7` on main; the final build is tagged `round1-final` (the human creates and pushes it).
 
 ## Rules
 
@@ -54,4 +54,4 @@ Final submission: tag `round1-submission` on main (the human creates and pushes 
 
 ## Merge order (the human follows this)
 
-`contracts/*` → `harness/*` and `editor/*` (any order) → `integration/*` → `docs/*` → tag `round1-submission`
+`contracts/*` → `harness/*` and `editor/*` (any order) → `integration/*` → `docs/*` → tag `round1-final` (on main)

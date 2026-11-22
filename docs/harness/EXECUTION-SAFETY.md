@@ -1,6 +1,6 @@
 # Protected verification commands
 
-Merged with the editor-side controls (see `docs/review/merge-origin-main.md`): protection is one layer of
+Merged with the editor-side controls (see `docs/internal/MERGE-ORIGIN-MAIN.md`): protection is one layer of
 several. Before a command reaches bubblewrap, the harness still requires your approval of the exact command
 (or the narrowed auto-approval), flags anything outside the verification list as ⚠ Unrestricted, and applies
 the per-turn command budget. A virtualenv outside the workspace (for example under `/tmp`) is bound read-only

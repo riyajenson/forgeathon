@@ -1,4 +1,4 @@
-# Submission checklist (Round 1 — extended deadline 22 Nov 2026, 23:59 IST; finals build, tag `round1-extended-3`)
+# Submission checklist (Round 1, extended deadline 22 Nov 2026, 23:59 IST; final build: tag `round1-final`, content of commit `94bb12d` plus a docs-only cleanup)
 
 Source: the official 13-page competition PDF (held by the team; not in this repository). The requirements below are
 copied from it so this checklist stands alone. Status: ✅ done and
@@ -15,9 +15,9 @@ verified · 🟡 ready, needs a human step · ❌ open.
 | TrueForge in local mode | ✅ | `npx @truefoundry/trueforge@0.185.1`, SQLite |
 | Agent definition included in the repository | ✅ | `agent/forge-coder.json`, `agent/forge-inline.json` |
 | TrueForge session with turns and tool calls shown for Task B | 🟡 | **Eligibility gate.** `docs/DEMO-SCRIPT.md` shot 2:52–3:00: hold ~8 s on Task B's turn and its tool calls; note the timestamp |
-| Fork disclosure (if any) | ✅ | Built from scratch — README "Starting point, versions and licence" |
+| Fork disclosure (if any) | ✅ | Built from scratch — README "Starting point and licence" |
 
-The README's "Eligibility at a glance" table maps each requirement to files.
+The "Eligibility at a glance" table in `docs/REFERENCE.md` maps each requirement to files.
 
 ## Mandatory features
 
@@ -42,16 +42,16 @@ The README's "Eligibility at a glance" table maps each requirement to files.
 | Item | Status | Notes |
 |---|---|---|
 | Public GitHub repository | ✅ | github.com/riyajenson/forgeathon is public; push the final `main` (a fast-forward) before submitting |
-| README supports a clean clone (setup, TrueForge start, agent loading, model config, licence) | ✅ | Real-model quickstart first; mock mode for testing. Followed in a fresh temp clone on the mock (see STATUS.md) |
+| README supports a clean clone (setup, TrueForge start, agent loading, model config, licence) | ✅ | Quickstart: mock mode (no keys) first, then real models; details in `docs/REFERENCE.md`. The mock commands are unchanged from the version followed in a fresh temp clone (see STATUS.md) |
 | No API keys committed | ✅ | Secret scan of full history (STATUS.md); keys only from env |
 | Licence and attribution | ✅ | `LICENSE` (MIT), `THIRD_PARTY_NOTICES.md` |
 | PDF, 1–3 pages (scorecard heading and rows on one page), headings in exact order (Team, Starting point, Architecture on TrueForge, How context is selected, Model setup, Scorecard, Tools used, Known limitations and what you would do with another month) | ✅ | `docs/writeup/WRITEUP.md` renders to 3 pages with the 8 headings in order (`scripts/render-writeup.sh`); rendered PDF committed |
 | All models used, hosting, approx. cost, how to switch | ✅ | Write-up section 5 declares every configured model (role, provider, used in demo y/n, cost): NVIDIA Nemotron-3 Ultra primary and the same model on OpenRouter's free tier as fallback (both in the demo, $0); Groq Qwen3.8-27B spare; the paid profile and example models (never run); the opt-in embedding model `onnx-community/all-MiniLM-L6-v2-ONNX` (local CPU); the scripted test model; and Daytona as an opt-in service. Switching = edit config + rerun setup, or `scripts/use-models.sh openrouter-free` |
 | AI tools declared truthfully | ✅ | Write-up section 7 and README "AI tools used" (Claude: Claude Code CLI + chat; OpenAI Codex via ChatGPT, incl. PRs #3/#4 and QA) |
 | Demo video ≤ 4 min, public, A/B/C in order, each verified, TrueForge session for B, no cut between instruction and diff | 🟡 | `docs/DEMO-SCRIPT.md` (3:55 plan, measured Task B numbers). **Real models only**; record what the model actually does |
-| Scorecard with video timestamps | 🟡 | Fill `[mm:ss]` after recording; README `<VIDEO_URL>` and `docs/images/` screenshots too |
+| Scorecard with video timestamps | 🟡 | Write-up scorecard has timestamps for the current video; the README video line is the literal text DEMO_VIDEO_LINK_HERE until the team pastes the final link |
 | Techfest Team ID | 🟡 | Keep available for the form; add to the write-up header |
 | Submission form https://forms.gle/htyWGFJRBgsg3qmx6 | 🟡 | Human |
-| Public PDF link | 🟡 | After the timestamps are filled: `scripts/render-writeup.sh`, then commit the rendered PDF (`git add -f docs/writeup/WRITEUP.pdf`, it is gitignored) and push; submit https://github.com/riyajenson/forgeathon/blob/main/docs/writeup/WRITEUP.pdf as the PDF link. Check it opens signed out (DEMO-SCRIPT "After recording") |
+| Public PDF link | 🟡 | After the timestamps are filled: `scripts/render-writeup.sh`, then commit the rendered PDF (`git add docs/writeup/WRITEUP.pdf`) and push; submit https://github.com/riyajenson/forgeathon/blob/main/docs/writeup/WRITEUP.pdf as the PDF link. Check it opens signed out (DEMO-SCRIPT "After recording") |
 | Links public by the deadline (repo, video, PDF) | 🟡 | Check in a signed-out browser |
 | Evidence gate `node scripts/check-submission.mjs` | ✅ | Passes: `docs/writeup/rehearsal.json` records real A/B/C on the sprint build 255107f (22 Nov 19:05–19:13 IST, one run each, paced, no 429): A 6/6 (first diff 13.9 s), B 8/8 (46.5 s / 421.8 s, 60 requests), C 3/3 (401 → OpenRouter). Includes the Resume-after-fallback fix `c47e092` and the research sprint. Later commits are docs/evidence only |

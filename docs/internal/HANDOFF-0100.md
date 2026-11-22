@@ -9,7 +9,7 @@ pass; the tree is clean (only the editor's untracked `extension/` is present, un
 
 | Branch | Base | Contents | Tests at its tip |
 |---|---|---|---|
-| `docs/branching` | none (root commit; `main` is unborn) | `docs/BRANCHING.md` | n/a |
+| `docs/branching` | none (root commit; `main` is unborn) | `docs/internal/BRANCHING.md` | n/a |
 | `contracts/v0.4.0` | none (root commit) | `contracts/` exactly as synced by the editor (R1–R5, PROTOCOL_VERSION 0.4.0), byte-identical, verified with `cmp` | `tsc -p contracts` clean |
 | `harness/p0-spike` | none (root) | P0 spike + `spike/FINDINGS.md` | n/a (spike) |
 | `harness/p1-review-mcp` | `harness/p0-spike` | review core, MCP server (read_file, search_workspace, propose_edit) | 27 unit |
@@ -77,7 +77,7 @@ git push origin docs/branching contracts/v0.4.0 harness/p0-spike harness/p1-revi
 ```
 
 Merge into `main` (rehearsed in a scratch clone: no conflicts; the result equals
-`harness/p4-context-engine` plus `docs/BRANCHING.md`). `main` has no commits yet, so the first merge
+`harness/p4-context-engine` plus `docs/internal/BRANCHING.md`). `main` has no commits yet, so the first merge
 just creates it, and the root-commit branches need `--allow-unrelated-histories`:
 
 ```bash
@@ -229,7 +229,7 @@ Left for P4 / later:
 - `run_command` can change files outside review; every run counts as a write (no retry/fallback after it)
   and its changed files are reported from `git status --porcelain` before/after.
 - Compaction events become status lines with tokens and duration; observed at runtime on harness/p14-trueforge-depth
-  (40k trigger, `docs/harness/REHEARSAL-P14.md`).
+  (40k trigger, `docs/internal/REHEARSAL-P14.md`).
 - Extension-host Node version under Remote-WSL is still unreported (`import()` needs Node ≥ 18).
 - `~/forge-dev` holds the scratch TrueForge database used by my integration runs; it can be deleted.
 

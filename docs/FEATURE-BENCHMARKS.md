@@ -43,8 +43,8 @@ The first two rows measure how quickly the cancel request is acknowledged. The l
 
 ## Evidence and limitations
 
-- Inline-preview and edit-footprint measurements are from the extension-host benchmark described in [README.md](../README.md#safety-model).
-- Context measurements and their baseline caveats are in [README.md](../README.md#context-selection-benchmark).
+- Inline-preview and edit-footprint measurements are from the extension-host benchmark described in [REFERENCE.md](REFERENCE.md#safety-model).
+- Context measurements and their baseline caveats are in [REFERENCE.md](REFERENCE.md#context-selection-benchmark).
 - Real-model task results are in [rehearsal.json](writeup/rehearsal.json), [STATUS.md](STATUS.md), and [DEMO-SCRIPT.md](DEMO-SCRIPT.md).
 - Cancellation correctness is checked by [turn.itest.ts](../src/harness/integration/turn.itest.ts); the delayed-write result and integration-suite status are recorded in the [cancellation implementation note](superpowers/plans/2026-11-20-streaming-cancellation-efficiency.md). The raw latency samples above are from the five-run before/after timing capture.
 

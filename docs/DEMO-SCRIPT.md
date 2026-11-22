@@ -68,7 +68,7 @@ and in Task B this happens once, after the first diff. On screen, the panel stat
 39,242 tokens reached the 40,000-token threshold" and then "Context compacted in 16.6 s: 38,510 tokens summarized into
 851", and the activity list keeps a **Context compaction** row. Show it in the rest-of-turn segment; it is TrueForge
 feature evidence. The uncut slot to the first diff is unaffected (41.8 s in the passing run). The rest of the turn
-took 255 s in that run, so the 2:40–2:52 segment needs more cuts (`docs/harness/REHEARSAL-P14.md`).
+took 255 s in that run, so the 2:40–2:52 segment needs more cuts (`docs/internal/REHEARSAL-P14.md`).
 
 **Measured on the current code** (QA run on `37fb675`, 2026-11-19, with bubblewrap protection and the
 recording settings: auto-approval on, budget 3):
@@ -145,8 +145,8 @@ After recording:
    recorded with).
 2. Write the real timestamps of each shot into the write-up scorecard (`docs/writeup/WRITEUP.md`, section 6) and
    `docs/writeup/rehearsal.json` (`videoUrl`, `videoTimestamp`), with the team block and Team ID.
-3. **Publish the PDF:** `scripts/render-writeup.sh` (must say 1–3 pages), then commit the rendered file (it is
-   gitignored, so force-add it): `git add -f docs/writeup/WRITEUP.pdf && git commit -m "docs: rendered write-up"`.
+3. **Publish the PDF:** `scripts/render-writeup.sh` (must say 1–3 pages), then commit the rendered file:
+   `git add docs/writeup/WRITEUP.pdf && git commit -m "docs: rendered write-up"`.
    After pushing, use its GitHub link as the public PDF link in the form:
    `https://github.com/riyajenson/forgeathon/blob/main/docs/writeup/WRITEUP.pdf`. Open it in a private (signed-out)
    browser window to check that it opens.

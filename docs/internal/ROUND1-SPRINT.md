@@ -1,7 +1,7 @@
 # Round 1 sprint: research triage (22 Nov 2026, 17:35 IST)
 
 Sources: agent-loop (AL), command-security (CS), context-engine (CE), editor-side (ED), mcp-tools (MT), resilience (RS)
-research reports, all audited at `babc29c`. Base for the sprint: main `28e8f9e` (tag `round1-extended-2`).
+research reports, all audited at `babc29c`. Base for the sprint: main `28e8f9e` (the second extended build).
 Branch: `sprint/round1-research`. Code stop 20:30 IST.
 
 Ranking = value for judges × feasibility in this sprint, then (equal items) visible in the editor > improves safety >

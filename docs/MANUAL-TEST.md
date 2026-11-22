@@ -9,8 +9,8 @@ hand. Run it once with the demo model and once with the real models before recor
 | # | Step | Expected |
 |---|---|---|
 | 0.1 | `npm --prefix src/harness ci && npm --prefix src/harness run build && (cd extension && npm ci && npm run compile)` | No errors |
-| 0.2 | Demo model: `scripts/dev-mock.sh` · or real models: start TrueForge (README) + `node scripts/setup-trueforge.mjs` | Setup lists 4 agents and "models available: … (primary), … (fallback)" |
-| 0.3 | Flask workspace at `22d92470` with `.venv` (README, "Open the extension") | `git -C ~/flask-demo status --short` prints nothing |
+| 0.2 | Demo model: `scripts/dev-mock.sh` · or real models: start TrueForge (README, Quickstart) + `node scripts/setup-trueforge.mjs` | Setup lists 4 agents and "models available: … (primary), … (fallback)" |
+| 0.3 | Flask workspace at `22d92470` with `.venv` (README, Quickstart) | `git -C ~/flask-demo status --short` prints nothing |
 | 0.4 | VS Code → **WSL: Connect to WSL** → open `~/projects/forgeathon/extension` → **F5** → open `~/flask-demo` in the new window | Extension Development Host opens; no error notification |
 
 ## Task A — inline edit, review, undo

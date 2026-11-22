@@ -1,7 +1,7 @@
 # Forge: a VS Code coding agent on TrueForge
 
-> **Round-1 submission:** the code as submitted is tag [`round1-submission`](../../tree/round1-submission); `main` is
-> frozen at it. Later work lives on branches (current: `harness/p14-trueforge-depth`).
+> **Round-1 submission:** the code as submitted is tag [`round1-submission`](../../tree/round1-submission). `main` is
+> frozen (tag `round1-final`); later work lives on branches (current: `harness/p14-trueforge-depth`).
 
 Techfest Team ID: TM-C5CB9D87285 · Team: Riya Jenson (`riyajenson`), Shriya Prasad Sawant (`shriyapsawant21-wq`),
 Akil Ansari (`dumbly-smart`), Divyam Agrawal (`divyamagrawal06`), all Vellore Institute of Technology, Vellore · Demo video: https://drive.google.com/file/d/1iol4V8OX0IGQ95BHoVEmTl59FTz9snNn/view?usp=sharing ·
